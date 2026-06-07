@@ -1,2 +1,6 @@
 .claude/skills/go-mentor
 **/go-*.md
+
+# built binaries
+/tmux-coderd
+/tmux-coder

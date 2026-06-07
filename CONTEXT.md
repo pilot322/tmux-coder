@@ -44,8 +44,12 @@ _Avoid_: Agent store, agent list
 A notification fired by a **TC Agent**'s hook system to the **Daemon** via `tmux-coder event`. Carries a type, agent ID, and optional payload. Used to signal state changes (completion, error, waiting for input).
 _Avoid_: Message, signal, notification
 
+**Reconciliation**:
+The process by which the **Daemon** heals drift between its in-memory record of a **Session** and the actual state of the tmux server — recreating a tmux session that has gone missing, or tolerating one that is already absent when a removal is requested. Triggered on write operations, never on plain reads.
+_Avoid_: Sync, refresh, resync
+
 **Config File** (`.tmux-coder.toml`):
-A TOML file at a **Project**'s root that declares **Secondary Sessions**, environment variables, and hooks. Checked into version control. Runtime state lives elsewhere (SQLite).
+A TOML file at a **Project**'s root that declares **Secondary Sessions**, environment variables, and hooks. Checked into version control. Most runtime state (**Sessions**, **Agent Registry**) lives only in the **Daemon**'s memory and is rebuilt on start; durable persistence (eventually SQLite) is limited to **Projects**.
 _Avoid_: Settings, project file, manifest
 
 ## Example dialogue
