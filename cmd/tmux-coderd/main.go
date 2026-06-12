@@ -4,9 +4,11 @@
 package main
 
 import (
+	"bufio"
 	"log"
 	"net/http"
 	"os"
+	"strings"
 
 	"github.com/pilot322/tmux-coder/internal/adapter/httpapi"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
@@ -15,11 +17,11 @@ import (
 )
 
 func main() {
-	port := os.Getenv("TMUX_CODERD_PORT")
-	if port == "" {
-		port = "64357"
+	if err := loadEnvFile(".env"); err != nil && !os.IsNotExist(err) {
+		log.Printf("failed to load .env: %v", err)
 	}
-	addr := ":" + port
+
+	addr := ":" + daemonPort()
 
 	state := memory.NewDaemonState()
 	gateway := tmux.NewTmuxGateway()
@@ -35,4 +37,49 @@ func main() {
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Fatal(err)
 	}
+}
+
+func daemonPort() string {
+	port := os.Getenv("TMUX_CODERD_PORT")
+	if port == "" {
+		return "64357"
+	}
+	return port
+}
+
+func loadEnvFile(path string) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+
+		key, value, ok := strings.Cut(line, "=")
+		if !ok {
+			continue
+		}
+
+		key = strings.TrimSpace(key)
+		if key == "" {
+			continue
+		}
+		if _, exists := os.LookupEnv(key); exists {
+			continue
+		}
+
+		value = strings.TrimSpace(value)
+		value = strings.Trim(value, `"'`)
+		if err := os.Setenv(key, value); err != nil {
+			return err
+		}
+	}
+
+	return scanner.Err()
 }

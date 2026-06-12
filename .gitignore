@@ -1,5 +1,6 @@
 .claude/skills/go-mentor
 **/go-*.md
+.env
 
 # built binaries
 /tmux-coderd
