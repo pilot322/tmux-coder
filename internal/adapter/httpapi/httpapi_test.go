@@ -35,7 +35,7 @@ func newServer() *http.ServeMux {
 	state := memory.NewDaemonState()
 	gw := &stubGateway{exists: make(map[string]bool)}
 
-	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gw, state)
+	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gw, state, state.Config())
 	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state)
 	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), gw, state)
 
@@ -59,13 +59,14 @@ func TestPostProjects_CreatesThenReturnsExisting(t *testing.T) {
 	}
 	var created struct {
 		ID              int    `json:"id"`
+		Title           string `json:"title"`
 		FullPath        string `json:"fullPath"`
 		MainSessionName string `json:"mainSessionName"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if created.ID == 0 || created.MainSessionName != "api-main" || created.FullPath != "/work/api" {
+	if created.ID == 0 || created.Title != "api" || created.MainSessionName != "api-main" || created.FullPath != "/work/api" {
 		t.Errorf("unexpected body: %+v", created)
 	}
 
@@ -73,6 +74,35 @@ func TestPostProjects_CreatesThenReturnsExisting(t *testing.T) {
 	rec = do(t, mux, "POST", "/projects", `{"fullPath":"/work/api"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("second POST status = %d, want 200", rec.Code)
+	}
+}
+
+func TestPostProjects_AcceptsOptionalTitle(t *testing.T) {
+	mux := newServer()
+
+	rec := do(t, mux, "POST", "/projects", `{"fullPath":"/work/api","title":" Backend API "}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST status = %d, want 201 (body: %s)", rec.Code, rec.Body)
+	}
+	var created struct {
+		Title string `json:"title"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if created.Title != "Backend API" {
+		t.Fatalf("Title = %q, want Backend API", created.Title)
+	}
+
+	rec = do(t, mux, "POST", "/projects", `{"fullPath":"/work/api","title":"Different"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("duplicate POST status = %d, want 200", rec.Code)
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode duplicate: %v", err)
+	}
+	if created.Title != "Backend API" {
+		t.Fatalf("duplicate Title = %q, want Backend API", created.Title)
 	}
 }
 
@@ -84,6 +114,12 @@ func TestPostProjects_InvalidBody(t *testing.T) {
 	}
 	if rec := do(t, mux, "POST", "/projects", `{}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("missing fullPath status = %d, want 400", rec.Code)
+	}
+	if rec := do(t, mux, "POST", "/projects", `{"fullPath":"/work/api","title":"   "}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("blank title status = %d, want 400", rec.Code)
+	}
+	if rec := do(t, mux, "POST", "/projects", `{"fullPath":"/work/api","title":"Backend  API"}`); rec.Code != http.StatusBadRequest {
+		t.Errorf("adjacent spaces title status = %d, want 400", rec.Code)
 	}
 }
 
@@ -99,6 +135,7 @@ func TestGetProjects_ListsCreated(t *testing.T) {
 	var resp struct {
 		Projects []struct {
 			ID              int    `json:"id"`
+			Title           string `json:"title"`
 			MainSessionName string `json:"mainSessionName"`
 		} `json:"projects"`
 	}
@@ -107,6 +144,9 @@ func TestGetProjects_ListsCreated(t *testing.T) {
 	}
 	if len(resp.Projects) != 2 {
 		t.Fatalf("want 2 projects, got %d", len(resp.Projects))
+	}
+	if resp.Projects[0].Title == "" {
+		t.Fatalf("first project title is empty: %+v", resp.Projects[0])
 	}
 }
 

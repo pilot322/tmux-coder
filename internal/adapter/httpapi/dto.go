@@ -4,11 +4,13 @@
 package httpapi
 
 type createProjectRequest struct {
-	FullPath string `json:"fullPath"`
+	FullPath string  `json:"fullPath"`
+	Title    *string `json:"title"`
 }
 
 type projectResponse struct {
 	ID              int    `json:"id"`
+	Title           string `json:"title"`
 	FullPath        string `json:"fullPath"`
 	MainSessionName string `json:"mainSessionName"`
 }

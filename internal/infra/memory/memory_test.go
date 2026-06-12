@@ -14,8 +14,8 @@ func TestMemoryProjectRepository_AssignsIncrementingIDs(t *testing.T) {
 	ctx := context.Background()
 	r := memory.NewMemoryProjectRepository()
 
-	p1, _ := r.Create(ctx, domain.NewProject(0, "/work/a"))
-	p2, _ := r.Create(ctx, domain.NewProject(0, "/work/b"))
+	p1, _ := r.Create(ctx, domain.NewProject(0, "/work/a", "a"))
+	p2, _ := r.Create(ctx, domain.NewProject(0, "/work/b", "b"))
 
 	if p1.ID() == 0 || p2.ID() == 0 || p1.ID() == p2.ID() {
 		t.Fatalf("want distinct nonzero ids, got %d and %d", p1.ID(), p2.ID())
@@ -32,11 +32,14 @@ func TestMemoryProjectRepository_GetByIDNotFound(t *testing.T) {
 func TestMemoryProjectRepository_GetByFullPath(t *testing.T) {
 	ctx := context.Background()
 	r := memory.NewMemoryProjectRepository()
-	created, _ := r.Create(ctx, domain.NewProject(0, "/work/api"))
+	created, _ := r.Create(ctx, domain.NewProject(0, "/work/api", "API"))
 
 	got, err := r.GetByFullPath(ctx, "/work/api")
 	if err != nil || got.ID() != created.ID() {
 		t.Fatalf("GetByFullPath(/work/api) = (%v, %v), want id %d", got, err, created.ID())
+	}
+	if got.Title() != "API" {
+		t.Fatalf("Title = %q, want API", got.Title())
 	}
 
 	if _, err := r.GetByFullPath(ctx, "/nope"); !errors.Is(err, usecase.ErrProjectNotFound) {
@@ -47,7 +50,7 @@ func TestMemoryProjectRepository_GetByFullPath(t *testing.T) {
 func TestMemoryProjectRepository_DeleteRemoves(t *testing.T) {
 	ctx := context.Background()
 	r := memory.NewMemoryProjectRepository()
-	p, _ := r.Create(ctx, domain.NewProject(0, "/work/a"))
+	p, _ := r.Create(ctx, domain.NewProject(0, "/work/a", "a"))
 
 	if err := r.Delete(ctx, p.ID()); err != nil {
 		t.Fatalf("Delete: %v", err)

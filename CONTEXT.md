@@ -5,7 +5,7 @@ A CLI tool that wraps a dedicated tmux server to manage projects with multiple w
 ## Language
 
 **Project**:
-A base directory managed by tmux-coder, with all **Sessions** attributed to it. It may contain a `.tmux-coder.toml` **Config File** for declarative behavior.
+A base directory managed by tmux-coder, with all **Sessions** attributed to it. A **Project** has a mutable title used only as its display label; it may contain a `.tmux-coder.toml` **Config File** for declarative behavior.
 _Avoid_: Workspace, repository
 
 **Session**:
@@ -27,6 +27,10 @@ _Avoid_: Sub-session, nested session
 **Daemon**:
 The long-running server process (`tmux-coderd`) that owns the dedicated tmux server instance, holds runtime state, and maintains the **Agent Registry** in memory.
 _Avoid_: Server (when referring to the daemon specifically, to avoid confusion with the tmux server)
+
+**Daemon Config**:
+Daemon-wide settings that govern tmux-coder behavior across all **Projects**. Distinct from a per-Project **Config File**.
+_Avoid_: Settings, global config
 
 **Client**:
 The `tmux-coder` CLI invocation that connects to the **Daemon** to issue commands and render the TUI.

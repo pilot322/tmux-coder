@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 
+	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -22,6 +23,8 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 // unknown project is 404, a tmux failure is 502, anything else is 500.
 func writeUsecaseError(w http.ResponseWriter, err error) {
 	switch {
+	case errors.Is(err, domain.ErrInvalidProjectTitle):
+		writeError(w, http.StatusBadRequest, err.Error())
 	case errors.Is(err, usecase.ErrProjectNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, usecase.ErrGateway):

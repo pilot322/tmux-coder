@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 )
 
 type CreateProjectInput struct {
 	FullPath string
+	Title    *string
 }
 
 type CreateProjectResult struct {
@@ -23,10 +25,11 @@ type CreateProject struct {
 	sessions ISessionRepository
 	gateway  SessionGateway
 	lock     StateLock
+	config   domain.DaemonConfig
 }
 
-func NewCreateProject(p IProjectRepository, s ISessionRepository, g SessionGateway, l StateLock) *CreateProject {
-	return &CreateProject{projects: p, sessions: s, gateway: g, lock: l}
+func NewCreateProject(p IProjectRepository, s ISessionRepository, g SessionGateway, l StateLock, c domain.DaemonConfig) *CreateProject {
+	return &CreateProject{projects: p, sessions: s, gateway: g, lock: l, config: c}
 }
 
 // Execute creates a Project for fullPath, or reconciles an existing one.
@@ -46,8 +49,12 @@ func (uc *CreateProject) Execute(ctx context.Context, in CreateProjectInput) (Cr
 		} else if !errors.Is(err, ErrProjectNotFound) {
 			return err
 		}
+		title, err := uc.projectTitle(in)
+		if err != nil {
+			return err
+		}
 
-		created, err := uc.projects.Create(ctx, domain.NewProject(0, in.FullPath))
+		created, err := uc.projects.Create(ctx, domain.NewProject(0, in.FullPath, title))
 		if err != nil {
 			return err
 		}
@@ -85,6 +92,14 @@ func (uc *CreateProject) Execute(ctx context.Context, in CreateProjectInput) (Cr
 	}
 
 	return CreateProjectResult{Project: project, MainSessionName: session.Name(), Created: true}, nil
+}
+
+func (uc *CreateProject) projectTitle(in CreateProjectInput) (string, error) {
+	limit := uc.config.ProjectTitleLimit()
+	if in.Title != nil {
+		return domain.CleanProjectTitle(*in.Title, limit)
+	}
+	return domain.DefaultProjectTitle(filepath.Base(in.FullPath), limit), nil
 }
 
 // reserveMainSessionName derives a name unique among existing session names.

@@ -31,7 +31,7 @@ func (pc *ProjectController) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := pc.create.Execute(r.Context(), usecase.CreateProjectInput{FullPath: req.FullPath})
+	res, err := pc.create.Execute(r.Context(), usecase.CreateProjectInput{FullPath: req.FullPath, Title: req.Title})
 	if err != nil {
 		writeUsecaseError(w, err)
 		return
@@ -43,6 +43,7 @@ func (pc *ProjectController) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	writeJSON(w, status, projectResponse{
 		ID:              res.Project.ID(),
+		Title:           res.Project.Title(),
 		FullPath:        res.Project.FullPath(),
 		MainSessionName: res.MainSessionName,
 	})
@@ -60,6 +61,7 @@ func (pc *ProjectController) List(w http.ResponseWriter, r *http.Request) {
 	for _, v := range views {
 		resp.Projects = append(resp.Projects, projectResponse{
 			ID:              v.Project.ID(),
+			Title:           v.Project.Title(),
 			FullPath:        v.Project.FullPath(),
 			MainSessionName: v.MainSessionName,
 		})

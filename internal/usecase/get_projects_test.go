@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
@@ -15,7 +16,7 @@ func TestGetProjects_ReturnsProjectsWithMainSessionNames(t *testing.T) {
 	gw := newFakeGateway(lock)
 	ctx := context.Background()
 
-	create := usecase.NewCreateProject(projects, sessions, gw, lock)
+	create := usecase.NewCreateProject(projects, sessions, gw, lock, domain.DefaultDaemonConfig())
 	_, _ = create.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api"})
 	_, _ = create.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/web"})
 

@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -36,6 +37,17 @@ func TestModelEnterSelectsProjectAndQuits(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected quit command")
+	}
+}
+
+func TestModelViewUsesProjectTitle(t *testing.T) {
+	m := NewModel(context.Background(), &fakeAPI{})
+	updated, _ := m.Update(listMsg{projects: []httpclient.Project{{ID: 1, Title: "Backend API", FullPath: "/work/api", MainSessionName: "api-main"}}})
+	m = updated.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, "Backend API") {
+		t.Fatalf("view does not contain project title: %q", view)
 	}
 }
 

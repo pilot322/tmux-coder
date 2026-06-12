@@ -33,7 +33,7 @@ func NewMemoryProjectRepository() *MemoryProjectRepository {
 func (r *MemoryProjectRepository) Create(ctx context.Context, p *domain.Project) (*domain.Project, error) {
 	id := r.nextID
 	r.nextID++
-	stored := domain.NewProject(id, p.FullPath())
+	stored := domain.NewProject(id, p.FullPath(), p.Title())
 	r.projects[id] = stored
 	return stored, nil
 }

@@ -2,6 +2,7 @@ package httpclient_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -15,10 +16,17 @@ func TestClientListCreateDeleteProjects(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /projects":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"projects":[{"id":1,"fullPath":"/work/api","mainSessionName":"api-main"}]}`))
+			_, _ = w.Write([]byte(`{"projects":[{"id":1,"title":"API","fullPath":"/work/api","mainSessionName":"api-main"}]}`))
 		case "POST /projects":
+			var req struct {
+				Title *string `json:"title"`
+			}
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if req.Title == nil || *req.Title != "Web" {
+				t.Fatalf("request title = %v, want Web", req.Title)
+			}
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"id":2,"fullPath":"/work/web","mainSessionName":"web-main"}`))
+			_, _ = w.Write([]byte(`{"id":2,"title":"Web","fullPath":"/work/web","mainSessionName":"web-main"}`))
 		case "DELETE /projects/2":
 			deleted = true
 			w.WriteHeader(http.StatusNoContent)
@@ -33,14 +41,14 @@ func TestClientListCreateDeleteProjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(projects) != 1 || projects[0].MainSessionName != "api-main" {
+	if len(projects) != 1 || projects[0].Title != "API" || projects[0].MainSessionName != "api-main" {
 		t.Fatalf("unexpected projects: %+v", projects)
 	}
-	created, err := c.CreateProject(context.Background(), "/work/web")
+	created, err := c.CreateProject(context.Background(), "/work/web", "Web")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
-	if created.ID != 2 || created.FullPath != "/work/web" {
+	if created.ID != 2 || created.Title != "Web" || created.FullPath != "/work/web" {
 		t.Fatalf("unexpected created project: %+v", created)
 	}
 	if err := c.DeleteProject(context.Background(), 2); err != nil {

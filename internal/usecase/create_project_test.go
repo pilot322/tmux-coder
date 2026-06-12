@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -22,6 +23,9 @@ func TestCreateProject_NewProject(t *testing.T) {
 	if res.Project.ID() == 0 {
 		t.Errorf("project id was not assigned")
 	}
+	if res.Project.Title() != "api" {
+		t.Errorf("Title = %q, want api", res.Project.Title())
+	}
 	if res.MainSessionName != "api-main" {
 		t.Errorf("MainSessionName = %q, want %q", res.MainSessionName, "api-main")
 	}
@@ -33,6 +37,57 @@ func TestCreateProject_NewProject(t *testing.T) {
 	}
 	if all, _ := projects.GetAll(ctx); len(all) != 1 {
 		t.Errorf("want 1 project stored, got %d", len(all))
+	}
+}
+
+func TestCreateProject_CustomTitle(t *testing.T) {
+	uc, _, _, _, _ := createFixture()
+	ctx := context.Background()
+	title := "  Backend API  "
+
+	res, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api", Title: &title})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if res.Project.Title() != "Backend API" {
+		t.Errorf("Title = %q, want Backend API", res.Project.Title())
+	}
+}
+
+func TestCreateProject_DuplicateIgnoresTitle(t *testing.T) {
+	uc, _, _, _, _ := createFixture()
+	ctx := context.Background()
+	firstTitle := "Backend API"
+	secondTitle := "Different API"
+
+	first, _ := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api", Title: &firstTitle})
+	second, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api", Title: &secondTitle})
+	if err != nil {
+		t.Fatalf("Execute (duplicate): %v", err)
+	}
+	if second.Project.Title() != first.Project.Title() {
+		t.Errorf("duplicate Title = %q, want %q", second.Project.Title(), first.Project.Title())
+	}
+
+	invalidTitle := "Backend  API"
+	third, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api", Title: &invalidTitle})
+	if err != nil {
+		t.Fatalf("Execute (duplicate invalid title): %v", err)
+	}
+	if third.Project.Title() != first.Project.Title() {
+		t.Errorf("duplicate invalid Title = %q, want %q", third.Project.Title(), first.Project.Title())
+	}
+}
+
+func TestCreateProject_RejectsInvalidTitle(t *testing.T) {
+	uc, _, _, _, _ := createFixture()
+	ctx := context.Background()
+
+	for _, title := range []string{"   ", "Backend  API", "abcdefghijklmnopqrstuvwxyzabcdefghijklmno"} {
+		_, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api", Title: &title})
+		if !errors.Is(err, domain.ErrInvalidProjectTitle) {
+			t.Fatalf("title %q: want ErrInvalidProjectTitle, got %v", title, err)
+		}
 	}
 }
 

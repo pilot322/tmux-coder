@@ -3,6 +3,7 @@ package memory
 import (
 	"sync"
 
+	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -14,17 +15,20 @@ type DaemonState struct {
 	mu       sync.RWMutex
 	projects *MemoryProjectRepository
 	sessions *MemorySessionRepository
+	config   domain.DaemonConfig
 }
 
 func NewDaemonState() *DaemonState {
 	return &DaemonState{
 		projects: NewMemoryProjectRepository(),
 		sessions: NewMemorySessionRepository(),
+		config:   domain.DefaultDaemonConfig(),
 	}
 }
 
 func (d *DaemonState) Projects() usecase.IProjectRepository { return d.projects }
 func (d *DaemonState) Sessions() usecase.ISessionRepository { return d.sessions }
+func (d *DaemonState) Config() domain.DaemonConfig          { return d.config }
 
 func (d *DaemonState) WithRead(fn func() error) error {
 	d.mu.RLock()

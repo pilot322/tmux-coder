@@ -4,6 +4,7 @@ import (
 	"context"
 	"sync"
 
+	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
@@ -87,6 +88,6 @@ func createFixture() (*usecase.CreateProject, *memory.MemoryProjectRepository, *
 	sessions := memory.NewMemorySessionRepository()
 	lock := &spyLock{}
 	gw := newFakeGateway(lock)
-	uc := usecase.NewCreateProject(projects, sessions, gw, lock)
+	uc := usecase.NewCreateProject(projects, sessions, gw, lock, domain.DefaultDaemonConfig())
 	return uc, projects, sessions, gw, lock
 }

@@ -3,7 +3,6 @@ package tui
 import (
 	"context"
 	"fmt"
-	"path/filepath"
 	"strings"
 
 	"github.com/charmbracelet/bubbles/key"
@@ -169,7 +168,7 @@ func (m Model) View() string {
 		b.WriteString("No projects yet. Run `tmux-coder open` or `tmux-coder o` in a directory to create and attach it.\n")
 	} else {
 		for i, p := range m.projects {
-			line := fmt.Sprintf("%s  %s  %s", filepath.Base(p.FullPath), mutedStyle.Render(p.FullPath), mutedStyle.Render(p.MainSessionName))
+			line := fmt.Sprintf("%s  %s  %s", p.Title, mutedStyle.Render(p.FullPath), mutedStyle.Render(p.MainSessionName))
 			if i == m.selected {
 				line = selectStyle.Render("> " + line)
 			} else {

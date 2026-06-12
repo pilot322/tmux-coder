@@ -12,6 +12,7 @@ import (
 
 type Project struct {
 	ID              int    `json:"id"`
+	Title           string `json:"title"`
 	FullPath        string `json:"fullPath"`
 	MainSessionName string `json:"mainSessionName"`
 }
@@ -42,10 +43,15 @@ func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
 	return resp.Projects, nil
 }
 
-func (c *Client) CreateProject(ctx context.Context, fullPath string) (Project, error) {
+func (c *Client) CreateProject(ctx context.Context, fullPath string, title ...string) (Project, error) {
+	var projectTitle *string
+	if len(title) > 0 {
+		projectTitle = &title[0]
+	}
 	body, err := json.Marshal(struct {
-		FullPath string `json:"fullPath"`
-	}{FullPath: fullPath})
+		FullPath string  `json:"fullPath"`
+		Title    *string `json:"title,omitempty"`
+	}{FullPath: fullPath, Title: projectTitle})
 	if err != nil {
 		return Project{}, err
 	}

@@ -26,7 +26,7 @@ func main() {
 	state := memory.NewDaemonState()
 	gateway := tmux.NewTmuxGateway()
 
-	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gateway, state)
+	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gateway, state, state.Config())
 	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state)
 	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), gateway, state)
 
