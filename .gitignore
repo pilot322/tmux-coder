@@ -4,4 +4,4 @@
 # built binaries
 /tmux-coderd
 /tmux-coder
-bin/
+bin
