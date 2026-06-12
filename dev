@@ -1,0 +1,65 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+usage() {
+  cat <<'USAGE'
+usage:
+  ./dev build client|daemon
+  ./dev path client|daemon
+  ./dev completion bash
+USAGE
+}
+
+completion_bash() {
+  cat <<'BASH'
+_tmux_coder_dev_completion() {
+  local cur prev
+  COMPREPLY=()
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+  if [[ $COMP_CWORD -eq 1 ]]; then
+    COMPREPLY=( $(compgen -W "build path completion" -- "$cur") )
+    return 0
+  fi
+
+  case "$prev" in
+    build|path)
+      COMPREPLY=( $(compgen -W "client daemon" -- "$cur") )
+      ;;
+    completion)
+      COMPREPLY=( $(compgen -W "bash" -- "$cur") )
+      ;;
+  esac
+}
+
+complete -F _tmux_coder_dev_completion ./dev dev
+BASH
+}
+
+if [[ $# -eq 0 ]]; then
+  usage >&2
+  exit 2
+fi
+
+case "$1" in
+  build|path)
+    exec "$root_dir/scripts/$1" "${@:2}"
+    ;;
+  completion)
+    if [[ "${2:-}" != "bash" ]]; then
+      usage >&2
+      exit 2
+    fi
+    completion_bash
+    ;;
+  -h|--help|help)
+    usage
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

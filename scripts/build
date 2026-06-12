@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+  echo "usage: ./dev build client|daemon" >&2
+}
+
+if [[ $# -ne 1 ]]; then
+  usage
+  exit 2
+fi
+
+mkdir -p "$root_dir/bin"
+
+case "$1" in
+  client)
+    go build -o "$root_dir/bin/tmux-coder" "$root_dir/cmd/tmux-coder"
+    ;;
+  daemon)
+    go build -o "$root_dir/bin/tmux-coderd" "$root_dir/cmd/tmux-coderd"
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
