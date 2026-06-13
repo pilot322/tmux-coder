@@ -37,15 +37,23 @@ The `tmux-coder` CLI invocation that connects to the **Daemon** to issue command
 _Avoid_: CLI (as a noun for a running instance)
 
 **TC Agent**:
-A coding agent process (Claude Code, Codex, etc.) launched and managed by tmux-coder via `tmux-coder -a <agent>`. Registered with the **Daemon** on launch, deregistered on exit. Each Agent has an ID and is linked to a specific **Session** and **Project**.
+A pane-backed coding agent process (Claude Code, Codex, OpenCode, etc.) launched and managed by tmux-coder. Each **TC Agent** has an ID, belongs to exactly one **Session** and **Project**, and may have a non-unique display name used as a human label.
 _Avoid_: Tool, assistant, process
 
+**Agent Kind**:
+The executable family for a **TC Agent** (for example `opencode`, `claude`, or `codex`). The kind identifies what agent program tmux-coder launches; it is distinct from the agent's display name.
+_Avoid_: Agent type, command, display name
+
+**Agent Display Name**:
+A human-facing label for a **TC Agent**, used for presentation and tmux window labels. It is not the agent's identity; the **TC Agent** ID remains authoritative.
+_Avoid_: Agent ID, Agent Kind
+
 **Agent Registry**:
-The in-memory data structure in the **Daemon** that tracks all active **TC Agents** — their IDs, associated **Sessions**, and **Projects**.
+The in-memory data structure in the **Daemon** that tracks active **TC Agents** — their IDs, associated **Sessions**, **Projects**, pane identity, and current non-terminal state. It is an active set, not a durable history.
 _Avoid_: Agent store, agent list
 
 **Event**:
-A notification fired by a **TC Agent**'s hook system to the **Daemon** via `tmux-coder event`. Carries a type, agent ID, and optional payload. Used to signal state changes (completion, error, waiting for input).
+A notification sent by a **TC Agent** wrapper or hook system to the **Daemon**. Carries a type, agent ID, and optional payload; lifecycle events change active registry state, while richer semantic events can be added later.
 _Avoid_: Message, signal, notification
 
 **Reconciliation**:
