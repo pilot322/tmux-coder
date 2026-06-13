@@ -98,6 +98,17 @@ func NewSessionController(c *usecase.CreateSession, l *usecase.GetSessions, d *u
 	return &SessionController{create: c, list: l, delete: d}
 }
 
+type AgentController struct {
+	create *usecase.CreateAgent
+	list   *usecase.GetAgents
+	event  *usecase.AgentEvent
+	delete *usecase.DeleteAgent
+}
+
+func NewAgentController(c *usecase.CreateAgent, l *usecase.GetAgents, e *usecase.AgentEvent, d *usecase.DeleteAgent) *AgentController {
+	return &AgentController{create: c, list: l, event: e, delete: d}
+}
+
 func (sc *SessionController) List(w http.ResponseWriter, r *http.Request) {
 	filter, err := parseSessionTypeFilter(r.URL.Query().Get("type"))
 	if err != nil {
@@ -181,6 +192,116 @@ func (sc *SessionController) Delete(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+func (ac *AgentController) Create(w http.ResponseWriter, r *http.Request) {
+	var req createAgentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.ProjectID == 0 {
+		writeError(w, http.StatusBadRequest, "projectId is required")
+		return
+	}
+	if req.SessionID == 0 {
+		writeError(w, http.StatusBadRequest, "sessionId is required")
+		return
+	}
+	if req.Kind == "" {
+		writeError(w, http.StatusBadRequest, "kind is required")
+		return
+	}
+
+	daemonAddr := r.Host
+	result, err := ac.create.Execute(r.Context(), usecase.CreateAgentInput{
+		ProjectID:   req.ProjectID,
+		SessionID:   req.SessionID,
+		Kind:        req.Kind,
+		DisplayName: req.DisplayName,
+		TmuxPaneID:  req.TmuxPaneID,
+		DaemonAddr:  daemonAddr,
+	})
+	if err != nil {
+		writeUsecaseError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, agentViewToDTO(usecase.AgentView{
+		Agent:               result.Agent,
+		Project:             result.Project,
+		Session:             result.Session,
+		MainSessionName:     result.MainSessionName,
+		MainTmuxSessionName: result.MainTmuxSessionName,
+	}))
+}
+
+func (ac *AgentController) List(w http.ResponseWriter, r *http.Request) {
+	var projectID, sessionID *int
+	if raw := r.URL.Query().Get("projectId"); raw != "" {
+		id, err := strconv.Atoi(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "projectId must be an integer")
+			return
+		}
+		projectID = &id
+	}
+	if raw := r.URL.Query().Get("sessionId"); raw != "" {
+		id, err := strconv.Atoi(raw)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "sessionId must be an integer")
+			return
+		}
+		sessionID = &id
+	}
+
+	views, err := ac.list.Execute(r.Context(), usecase.GetAgentsInput{ProjectID: projectID, SessionID: sessionID})
+	if err != nil {
+		writeUsecaseError(w, err)
+		return
+	}
+
+	resp := agentsResponse{Agents: make([]agentResponse, 0, len(views))}
+	for _, v := range views {
+		resp.Agents = append(resp.Agents, agentViewToDTO(v))
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (ac *AgentController) Event(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "id must be an integer")
+		return
+	}
+	var req agentEventRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Event == "" {
+		writeError(w, http.StatusBadRequest, "event is required")
+		return
+	}
+
+	if err := ac.event.Execute(r.Context(), usecase.AgentEventInput{AgentID: id, Event: req.Event, ChildProcessGroupID: req.ChildProcessGroupID}); err != nil {
+		writeUsecaseError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (ac *AgentController) Delete(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "id must be an integer")
+		return
+	}
+	if err := ac.delete.Execute(r.Context(), id); err != nil {
+		writeUsecaseError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func parseSessionType(raw string) (domain.SessionType, error) {
 	switch strings.ToLower(raw) {
 	case "main":
@@ -255,5 +376,51 @@ func sessionTypeString(kind domain.SessionType) string {
 		return "worktree"
 	default:
 		return "unknown"
+	}
+}
+
+func agentToDTO(a *domain.Agent) agentResponse {
+	return agentResponse{
+		ID:                  a.ID(),
+		ProjectID:           a.ProjectID(),
+		SessionID:           a.SessionID(),
+		Kind:                a.Kind(),
+		DisplayName:         a.DisplayName(),
+		TmuxPaneID:          a.TmuxPaneID(),
+		PaneOwned:           a.PaneOwned(),
+		Status:              string(a.Status()),
+		ChildProcessGroupID: a.ChildProcessGroupID(),
+	}
+}
+
+func agentViewToDTO(v usecase.AgentView) agentResponse {
+	return agentResponse{
+		ID:                  v.Agent.ID(),
+		ProjectID:           v.Agent.ProjectID(),
+		SessionID:           v.Agent.SessionID(),
+		Kind:                v.Agent.Kind(),
+		DisplayName:         v.Agent.DisplayName(),
+		TmuxPaneID:          v.Agent.TmuxPaneID(),
+		PaneOwned:           v.Agent.PaneOwned(),
+		Status:              string(v.Agent.Status()),
+		ChildProcessGroupID: v.Agent.ChildProcessGroupID(),
+		Project: projectResponse{
+			ID:                  v.Project.ID(),
+			Title:               v.Project.Title(),
+			FullPath:            v.Project.FullPath(),
+			MainSessionName:     v.MainSessionName,
+			MainTmuxSessionName: v.MainTmuxSessionName,
+		},
+		Session: sessionResponse{
+			ID:          v.Session.ID(),
+			Parent:      v.Session.Parent(),
+			ProjectID:   v.Session.ProjectID(),
+			Name:        v.Session.Name(),
+			SessionName: v.Session.Name(),
+			TmuxName:    v.Session.TmuxName(),
+			Type:        sessionTypeString(v.Session.Type()),
+			Branch:      v.Session.Branch(),
+			Worktree:    v.Session.WorktreePath(),
+		},
 	}
 }

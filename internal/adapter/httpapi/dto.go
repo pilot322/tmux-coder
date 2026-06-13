@@ -48,3 +48,34 @@ type sessionsResponse struct {
 type errorResponse struct {
 	Error string `json:"error"`
 }
+
+type createAgentRequest struct {
+	ProjectID   int     `json:"projectId"`
+	SessionID   int     `json:"sessionId"`
+	Kind        string  `json:"kind"`
+	DisplayName *string `json:"displayName"`
+	TmuxPaneID  *string `json:"tmuxPaneId"`
+}
+
+type agentResponse struct {
+	ID                  int             `json:"id"`
+	ProjectID           int             `json:"projectId"`
+	SessionID           int             `json:"sessionId"`
+	Kind                string          `json:"kind"`
+	DisplayName         string          `json:"displayName"`
+	TmuxPaneID          string          `json:"tmuxPaneId"`
+	PaneOwned           bool            `json:"paneOwned"`
+	Status              string          `json:"status"`
+	ChildProcessGroupID int             `json:"childProcessGroupId,omitempty"`
+	Project             projectResponse `json:"project"`
+	Session             sessionResponse `json:"session"`
+}
+
+type agentsResponse struct {
+	Agents []agentResponse `json:"agents"`
+}
+
+type agentEventRequest struct {
+	Event               string `json:"event"`
+	ChildProcessGroupID *int   `json:"childProcessGroupId,omitempty"`
+}
