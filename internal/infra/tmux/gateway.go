@@ -1,27 +1,28 @@
 // Package tmux implements usecase.SessionGateway by shelling out to a
-// dedicated tmux server (-L tmux-coder) via os/exec, so tmux-coder's sessions
-// never mix with the user's default tmux server.
+// dedicated tmux server via os/exec, so tmux-coder's sessions never mix with
+// the user's default tmux server.
 package tmux
 
 import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 
+	"github.com/pilot322/tmux-coder/internal/tmuxserver"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
 var _ usecase.SessionGateway = (*TmuxGateway)(nil)
 
-const serverLabel = "tmux-coder"
-
 type TmuxGateway struct {
-	binary string
+	binary      string
+	serverLabel string
 }
 
 func NewTmuxGateway() *TmuxGateway {
-	return &TmuxGateway{binary: "tmux"}
+	return &TmuxGateway{binary: "tmux", serverLabel: tmuxserver.Label(os.Getenv)}
 }
 
 // Create starts a new detached session named name, rooted at workingDir.
@@ -39,7 +40,7 @@ func (g *TmuxGateway) Kill(ctx context.Context, name string) error {
 // when the session is absent, which is a normal answer (false, nil) rather
 // than an error; only a missing tmux or a cancelled context is a real error.
 func (g *TmuxGateway) Exists(ctx context.Context, name string) (bool, error) {
-	cmd := exec.CommandContext(ctx, g.binary, "-L", serverLabel, "has-session", "-t", name)
+	cmd := exec.CommandContext(ctx, g.binary, "-L", g.serverLabel, "has-session", "-t", name)
 	err := cmd.Run()
 	if err == nil {
 		return true, nil
@@ -52,7 +53,7 @@ func (g *TmuxGateway) Exists(ctx context.Context, name string) (bool, error) {
 }
 
 func (g *TmuxGateway) run(ctx context.Context, args ...string) ([]byte, error) {
-	full := append([]string{"-L", serverLabel}, args...)
+	full := append([]string{"-L", g.serverLabel}, args...)
 	out, err := exec.CommandContext(ctx, g.binary, full...).CombinedOutput()
 	if err != nil {
 		return out, fmt.Errorf("tmux %v: %w: %s", args, err, out)

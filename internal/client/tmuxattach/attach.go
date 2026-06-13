@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"os/exec"
+
+	"github.com/pilot322/tmux-coder/internal/tmuxserver"
 )
 
 type Command struct {
@@ -12,25 +14,33 @@ type Command struct {
 }
 
 func Args(sessionName string, insideTmux bool) []string {
+	return ArgsWithServer(tmuxserver.DefaultLabel, sessionName, insideTmux)
+}
+
+func ArgsWithServer(serverLabel, sessionName string, insideTmux bool) []string {
 	if insideTmux {
-		return []string{"-L", "tmux-coder", "switch-client", "-t", sessionName}
+		return []string{"-L", serverLabel, "switch-client", "-t", sessionName}
 	}
-	return []string{"-L", "tmux-coder", "attach-session", "-t", sessionName}
+	return []string{"-L", serverLabel, "attach-session", "-t", sessionName}
 }
 
 func Commands(sessionName string, tmuxEnv string) []Command {
-	attach := Command{Args: []string{"-L", "tmux-coder", "attach-session", "-t", sessionName}}
+	return CommandsWithServer(tmuxserver.DefaultLabel, sessionName, tmuxEnv)
+}
+
+func CommandsWithServer(serverLabel, sessionName string, tmuxEnv string) []Command {
+	attach := Command{Args: []string{"-L", serverLabel, "attach-session", "-t", sessionName}}
 	if tmuxEnv == "" {
 		return []Command{attach}
 	}
 	return []Command{
-		{Args: []string{"-L", "tmux-coder", "switch-client", "-t", sessionName}},
+		{Args: []string{"-L", serverLabel, "switch-client", "-t", sessionName}},
 		{Args: attach.Args, UnsetTMUX: true},
 	}
 }
 
 func Run(ctx context.Context, sessionName string, getenv func(string) string) error {
-	commands := Commands(sessionName, getenv("TMUX"))
+	commands := CommandsWithServer(tmuxserver.Label(getenv), sessionName, getenv("TMUX"))
 	for i, c := range commands {
 		if i < len(commands)-1 {
 			if err := runQuiet(ctx, c); err == nil {
