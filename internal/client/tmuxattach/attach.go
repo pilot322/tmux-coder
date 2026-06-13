@@ -33,6 +33,14 @@ func SelectPaneArgsWithServer(serverLabel, paneID string) []string {
 	return []string{"-L", serverLabel, "select-pane", "-t", paneID}
 }
 
+func SelectWindowArgs(paneID string) []string {
+	return SelectWindowArgsWithServer(tmuxserver.DefaultLabel, paneID)
+}
+
+func SelectWindowArgsWithServer(serverLabel, paneID string) []string {
+	return []string{"-L", serverLabel, "select-window", "-t", paneID}
+}
+
 func Commands(sessionName string, tmuxEnv string) []Command {
 	return CommandsWithServer(tmuxserver.DefaultLabel, sessionName, tmuxEnv)
 }
@@ -82,6 +90,9 @@ func RunPane(ctx context.Context, sessionName, paneID string, getenv func(string
 
 func runAttach(ctx context.Context, sessionName, paneID string, getenv func(string) string) error {
 	if paneID != "" {
+		if err := runQuiet(ctx, Command{Args: SelectWindowArgsWithServer(tmuxserver.Label(getenv), paneID)}); err != nil {
+			return err
+		}
 		if err := runQuiet(ctx, Command{Args: SelectPaneArgsWithServer(tmuxserver.Label(getenv), paneID)}); err != nil {
 			return err
 		}
