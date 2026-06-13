@@ -25,16 +25,18 @@ type SessionView struct {
 	Project             *domain.Project
 	MainSessionName     string
 	MainTmuxSessionName string
+	Branch              string
 }
 
 type GetSessions struct {
 	projects IProjectRepository
 	sessions ISessionRepository
+	git      GitWorktreeGateway
 	lock     StateLock
 }
 
-func NewGetSessions(p IProjectRepository, s ISessionRepository, l StateLock) *GetSessions {
-	return &GetSessions{projects: p, sessions: s, lock: l}
+func NewGetSessions(p IProjectRepository, s ISessionRepository, g GitWorktreeGateway, l StateLock) *GetSessions {
+	return &GetSessions{projects: p, sessions: s, git: g, lock: l}
 }
 
 func (uc *GetSessions) Execute(ctx context.Context, in GetSessionsInput) ([]SessionView, error) {
@@ -76,6 +78,13 @@ func (uc *GetSessions) Execute(ctx context.Context, in GetSessionsInput) ([]Sess
 				view.MainSessionName = main.Name()
 				view.MainTmuxSessionName = main.TmuxName()
 			}
+			branch := s.Branch()
+			if s.Type() == domain.MainSession && branch == "" {
+				if b, err := uc.git.CurrentBranch(ctx, p.FullPath()); err == nil {
+					branch = b
+				}
+			}
+			view.Branch = branch
 			views = append(views, view)
 		}
 		return nil

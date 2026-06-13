@@ -32,7 +32,7 @@ func main() {
 	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state)
 	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), gateway, state)
 	createSession := usecase.NewCreateSession(state.Projects(), state.Sessions(), gateway, git, state)
-	listSessions := usecase.NewGetSessions(state.Projects(), state.Sessions(), state)
+	listSessions := usecase.NewGetSessions(state.Projects(), state.Sessions(), git, state)
 	deleteSession := usecase.NewDeleteSession(state.Sessions(), gateway, git, state)
 
 	controller := httpapi.NewProjectController(create, list, del)

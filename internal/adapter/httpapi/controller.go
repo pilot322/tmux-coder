@@ -121,7 +121,7 @@ func (sc *SessionController) List(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := sessionsResponse{Sessions: make([]sessionResponse, 0, len(views))}
 	for _, v := range views {
-		resp.Sessions = append(resp.Sessions, sessionDTO(v.Session, v.Project, v.MainSessionName, v.MainTmuxSessionName))
+		resp.Sessions = append(resp.Sessions, sessionDTO(v.Session, v.Project, v.MainSessionName, v.MainTmuxSessionName, v.Branch))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -156,7 +156,7 @@ func (sc *SessionController) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, v := range views {
 		if v.Session.ID() == s.ID() {
-			writeJSON(w, http.StatusCreated, sessionDTO(v.Session, v.Project, v.MainSessionName, v.MainTmuxSessionName))
+			writeJSON(w, http.StatusCreated, sessionDTO(v.Session, v.Project, v.MainSessionName, v.MainTmuxSessionName, v.Branch))
 			return
 		}
 	}
@@ -224,7 +224,7 @@ func parseBoolQuery(raw string) (bool, error) {
 	}
 }
 
-func sessionDTO(s *domain.Session, p *domain.Project, mainSessionName, mainTmuxSessionName string) sessionResponse {
+func sessionDTO(s *domain.Session, p *domain.Project, mainSessionName, mainTmuxSessionName, branch string) sessionResponse {
 	return sessionResponse{
 		ID:          s.ID(),
 		Parent:      s.Parent(),
@@ -233,7 +233,7 @@ func sessionDTO(s *domain.Session, p *domain.Project, mainSessionName, mainTmuxS
 		SessionName: s.Name(),
 		TmuxName:    s.TmuxName(),
 		Type:        sessionTypeString(s.Type()),
-		Branch:      s.Branch(),
+		Branch:      branch,
 		Worktree:    s.WorktreePath(),
 		Project: projectResponse{
 			ID:                  p.ID(),

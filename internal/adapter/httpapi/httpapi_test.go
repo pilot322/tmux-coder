@@ -56,6 +56,10 @@ func (g *stubGit) RemoveWorktree(ctx context.Context, worktreePath string, force
 }
 func (g *stubGit) DeleteBranch(ctx context.Context, repoPath, branch string) error { return nil }
 
+func (g *stubGit) CurrentBranch(ctx context.Context, repoPath string) (string, error) {
+	return "main", nil
+}
+
 func newServer() *http.ServeMux {
 	state := memory.NewDaemonState()
 	gw := &stubGateway{exists: make(map[string]bool)}
@@ -65,7 +69,7 @@ func newServer() *http.ServeMux {
 	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state)
 	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), gw, state)
 	createSession := usecase.NewCreateSession(state.Projects(), state.Sessions(), gw, git, state)
-	listSessions := usecase.NewGetSessions(state.Projects(), state.Sessions(), state)
+	listSessions := usecase.NewGetSessions(state.Projects(), state.Sessions(), git, state)
 	deleteSession := usecase.NewDeleteSession(state.Sessions(), gw, git, state)
 
 	return httpapi.NewRouter(
@@ -212,6 +216,7 @@ func TestGetSessions_ListsMainSessionWithProjectTitle(t *testing.T) {
 			SessionName string `json:"sessionName"`
 			TmuxName    string `json:"tmuxSessionName"`
 			Type        string `json:"type"`
+			Branch      string `json:"branch"`
 			Project     struct {
 				Title               string `json:"title"`
 				MainSessionName     string `json:"mainSessionName"`
@@ -222,7 +227,7 @@ func TestGetSessions_ListsMainSessionWithProjectTitle(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(resp.Sessions) != 1 || resp.Sessions[0].SessionName != "api.main" || resp.Sessions[0].TmuxName != "api_main" || resp.Sessions[0].Type != "main" || resp.Sessions[0].Project.Title != "Backend API" || resp.Sessions[0].Project.MainSessionName != "api.main" || resp.Sessions[0].Project.MainTmuxSessionName != "api_main" {
+	if len(resp.Sessions) != 1 || resp.Sessions[0].SessionName != "api.main" || resp.Sessions[0].TmuxName != "api_main" || resp.Sessions[0].Type != "main" || resp.Sessions[0].Branch != "main" || resp.Sessions[0].Project.Title != "Backend API" || resp.Sessions[0].Project.MainSessionName != "api.main" || resp.Sessions[0].Project.MainTmuxSessionName != "api_main" {
 		t.Fatalf("unexpected sessions: %+v", resp.Sessions)
 	}
 }

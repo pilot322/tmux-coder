@@ -61,6 +61,7 @@ type GitWorktreeGateway interface {
 	AddWorktree(ctx context.Context, repoPath, worktreePath, branch, baseBranch string, create bool) error
 	RemoveWorktree(ctx context.Context, worktreePath string, force bool) error
 	DeleteBranch(ctx context.Context, repoPath, branch string) error
+	CurrentBranch(ctx context.Context, repoPath string) (string, error)
 }
 
 // SessionGateway is the port to the dedicated tmux server. Its failures map to

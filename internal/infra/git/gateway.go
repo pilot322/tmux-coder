@@ -97,6 +97,14 @@ func (g *Gateway) DeleteBranch(ctx context.Context, repoPath, branch string) err
 	return g.run(ctx, "-C", repoPath, "branch", "-D", branch)
 }
 
+func (g *Gateway) CurrentBranch(ctx context.Context, repoPath string) (string, error) {
+	out, err := exec.CommandContext(ctx, g.binary, "-C", repoPath, "branch", "--show-current").CombinedOutput()
+	if err != nil {
+		return "", fmt.Errorf("git branch --show-current: %w: %s", err, out)
+	}
+	return strings.TrimSpace(string(out)), nil
+}
+
 func (g *Gateway) existsByExit(ctx context.Context, repoPath string, args ...string) (bool, error) {
 	full := append([]string{"-C", repoPath}, args...)
 	err := exec.CommandContext(ctx, g.binary, full...).Run()
