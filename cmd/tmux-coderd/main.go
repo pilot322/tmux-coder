@@ -13,6 +13,7 @@ import (
 	"github.com/pilot322/tmux-coder/internal/adapter/httpapi"
 	gitinfra "github.com/pilot322/tmux-coder/internal/infra/git"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
+	processinfra "github.com/pilot322/tmux-coder/internal/infra/process"
 	"github.com/pilot322/tmux-coder/internal/infra/tmux"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
@@ -22,22 +23,28 @@ func main() {
 		log.Printf("failed to load .env: %v", err)
 	}
 
-	addr := ":" + daemonPort()
+	addr := "127.0.0.1:" + daemonPort()
 
 	state := memory.NewDaemonState()
 	gateway := tmux.NewTmuxGateway()
 	git := gitinfra.NewGateway()
+	processGw := processinfra.NewProcessGateway()
 
 	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gateway, state, state.Config())
 	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state)
-	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), gateway, state)
+	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), state.Agents(), gateway, state)
 	createSession := usecase.NewCreateSession(state.Projects(), state.Sessions(), gateway, git, state)
 	listSessions := usecase.NewGetSessions(state.Projects(), state.Sessions(), git, state)
-	deleteSession := usecase.NewDeleteSession(state.Sessions(), gateway, git, state)
+	deleteSession := usecase.NewDeleteSession(state.Sessions(), state.Agents(), gateway, git, state)
+	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), gateway, state)
+	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), gateway, state)
+	agentEvent := usecase.NewAgentEvent(state.Agents(), state)
+	deleteAgent := usecase.NewDeleteAgent(state.Agents(), gateway, processGw, state)
 
 	controller := httpapi.NewProjectController(create, list, del)
 	sessionController := httpapi.NewSessionController(createSession, listSessions, deleteSession)
-	router := httpapi.NewRouter(controller, sessionController)
+	agentController := httpapi.NewAgentController(createAgent, listAgents, agentEvent, deleteAgent)
+	router := httpapi.NewRouter(controller, sessionController, agentController)
 
 	log.Printf("tmux-coderd listening on %s", addr)
 	if err := http.ListenAndServe(addr, router); err != nil {
