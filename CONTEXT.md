@@ -60,6 +60,18 @@ _Avoid_: Message, signal, notification
 The process by which the **Daemon** heals drift between its in-memory record of a **Session** and the runtime resources it owns: the tmux session for every **Session**, and the git worktree for a **Worktree Session**. Triggered on write operations, never on plain reads.
 _Avoid_: Sync, refresh, resync
 
+**Worktree Hook**:
+A **Project**-declared lifecycle script that customizes setup around a **Worktree Session**. It belongs to tmux-coder's lifecycle, not Git's hook system.
+_Avoid_: Git hook, shell command
+
+**Resource Lease**:
+A **Daemon**-owned reservation of a local resource value for a **Project** and a **Session** or in-progress **Worktree Session** creation.
+_Avoid_: Lock, allocation
+
+**Port Lease**:
+A **Resource Lease** for a TCP port value used by a **Project**'s runnable local environment.
+_Avoid_: Port setting, env var
+
 **Config File** (`.tmux-coder.toml`):
 A TOML file at a **Project**'s root that declares **Secondary Sessions**, environment variables, and hooks. Checked into version control. Most runtime state (**Sessions**, **Agent Registry**) lives only in the **Daemon**'s memory and is rebuilt on start; durable persistence (eventually SQLite) is limited to **Projects**.
 _Avoid_: Settings, project file, manifest

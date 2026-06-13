@@ -80,6 +80,15 @@ type ListSessionsInput struct {
 	ProjectID *int
 }
 
+type AcquirePortInput struct {
+	Key       string `json:"key"`
+	Start     int    `json:"start"`
+	End       int    `json:"end"`
+	HookToken string `json:"hookToken,omitempty"`
+	ProjectID int    `json:"projectId,omitempty"`
+	SessionID int    `json:"sessionId,omitempty"`
+}
+
 type Client struct {
 	baseURL string
 	http    *http.Client
@@ -190,6 +199,25 @@ func (c *Client) DeleteSession(ctx context.Context, id int, force bool) error {
 		return err
 	}
 	return c.doJSON(req, http.StatusNoContent, nil)
+}
+
+func (c *Client) AcquirePort(ctx context.Context, in AcquirePortInput) (int, error) {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return 0, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/resources/ports/acquire", bytes.NewReader(body))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var resp struct {
+		Port int `json:"port"`
+	}
+	if err := c.doJSON(req, http.StatusOK, &resp); err != nil {
+		return 0, err
+	}
+	return resp.Port, nil
 }
 
 func (c *Client) ListAgents(ctx context.Context, in ListAgentsInput) ([]Agent, error) {

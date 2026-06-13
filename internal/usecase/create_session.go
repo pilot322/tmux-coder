@@ -29,10 +29,22 @@ type CreateSession struct {
 	tmux     SessionGateway
 	git      GitWorktreeGateway
 	lock     StateLock
+	hooks    WorktreeHookRunner
+	leases   ResourceLeaseRepository
 }
 
 func NewCreateSession(p IProjectRepository, s ISessionRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock) *CreateSession {
-	return &CreateSession{projects: p, sessions: s, tmux: tmux, git: git, lock: l}
+	return NewCreateSessionWithHooks(p, s, tmux, git, l, nil, nil)
+}
+
+func NewCreateSessionWithHooks(p IProjectRepository, s ISessionRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock, hooks WorktreeHookRunner, leases ResourceLeaseRepository) *CreateSession {
+	if hooks == nil {
+		hooks = missingWorktreeHookRunner{}
+	}
+	if leases == nil {
+		leases = noopResourceLeaseRepository{}
+	}
+	return &CreateSession{projects: p, sessions: s, tmux: tmux, git: git, lock: l, hooks: hooks, leases: leases}
 }
 
 func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*domain.Session, error) {
@@ -60,7 +72,7 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 		}
 		return nil, fmt.Errorf("%w: %v", ErrGateway, err)
 	}
-	if err := reconcileWorktreeSessions(ctx, uc.sessions, uc.git, uc.tmux, uc.lock); err != nil {
+	if err := reconcileWorktreeSessions(ctx, uc.sessions, uc.git, uc.tmux, uc.lock, uc.leases); err != nil {
 		return nil, err
 	}
 
@@ -133,6 +145,21 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 	worktreeCreated := true
 
 	tmuxName := domain.DeriveTmuxSessionName(name)
+	hookToken, err := uc.runConfiguredWorktreeHook(ctx, project, worktreePath, name, tmuxName, in.Branch)
+	if err != nil {
+		uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
+		return nil, err
+	}
+	hookPromoted := false
+	if hookToken != "" {
+		defer func() {
+			if !hookPromoted {
+				_ = uc.leases.ReleaseHookLeases(ctx, hookToken)
+				_ = uc.leases.EndHook(ctx, hookToken)
+			}
+		}()
+	}
+
 	if err := uc.tmux.Create(ctx, tmuxName, worktreePath); err != nil {
 		uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
 		return nil, fmt.Errorf("%w: %v", ErrGateway, err)
@@ -147,6 +174,21 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 		_ = uc.tmux.Kill(ctx, tmuxName)
 		uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
 		return nil, err
+	}
+	if hookToken != "" {
+		if err := uc.leases.PromoteHookLeases(ctx, hookToken, session.ID()); err != nil {
+			_ = uc.tmux.Kill(ctx, tmuxName)
+			uc.rollbackCreatedSessionRecord(ctx, session.ID())
+			uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
+			return nil, err
+		}
+		if err := uc.leases.EndHook(ctx, hookToken); err != nil {
+			_ = uc.tmux.Kill(ctx, tmuxName)
+			uc.rollbackCreatedSessionRecord(ctx, session.ID())
+			uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
+			return nil, err
+		}
+		hookPromoted = true
 	}
 
 	return session, nil
@@ -299,6 +341,55 @@ func (uc *CreateSession) sessionDepth(ctx context.Context, sessionID int) (int, 
 		id = s.Parent()
 	}
 	return depth, nil
+}
+
+func (uc *CreateSession) rollbackCreatedSessionRecord(ctx context.Context, sessionID int) {
+	_ = uc.lock.WithWrite(func() error {
+		_ = uc.leases.ReleaseSessionLeases(ctx, sessionID)
+		return uc.sessions.Delete(ctx, sessionID)
+	})
+}
+
+func (uc *CreateSession) runConfiguredWorktreeHook(ctx context.Context, project *domain.Project, worktreePath, sessionName, tmuxName, branch string) (string, error) {
+	cfg, err := loadWorktreeHookConfig(project.FullPath())
+	if err != nil {
+		return "", err
+	}
+	scriptPath, err := resolveWorktreeHookScript(project.FullPath(), cfg.Script)
+	if err != nil {
+		return "", err
+	}
+	if scriptPath == "" {
+		return "", nil
+	}
+	token, err := newWorktreeHookToken()
+	if err != nil {
+		return "", err
+	}
+	if err := uc.leases.BeginHook(ctx, token, HookLeaseOwner{
+		ProjectID:       project.ID(),
+		SessionName:     sessionName,
+		TmuxSessionName: tmuxName,
+		Branch:          branch,
+		WorktreePath:    worktreePath,
+	}); err != nil {
+		return "", err
+	}
+	result, err := uc.hooks.Run(ctx, WorktreeHookRequest{
+		ScriptPath: scriptPath,
+		WorkingDir: worktreePath,
+		Timeout:    cfg.Timeout,
+		Env:        worktreeHookEnv(project.FullPath(), worktreePath, project.ID(), sessionName, tmuxName, branch, token),
+	})
+	if err != nil {
+		_ = uc.leases.ReleaseHookLeases(ctx, token)
+		_ = uc.leases.EndHook(ctx, token)
+		if result.Output != "" {
+			return "", fmt.Errorf("%w: worktree hook failed: %v: %s", ErrGateway, err, result.Output)
+		}
+		return "", fmt.Errorf("%w: worktree hook failed: %v", ErrGateway, err)
+	}
+	return token, nil
 }
 
 func (uc *CreateSession) rollbackCreatedWorktree(ctx context.Context, repoPath, worktreePath, branch string, worktreeCreated, branchCreated bool) {

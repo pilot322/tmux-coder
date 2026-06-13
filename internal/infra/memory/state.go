@@ -16,6 +16,7 @@ type DaemonState struct {
 	projects *MemoryProjectRepository
 	sessions *MemorySessionRepository
 	agents   *MemoryAgentRepository
+	leases   *MemoryResourceLeaseRepository
 	config   domain.DaemonConfig
 }
 
@@ -24,13 +25,15 @@ func NewDaemonState() *DaemonState {
 		projects: NewMemoryProjectRepository(),
 		sessions: NewMemorySessionRepository(),
 		agents:   NewMemoryAgentRepository(),
+		leases:   NewMemoryResourceLeaseRepository(),
 		config:   domain.DefaultDaemonConfig(),
 	}
 }
 
-func (d *DaemonState) Projects() usecase.IProjectRepository { return d.projects }
-func (d *DaemonState) Sessions() usecase.ISessionRepository  { return d.sessions }
-func (d *DaemonState) Agents() usecase.IAgentRepository      { return d.agents }
+func (d *DaemonState) Projects() usecase.IProjectRepository   { return d.projects }
+func (d *DaemonState) Sessions() usecase.ISessionRepository   { return d.sessions }
+func (d *DaemonState) Agents() usecase.IAgentRepository       { return d.agents }
+func (d *DaemonState) Leases() *MemoryResourceLeaseRepository { return d.leases }
 func (d *DaemonState) Config() domain.DaemonConfig            { return d.config }
 
 func (d *DaemonState) WithRead(fn func() error) error {

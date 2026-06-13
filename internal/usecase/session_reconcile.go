@@ -7,7 +7,10 @@ import (
 	"github.com/pilot322/tmux-coder/internal/domain"
 )
 
-func reconcileWorktreeSessions(ctx context.Context, sessions ISessionRepository, git GitWorktreeGateway, tmux SessionGateway, lock StateLock) error {
+func reconcileWorktreeSessions(ctx context.Context, sessions ISessionRepository, git GitWorktreeGateway, tmux SessionGateway, lock StateLock, leases ResourceLeaseRepository) error {
+	if leases == nil {
+		leases = noopResourceLeaseRepository{}
+	}
 	var allSessions []*domain.Session
 	var worktrees []*domain.Session
 	if err := lock.WithRead(func() error {
@@ -66,6 +69,9 @@ func reconcileWorktreeSessions(ctx context.Context, sessions ISessionRepository,
 	}
 	return lock.WithWrite(func() error {
 		for _, id := range prune {
+			if err := leases.ReleaseSessionLeases(ctx, id); err != nil {
+				return err
+			}
 			if err := sessions.Delete(ctx, id); err != nil {
 				return err
 			}

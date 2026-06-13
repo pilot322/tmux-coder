@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -16,6 +17,11 @@ import (
 type agentAPI interface {
 	ListSessions(context.Context, httpclient.ListSessionsInput) ([]httpclient.Session, error)
 	CreateAgent(context.Context, httpclient.CreateAgentInput) (httpclient.Agent, error)
+}
+
+type acquirePortAPI interface {
+	ListSessions(context.Context, httpclient.ListSessionsInput) ([]httpclient.Session, error)
+	AcquirePort(context.Context, httpclient.AcquirePortInput) (int, error)
 }
 
 type agentWrapperExitError struct {
@@ -62,7 +68,73 @@ func runClient(ctx context.Context, args []string, getenv func(string) string, g
 	if len(args) >= 1 && (args[0] == "n" || args[0] == "new") {
 		return runNew(ctx, args[1:], getenv, api, addr)
 	}
-	return fmt.Errorf("usage: tmux-coder [open|o|new|n]")
+	if len(args) >= 1 && args[0] == "acquire-port" {
+		return runAcquirePort(ctx, args[1:], getenv, api, os.Stdout)
+	}
+	return fmt.Errorf("usage: tmux-coder [open|o|new|n|acquire-port]")
+}
+
+func runAcquirePort(ctx context.Context, args []string, getenv func(string) string, api acquirePortAPI, out io.Writer) error {
+	var key string
+	var start, end int
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--start":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--start requires a value")
+			}
+			v, err := strconv.Atoi(args[i])
+			if err != nil {
+				return fmt.Errorf("--start must be an integer")
+			}
+			start = v
+		case "--end":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--end requires a value")
+			}
+			v, err := strconv.Atoi(args[i])
+			if err != nil {
+				return fmt.Errorf("--end must be an integer")
+			}
+			end = v
+		default:
+			if key == "" {
+				key = args[i]
+			} else {
+				return fmt.Errorf("unexpected argument: %s", args[i])
+			}
+		}
+	}
+	if key == "" {
+		return fmt.Errorf("usage: tmux-coder acquire-port KEY --start N --end M")
+	}
+	if start == 0 {
+		return fmt.Errorf("--start is required")
+	}
+	if end == 0 {
+		return fmt.Errorf("--end is required")
+	}
+
+	in := httpclient.AcquirePortInput{Key: key, Start: start, End: end}
+	if token := getenv("TMUX_CODER_HOOK_TOKEN"); token != "" {
+		in.HookToken = token
+	} else {
+		sessionID, projectID, err := currentManagedSession(ctx, getenv, api)
+		if err != nil {
+			return err
+		}
+		in.SessionID = sessionID
+		in.ProjectID = projectID
+	}
+
+	port, err := api.AcquirePort(ctx, in)
+	if err != nil {
+		return fmt.Errorf("acquire port: %w", err)
+	}
+	_, err = fmt.Fprintf(out, "%d\n", port)
+	return err
 }
 
 func runNew(ctx context.Context, args []string, getenv func(string) string, api agentAPI, daemonAddr string) error {
@@ -129,26 +201,12 @@ func runNew(ctx context.Context, args []string, getenv func(string) string, api 
 	}
 
 	if sessionID == nil || projectID == nil {
-		currentSession := tmuxattach.CurrentSession(ctx, getenv)
-		if currentSession == "" {
-			return fmt.Errorf("tmux-coder new must run inside a tmux-coder session unless --session-id and --project-id are provided")
-		}
-		sessions, err := api.ListSessions(ctx, httpclient.ListSessionsInput{})
+		sid, pid, err := currentManagedSession(ctx, getenv, api)
 		if err != nil {
-			return fmt.Errorf("list sessions: %w", err)
+			return fmt.Errorf("tmux-coder new must run inside a tmux-coder session unless --session-id and --project-id are provided: %w", err)
 		}
-		for _, session := range sessions {
-			if session.TmuxName == currentSession || session.SessionName == currentSession {
-				sid := session.ID
-				pid := session.ProjectID
-				sessionID = &sid
-				projectID = &pid
-				break
-			}
-		}
-		if sessionID == nil || projectID == nil {
-			return fmt.Errorf("current tmux session %q is not managed by tmux-coder", currentSession)
-		}
+		sessionID = &sid
+		projectID = &pid
 	}
 
 	agent, err := api.CreateAgent(ctx, httpclient.CreateAgentInput{
@@ -174,4 +232,23 @@ func runNew(ctx context.Context, args []string, getenv func(string) string, api 
 
 	fmt.Fprintf(os.Stdout, "agent %d (%s) created — status %s\n", agent.ID, agent.DisplayName, agent.Status)
 	return nil
+}
+
+func currentManagedSession(ctx context.Context, getenv func(string) string, api interface {
+	ListSessions(context.Context, httpclient.ListSessionsInput) ([]httpclient.Session, error)
+}) (int, int, error) {
+	currentSession := tmuxattach.CurrentSession(ctx, getenv)
+	if currentSession == "" {
+		return 0, 0, fmt.Errorf("not inside a tmux-coder session")
+	}
+	sessions, err := api.ListSessions(ctx, httpclient.ListSessionsInput{})
+	if err != nil {
+		return 0, 0, fmt.Errorf("list sessions: %w", err)
+	}
+	for _, session := range sessions {
+		if session.TmuxName == currentSession || session.SessionName == currentSession {
+			return session.ID, session.ProjectID, nil
+		}
+	}
+	return 0, 0, fmt.Errorf("current tmux session %q is not managed by tmux-coder", currentSession)
 }

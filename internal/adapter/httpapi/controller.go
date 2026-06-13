@@ -105,8 +105,16 @@ type AgentController struct {
 	delete *usecase.DeleteAgent
 }
 
+type ResourceController struct {
+	acquirePort *usecase.AcquirePort
+}
+
 func NewAgentController(c *usecase.CreateAgent, l *usecase.GetAgents, e *usecase.AgentEvent, d *usecase.DeleteAgent) *AgentController {
 	return &AgentController{create: c, list: l, event: e, delete: d}
+}
+
+func NewResourceController(acquirePort *usecase.AcquirePort) *ResourceController {
+	return &ResourceController{acquirePort: acquirePort}
 }
 
 func (sc *SessionController) List(w http.ResponseWriter, r *http.Request) {
@@ -240,6 +248,27 @@ func (ac *AgentController) Create(w http.ResponseWriter, r *http.Request) {
 		MainSessionName:     result.MainSessionName,
 		MainTmuxSessionName: result.MainTmuxSessionName,
 	}))
+}
+
+func (rc *ResourceController) AcquirePort(w http.ResponseWriter, r *http.Request) {
+	var req acquirePortRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	out, err := rc.acquirePort.Execute(r.Context(), usecase.AcquirePortInput{
+		Key:       req.Key,
+		Start:     req.Start,
+		End:       req.End,
+		HookToken: req.HookToken,
+		ProjectID: req.ProjectID,
+		SessionID: req.SessionID,
+	})
+	if err != nil {
+		writeUsecaseError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, acquirePortResponse{Port: out.Port})
 }
 
 func (ac *AgentController) List(w http.ResponseWriter, r *http.Request) {

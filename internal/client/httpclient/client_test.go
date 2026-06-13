@@ -126,3 +126,29 @@ func TestClientListCreateDeleteSessions(t *testing.T) {
 		t.Fatal("delete endpoint was not called")
 	}
 }
+
+func TestClientAcquirePort(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/resources/ports/acquire" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		var req httpclient.AcquirePortInput
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if req.HookToken != "hook-token" || req.Key != "web" || req.Start != 8000 || req.End != 8002 {
+			t.Fatalf("request = %+v", req)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"port":8001}`))
+	}))
+	defer server.Close()
+
+	c := httpclient.New(server.URL, server.Client())
+	port, err := c.AcquirePort(context.Background(), httpclient.AcquirePortInput{HookToken: "hook-token", Key: "web", Start: 8000, End: 8002})
+	if err != nil {
+		t.Fatalf("AcquirePort: %v", err)
+	}
+	if port != 8001 {
+		t.Fatalf("port = %d, want 8001", port)
+	}
+}

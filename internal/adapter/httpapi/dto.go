@@ -56,6 +56,19 @@ type errorResponse struct {
 	Error string `json:"error"`
 }
 
+type acquirePortRequest struct {
+	Key       string `json:"key"`
+	Start     int    `json:"start"`
+	End       int    `json:"end"`
+	HookToken string `json:"hookToken,omitempty"`
+	ProjectID int    `json:"projectId,omitempty"`
+	SessionID int    `json:"sessionId,omitempty"`
+}
+
+type acquirePortResponse struct {
+	Port int `json:"port"`
+}
+
 type createAgentRequest struct {
 	ProjectID   int     `json:"projectId"`
 	SessionID   int     `json:"sessionId"`

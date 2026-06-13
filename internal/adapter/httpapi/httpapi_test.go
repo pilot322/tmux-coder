@@ -85,6 +85,14 @@ type stubAgentGateway struct {
 	created []stubNewWindowCall
 }
 
+type stubPortAvailability struct {
+	occupied map[int]bool
+}
+
+func (p *stubPortAvailability) Available(ctx context.Context, port int) bool {
+	return !p.occupied[port]
+}
+
 type stubNewWindowCall struct {
 	sessionName string
 	workingDir  string
@@ -142,6 +150,32 @@ func newServer() *http.ServeMux {
 	)
 }
 
+func newResourceServer(ports *stubPortAvailability) (*http.ServeMux, *memory.MemoryResourceLeaseRepository) {
+	state := memory.NewDaemonState()
+	gw := &stubGateway{exists: make(map[string]bool)}
+	git := &stubGit{paths: make(map[string]bool)}
+	agentGw := &stubAgentGateway{panes: make(map[string]bool)}
+
+	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gw, state, state.Config())
+	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state)
+	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), state.Agents(), gw, state)
+	createSession := usecase.NewCreateSession(state.Projects(), state.Sessions(), gw, git, state)
+	listSessions := usecase.NewGetSessions(state.Projects(), state.Sessions(), git, state)
+	deleteSession := usecase.NewDeleteSession(state.Sessions(), state.Agents(), gw, git, state)
+	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state)
+	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), agentGw, state)
+	agentEvent := usecase.NewAgentEvent(state.Agents(), state)
+	deleteAgent := usecase.NewDeleteAgent(state.Agents(), agentGw, nil, state)
+	acquirePort := usecase.NewAcquirePort(state.Sessions(), state.Leases(), ports, state)
+
+	return httpapi.NewRouter(
+		httpapi.NewProjectController(create, list, del),
+		httpapi.NewSessionController(createSession, listSessions, deleteSession),
+		httpapi.NewAgentController(createAgent, listAgents, agentEvent, deleteAgent),
+		httpapi.NewResourceController(acquirePort),
+	), state.Leases()
+}
+
 func do(t *testing.T, mux *http.ServeMux, method, path, body string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
@@ -175,6 +209,27 @@ func TestPostProjects_CreatesThenReturnsExisting(t *testing.T) {
 	rec = do(t, mux, "POST", "/projects", `{"fullPath":"/work/api"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("second POST status = %d, want 200", rec.Code)
+	}
+}
+
+func TestPostAcquirePortWithHookToken(t *testing.T) {
+	mux, leases := newResourceServer(&stubPortAvailability{occupied: map[int]bool{8000: true}})
+	if err := leases.BeginHook(context.Background(), "hook-token", usecase.HookLeaseOwner{ProjectID: 7}); err != nil {
+		t.Fatal(err)
+	}
+
+	rec := do(t, mux, "POST", "/resources/ports/acquire", `{"hookToken":"hook-token","key":"web","start":8000,"end":8002}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST status = %d, want 200 (body: %s)", rec.Code, rec.Body)
+	}
+	var resp struct {
+		Port int `json:"port"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Port != 8001 {
+		t.Fatalf("port = %d, want 8001", resp.Port)
 	}
 }
 

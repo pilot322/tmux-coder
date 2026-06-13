@@ -19,14 +19,22 @@ type DeleteSession struct {
 	tmux     SessionGateway
 	git      GitWorktreeGateway
 	lock     StateLock
+	leases   ResourceLeaseRepository
 }
 
 func NewDeleteSession(s ISessionRepository, a IAgentRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock) *DeleteSession {
-	return &DeleteSession{sessions: s, agents: a, tmux: tmux, git: git, lock: l}
+	return NewDeleteSessionWithLeases(s, a, tmux, git, l, nil)
+}
+
+func NewDeleteSessionWithLeases(s ISessionRepository, a IAgentRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock, leases ResourceLeaseRepository) *DeleteSession {
+	if leases == nil {
+		leases = noopResourceLeaseRepository{}
+	}
+	return &DeleteSession{sessions: s, agents: a, tmux: tmux, git: git, lock: l, leases: leases}
 }
 
 func (uc *DeleteSession) Execute(ctx context.Context, in DeleteSessionInput) error {
-	if err := reconcileWorktreeSessions(ctx, uc.sessions, uc.git, uc.tmux, uc.lock); err != nil {
+	if err := reconcileWorktreeSessions(ctx, uc.sessions, uc.git, uc.tmux, uc.lock, uc.leases); err != nil {
 		return err
 	}
 
@@ -68,6 +76,9 @@ func (uc *DeleteSession) Execute(ctx context.Context, in DeleteSessionInput) err
 
 	return uc.lock.WithWrite(func() error {
 		if err := uc.agents.DeleteBySessionID(ctx, session.ID()); err != nil {
+			return err
+		}
+		if err := uc.leases.ReleaseSessionLeases(ctx, session.ID()); err != nil {
 			return err
 		}
 		return uc.sessions.Delete(ctx, session.ID())
