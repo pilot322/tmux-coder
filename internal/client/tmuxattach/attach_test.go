@@ -32,6 +32,22 @@ func TestArgsWithServerUsesCustomLabel(t *testing.T) {
 	}
 }
 
+func TestSelectPaneArgs(t *testing.T) {
+	got := tmuxattach.SelectPaneArgs("%7")
+	want := []string{"-L", "tmux-coder", "select-pane", "-t", "%7"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("args = %#v", got)
+	}
+}
+
+func TestSelectWindowArgs(t *testing.T) {
+	got := tmuxattach.SelectWindowArgs("%7")
+	want := []string{"-L", "tmux-coder", "select-window", "-t", "%7"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("args = %#v", got)
+	}
+}
+
 func TestCommandsOutsideTmuxAttachesDirectly(t *testing.T) {
 	got := tmuxattach.Commands("api-main", "")
 	want := []tmuxattach.Command{{Args: []string{"-L", "tmux-coder", "attach-session", "-t", "api-main"}}}

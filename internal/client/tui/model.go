@@ -14,9 +14,11 @@ import (
 type API interface {
 	ListProjects(context.Context) ([]httpclient.Project, error)
 	ListSessions(context.Context, httpclient.ListSessionsInput) ([]httpclient.Session, error)
+	ListAgents(context.Context, httpclient.ListAgentsInput) ([]httpclient.Agent, error)
 	CreateSession(context.Context, httpclient.CreateSessionInput) (httpclient.Session, error)
 	DeleteProject(context.Context, int) error
 	DeleteSession(context.Context, int, bool) error
+	DeleteAgent(context.Context, int) error
 }
 
 type deleteTarget uint8
@@ -25,13 +27,35 @@ const (
 	deleteNothing deleteTarget = iota
 	deleteProject
 	deleteWorktreeSession
+	deleteAgent
 )
+
+type rowKind uint8
+
+const (
+	rowProject rowKind = iota
+	rowSession
+	rowAgent
+)
+
+type viewRow struct {
+	kind    rowKind
+	project httpclient.Project
+	session httpclient.Session
+	agent   httpclient.Agent
+}
+
+type AttachTarget struct {
+	SessionName string
+	PaneID      string
+}
 
 type Model struct {
 	ctx                  context.Context
 	api                  API
 	projects             []httpclient.Project
 	sessions             []httpclient.Session
+	agents               []httpclient.Agent
 	selected             int
 	selectedSession      int
 	status               string
@@ -41,17 +65,19 @@ type Model struct {
 	confirmDeleteID      int
 	help                 bool
 	showSessions         bool
+	showAgents           bool
 	creatingWorktree     bool
 	worktreeBranch       string
 	worktreeProjectID    int
 	pendingSelectSession string
 	initialSession       string
-	attach               string
+	attach               AttachTarget
 }
 
 type listMsg struct {
 	projects []httpclient.Project
 	sessions []httpclient.Session
+	agents   []httpclient.Agent
 	err      error
 }
 
@@ -73,7 +99,7 @@ var (
 )
 
 var keys = struct {
-	up, down, top, bottom, enter, del, refresh, sessions, worktree, help, quit key.Binding
+	up, down, top, bottom, enter, del, refresh, sessions, agents, worktree, help, quit key.Binding
 }{
 	up:       key.NewBinding(key.WithKeys("up", "k")),
 	down:     key.NewBinding(key.WithKeys("down", "j")),
@@ -83,20 +109,21 @@ var keys = struct {
 	del:      key.NewBinding(key.WithKeys("X")),
 	refresh:  key.NewBinding(key.WithKeys("r")),
 	sessions: key.NewBinding(key.WithKeys("s")),
+	agents:   key.NewBinding(key.WithKeys("a")),
 	worktree: key.NewBinding(key.WithKeys("w")),
 	help:     key.NewBinding(key.WithKeys("?")),
 	quit:     key.NewBinding(key.WithKeys("q", "esc", "ctrl+c")),
 }
 
-func Run(ctx context.Context, api API, initialSession ...string) (string, bool, error) {
+func Run(ctx context.Context, api API, initialSession ...string) (AttachTarget, bool, error) {
 	m := NewModel(ctx, api, initialSession...)
 	final, err := tea.NewProgram(m).Run()
 	if err != nil {
-		return "", false, err
+		return AttachTarget{}, false, err
 	}
 	m = final.(Model)
-	if m.attach == "" {
-		return "", false, nil
+	if m.attach.SessionName == "" {
+		return AttachTarget{}, false, nil
 	}
 	return m.attach, true, nil
 }
@@ -123,6 +150,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		m.projects = msg.projects
 		m.sessions = msg.sessions
+		m.agents = msg.agents
 		m.status = ""
 		m.confirm = false
 		m.confirmDelete = deleteNothing
@@ -184,12 +212,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keys.sessions):
 			if m.showSessions {
 				if project, ok := m.selectedProject(); ok {
-					m.selected = m.projectIndex(project.ID)
+					m.selected = m.projectRowIndex(project.ID)
 				}
 				m.showSessions = false
 			} else {
+				project, ok := m.selectedProject()
 				m.showSessions = true
-				m.selectedSession = m.mainSessionIndexForSelectedProject()
+				if ok {
+					m.selectedSession = m.mainSessionRowIndexForProject(project.ID)
+				} else {
+					m.selectedSession = 0
+				}
+			}
+			m.clampSelection()
+		case key.Matches(msg, keys.agents):
+			row, hasRow := m.selectedRow()
+			m.showAgents = !m.showAgents
+			if hasRow {
+				m.selectEquivalentRow(row)
 			}
 			m.clampSelection()
 		case key.Matches(msg, keys.worktree):
@@ -209,10 +249,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case key.Matches(msg, keys.down):
 			if m.showSessions {
-				if m.selectedSession < len(m.sessionRows())-1 {
+				if m.selectedSession < len(m.sessionViewRows())-1 {
 					m.selectedSession++
 				}
-			} else if m.selected < len(m.projects)-1 {
+			} else if m.selected < len(m.projectViewRows())-1 {
 				m.selected++
 			}
 		case key.Matches(msg, keys.top):
@@ -223,11 +263,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case key.Matches(msg, keys.bottom):
 			if m.showSessions {
-				if rows := m.sessionRows(); len(rows) > 0 {
+				if rows := m.sessionViewRows(); len(rows) > 0 {
 					m.selectedSession = len(rows) - 1
 				}
-			} else if len(m.projects) > 0 {
-				m.selected = len(m.projects) - 1
+			} else if rows := m.projectViewRows(); len(rows) > 0 {
+				m.selected = len(rows) - 1
 			}
 		case key.Matches(msg, keys.del):
 			m.requestDeleteConfirmation()
@@ -253,15 +293,7 @@ func (m Model) View() string {
 	} else if m.showSessions {
 		m.writeSessionRows(&b)
 	} else {
-		for i, p := range m.projects {
-			line := fmt.Sprintf("%s  %s  %s", p.Title, mutedStyle.Render(p.FullPath), mutedStyle.Render(p.MainSessionName))
-			if i == m.selected {
-				line = selectStyle.Render("> " + line)
-			} else {
-				line = "  " + line
-			}
-			b.WriteString(line + "\n")
-		}
+		m.writeProjectRows(&b)
 	}
 
 	if m.confirm {
@@ -270,6 +302,8 @@ func (m Model) View() string {
 			b.WriteString("\nDelete project? y/n\n")
 		case deleteWorktreeSession:
 			b.WriteString("\nDestroy worktree session and worktree? y/n\n")
+		case deleteAgent:
+			b.WriteString("\nDelete agent? y/n\n")
 		}
 	}
 	if m.creatingWorktree {
@@ -281,9 +315,9 @@ func (m Model) View() string {
 	if m.creatingWorktree {
 		b.WriteString("\n" + mutedStyle.Render("enter create  esc cancel") + "\n")
 	} else if m.help {
-		b.WriteString("\nKeys: j/k or arrows move, g/G jump, enter attach, s sessions, w worktree, X delete, r refresh, ? help, q quit\n")
+		b.WriteString("\nKeys: j/k or arrows move, g/G jump, enter attach, s sessions, a agents, w worktree, X delete, r refresh, ? help, q quit\n")
 	} else {
-		b.WriteString("\n" + mutedStyle.Render("j/k move  enter attach  s sessions  w worktree  X delete  r refresh  ? help  q quit") + "\n")
+		b.WriteString("\n" + mutedStyle.Render("j/k move  enter attach  s sessions  a agents  w worktree  X delete  r refresh  ? help  q quit") + "\n")
 	}
 	return b.String()
 }
@@ -295,7 +329,11 @@ func (m Model) listCmd() tea.Cmd {
 			return listMsg{err: err}
 		}
 		sessions, err := m.api.ListSessions(m.ctx, httpclient.ListSessionsInput{})
-		return listMsg{projects: projects, sessions: sessions, err: err}
+		if err != nil {
+			return listMsg{projects: projects, err: err}
+		}
+		agents, err := m.api.ListAgents(m.ctx, httpclient.ListAgentsInput{})
+		return listMsg{projects: projects, sessions: sessions, agents: agents, err: err}
 	}
 }
 
@@ -306,6 +344,8 @@ func (m Model) deleteCmd(target deleteTarget, id int) tea.Cmd {
 			return deleteMsg{id: id, err: m.api.DeleteProject(m.ctx, id)}
 		case deleteWorktreeSession:
 			return deleteMsg{id: id, err: m.api.DeleteSession(m.ctx, id, true)}
+		case deleteAgent:
+			return deleteMsg{id: id, err: m.api.DeleteAgent(m.ctx, id)}
 		default:
 			return deleteMsg{id: id}
 		}
@@ -357,14 +397,15 @@ func (m Model) updateWorktreePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) clampSelection() {
-	if len(m.projects) == 0 {
+	projectRows := m.projectViewRows()
+	if len(projectRows) == 0 {
 		m.selected = 0
 	} else if m.selected < 0 {
 		m.selected = 0
-	} else if m.selected >= len(m.projects) {
-		m.selected = len(m.projects) - 1
+	} else if m.selected >= len(projectRows) {
+		m.selected = len(projectRows) - 1
 	}
-	rows := m.sessionRows()
+	rows := m.sessionViewRows()
 	if len(rows) == 0 {
 		m.selectedSession = 0
 	} else if m.selectedSession < 0 {
@@ -378,9 +419,9 @@ func (m *Model) selectPendingSession() {
 	if m.pendingSelectSession == "" {
 		return
 	}
-	rows := m.sessionRows()
-	for i, s := range rows {
-		if sessionName(s) == m.pendingSelectSession {
+	rows := m.sessionViewRows()
+	for i, row := range rows {
+		if row.kind == rowSession && sessionName(row.session) == m.pendingSelectSession {
 			m.selectedSession = i
 			m.pendingSelectSession = ""
 			return
@@ -394,22 +435,49 @@ func (m *Model) selectInitialSession() {
 		return
 	}
 	defer func() { m.initialSession = "" }()
-	rows := m.sessionRows()
-	for i, s := range rows {
-		if sessionName(s) == m.initialSession || tmuxSessionName(s) == m.initialSession {
+	rows := m.sessionViewRows()
+	for i, row := range rows {
+		if row.kind == rowSession && (sessionName(row.session) == m.initialSession || tmuxSessionName(row.session) == m.initialSession) {
 			m.selectedSession = i
 			return
 		}
 	}
 }
 
+func (m Model) writeProjectRows(b *strings.Builder) {
+	selected := 0
+	for _, p := range m.projects {
+		line := fmt.Sprintf("%s  %s  %s", p.Title, mutedStyle.Render(p.FullPath), mutedStyle.Render(p.MainSessionName))
+		if selected == m.selected {
+			line = selectStyle.Render("> " + line)
+		} else {
+			line = "  " + line
+		}
+		b.WriteString(line + "\n")
+		selected++
+
+		if !m.showAgents {
+			continue
+		}
+		for _, a := range m.agentsForProject(p.ID) {
+			line := "- " + agentLabel(a)
+			if selected == m.selected {
+				line = selectStyle.Render("> " + line)
+			} else {
+				line = "  " + line
+			}
+			b.WriteString("  " + line + "\n")
+			selected++
+		}
+	}
+}
+
 func (m Model) writeSessionRows(b *strings.Builder) {
 	selected := 0
-	rows := m.sessionRows()
 	for _, p := range m.projects {
 		line := fmt.Sprintf("%s  %s  %s", p.Title, mutedStyle.Render(p.FullPath), mutedStyle.Render(p.MainSessionName))
 		b.WriteString("  " + line + "\n")
-		for _, s := range rows {
+		for _, s := range m.sessionRows() {
 			if s.ProjectID != p.ID {
 				continue
 			}
@@ -424,8 +492,55 @@ func (m Model) writeSessionRows(b *strings.Builder) {
 			}
 			b.WriteString("  " + line + "\n")
 			selected++
+
+			if !m.showAgents {
+				continue
+			}
+			for _, a := range m.agentsForSession(s.ID) {
+				line := "- " + agentLabel(a)
+				if selected == m.selectedSession {
+					line = selectStyle.Render("> " + line)
+				} else {
+					line = "  " + line
+				}
+				b.WriteString("    " + line + "\n")
+				selected++
+			}
 		}
 	}
+}
+
+func (m Model) projectViewRows() []viewRow {
+	rows := make([]viewRow, 0, len(m.projects)+len(m.agents))
+	for _, p := range m.projects {
+		rows = append(rows, viewRow{kind: rowProject, project: p})
+		if !m.showAgents {
+			continue
+		}
+		for _, a := range m.agentsForProject(p.ID) {
+			rows = append(rows, viewRow{kind: rowAgent, project: p, agent: a})
+		}
+	}
+	return rows
+}
+
+func (m Model) sessionViewRows() []viewRow {
+	rows := make([]viewRow, 0, len(m.sessions)+len(m.agents))
+	for _, p := range m.projects {
+		for _, s := range m.sessionRows() {
+			if s.ProjectID != p.ID {
+				continue
+			}
+			rows = append(rows, viewRow{kind: rowSession, project: p, session: s})
+			if !m.showAgents {
+				continue
+			}
+			for _, a := range m.agentsForSession(s.ID) {
+				rows = append(rows, viewRow{kind: rowAgent, project: p, session: s, agent: a})
+			}
+		}
+	}
+	return rows
 }
 
 func (m Model) sessionRows() []httpclient.Session {
@@ -446,32 +561,34 @@ func (m Model) sessionRows() []httpclient.Session {
 }
 
 func (m Model) selectedProject() (httpclient.Project, bool) {
-	if m.showSessions {
-		rows := m.sessionRows()
-		if m.selectedSession < 0 || m.selectedSession >= len(rows) {
-			return httpclient.Project{}, false
-		}
-		idx := m.projectIndex(rows[m.selectedSession].ProjectID)
-		if idx < 0 {
-			return httpclient.Project{}, false
-		}
-		return m.projects[idx], true
-	}
-	if m.selected < 0 || m.selected >= len(m.projects) {
+	row, ok := m.selectedRow()
+	if !ok {
 		return httpclient.Project{}, false
 	}
-	return m.projects[m.selected], true
+	if row.project.ID != 0 {
+		return row.project, true
+	}
+	idx := m.projectIndex(row.agent.ProjectID)
+	if idx < 0 {
+		return httpclient.Project{}, false
+	}
+	return m.projects[idx], true
 }
 
 func (m Model) selectedSessionRow() (httpclient.Session, bool) {
-	if !m.showSessions {
+	row, ok := m.selectedRow()
+	if !ok || row.kind != rowSession {
 		return httpclient.Session{}, false
 	}
-	rows := m.sessionRows()
-	if m.selectedSession < 0 || m.selectedSession >= len(rows) {
-		return httpclient.Session{}, false
+	return row.session, true
+}
+
+func (m Model) selectedAgentRow() (httpclient.Agent, bool) {
+	row, ok := m.selectedRow()
+	if !ok || row.kind != rowAgent {
+		return httpclient.Agent{}, false
 	}
-	return rows[m.selectedSession], true
+	return row.agent, true
 }
 
 func (m *Model) requestDeleteConfirmation() {
@@ -479,6 +596,13 @@ func (m *Model) requestDeleteConfirmation() {
 	m.confirmDelete = deleteNothing
 	m.confirmDeleteID = 0
 	m.status = ""
+
+	if agent, ok := m.selectedAgentRow(); ok {
+		m.confirm = true
+		m.confirmDelete = deleteAgent
+		m.confirmDeleteID = agent.ID
+		return
+	}
 
 	if m.showSessions {
 		s, ok := m.selectedSessionRow()
@@ -504,34 +628,40 @@ func (m *Model) requestDeleteConfirmation() {
 	m.confirmDeleteID = project.ID
 }
 
-func (m Model) attachTarget() (string, bool) {
-	if m.showSessions {
-		rows := m.sessionRows()
-		if m.selectedSession < 0 || m.selectedSession >= len(rows) {
-			return "", false
-		}
-		return tmuxSessionName(rows[m.selectedSession]), true
-	}
-	project, ok := m.selectedProject()
+func (m Model) attachTarget() (AttachTarget, bool) {
+	row, ok := m.selectedRow()
 	if !ok {
-		return "", false
+		return AttachTarget{}, false
 	}
-	return project.MainTmuxSessionName, true
+	switch row.kind {
+	case rowAgent:
+		sessionName := tmuxSessionName(row.session)
+		if sessionName == "" {
+			if s, ok := m.sessionByID(row.agent.SessionID); ok {
+				sessionName = tmuxSessionName(s)
+			}
+		}
+		if sessionName == "" {
+			return AttachTarget{}, false
+		}
+		return AttachTarget{SessionName: sessionName, PaneID: row.agent.TmuxPaneID}, true
+	case rowSession:
+		return AttachTarget{SessionName: tmuxSessionName(row.session)}, true
+	case rowProject:
+		return AttachTarget{SessionName: row.project.MainTmuxSessionName}, true
+	}
+	return AttachTarget{}, false
 }
 
-func (m Model) mainSessionIndexForSelectedProject() int {
-	if m.selected < 0 || m.selected >= len(m.projects) {
-		return 0
-	}
-	project := m.projects[m.selected]
-	rows := m.sessionRows()
-	for i, s := range rows {
-		if s.ProjectID == project.ID && isMainSession(s, project) {
+func (m Model) mainSessionRowIndexForProject(projectID int) int {
+	rows := m.sessionViewRows()
+	for i, row := range rows {
+		if row.kind == rowSession && row.project.ID == projectID && isMainSession(row.session, row.project) {
 			return i
 		}
 	}
-	for i, s := range rows {
-		if s.ProjectID == project.ID {
+	for i, row := range rows {
+		if row.kind == rowSession && row.project.ID == projectID {
 			return i
 		}
 	}
@@ -545,6 +675,88 @@ func (m Model) projectIndex(id int) int {
 		}
 	}
 	return -1
+}
+
+func (m Model) projectRowIndex(id int) int {
+	for i, row := range m.projectViewRows() {
+		if row.kind == rowProject && row.project.ID == id {
+			return i
+		}
+	}
+	return 0
+}
+
+func (m Model) selectedRow() (viewRow, bool) {
+	if m.showSessions {
+		rows := m.sessionViewRows()
+		if m.selectedSession < 0 || m.selectedSession >= len(rows) {
+			return viewRow{}, false
+		}
+		return rows[m.selectedSession], true
+	}
+	rows := m.projectViewRows()
+	if m.selected < 0 || m.selected >= len(rows) {
+		return viewRow{}, false
+	}
+	return rows[m.selected], true
+}
+
+func (m *Model) selectEquivalentRow(row viewRow) {
+	if m.showSessions {
+		sessionID := row.session.ID
+		if row.kind == rowAgent {
+			sessionID = row.agent.SessionID
+		}
+		if sessionID != 0 {
+			for i, candidate := range m.sessionViewRows() {
+				if candidate.kind == rowSession && candidate.session.ID == sessionID {
+					m.selectedSession = i
+					return
+				}
+			}
+		}
+		if row.project.ID != 0 {
+			m.selectedSession = m.mainSessionRowIndexForProject(row.project.ID)
+		}
+		return
+	}
+
+	projectID := row.project.ID
+	if row.kind == rowAgent {
+		projectID = row.agent.ProjectID
+	}
+	if projectID != 0 {
+		m.selected = m.projectRowIndex(projectID)
+	}
+}
+
+func (m Model) agentsForProject(projectID int) []httpclient.Agent {
+	agents := make([]httpclient.Agent, 0)
+	for _, a := range m.agents {
+		if a.ProjectID == projectID {
+			agents = append(agents, a)
+		}
+	}
+	return agents
+}
+
+func (m Model) agentsForSession(sessionID int) []httpclient.Agent {
+	agents := make([]httpclient.Agent, 0)
+	for _, a := range m.agents {
+		if a.SessionID == sessionID {
+			agents = append(agents, a)
+		}
+	}
+	return agents
+}
+
+func (m Model) sessionByID(id int) (httpclient.Session, bool) {
+	for _, s := range m.sessions {
+		if s.ID == id {
+			return s, true
+		}
+	}
+	return httpclient.Session{}, false
 }
 
 func isMainSession(s httpclient.Session, p httpclient.Project) bool {
@@ -563,4 +775,15 @@ func tmuxSessionName(s httpclient.Session) string {
 		return s.TmuxName
 	}
 	return sessionName(s)
+}
+
+func agentLabel(a httpclient.Agent) string {
+	name := a.DisplayName
+	if name == "" {
+		name = fmt.Sprintf("agent-%d-%s", a.ID, a.Kind)
+	}
+	if a.Status != "" {
+		return fmt.Sprintf("%s [%s]", name, a.Status)
+	}
+	return name
 }

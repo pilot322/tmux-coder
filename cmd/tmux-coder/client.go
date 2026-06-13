@@ -39,11 +39,14 @@ func runClient(ctx context.Context, args []string, getenv func(string) string, g
 	api := httpclient.New(addr, http.DefaultClient)
 	if len(args) == 0 {
 		currentSession := tmuxattach.CurrentSession(ctx, getenv)
-		sessionName, ok, err := tui.Run(ctx, api, currentSession)
+		target, ok, err := tui.Run(ctx, api, currentSession)
 		if err != nil || !ok {
 			return err
 		}
-		return tmuxattach.Run(ctx, sessionName, getenv)
+		if target.PaneID != "" {
+			return tmuxattach.RunPane(ctx, target.SessionName, target.PaneID, getenv)
+		}
+		return tmuxattach.Run(ctx, target.SessionName, getenv)
 	}
 	if len(args) == 1 && (args[0] == "o" || args[0] == "open") {
 		cwd, err := getwd()

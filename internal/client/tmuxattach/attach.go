@@ -25,6 +25,22 @@ func ArgsWithServer(serverLabel, sessionName string, insideTmux bool) []string {
 	return []string{"-L", serverLabel, "attach-session", "-t", sessionName}
 }
 
+func SelectPaneArgs(paneID string) []string {
+	return SelectPaneArgsWithServer(tmuxserver.DefaultLabel, paneID)
+}
+
+func SelectPaneArgsWithServer(serverLabel, paneID string) []string {
+	return []string{"-L", serverLabel, "select-pane", "-t", paneID}
+}
+
+func SelectWindowArgs(paneID string) []string {
+	return SelectWindowArgsWithServer(tmuxserver.DefaultLabel, paneID)
+}
+
+func SelectWindowArgsWithServer(serverLabel, paneID string) []string {
+	return []string{"-L", serverLabel, "select-window", "-t", paneID}
+}
+
 func Commands(sessionName string, tmuxEnv string) []Command {
 	return CommandsWithServer(tmuxserver.DefaultLabel, sessionName, tmuxEnv)
 }
@@ -65,6 +81,22 @@ func CurrentPaneID(ctx context.Context, getenv func(string) string) string {
 }
 
 func Run(ctx context.Context, sessionName string, getenv func(string) string) error {
+	return runAttach(ctx, sessionName, "", getenv)
+}
+
+func RunPane(ctx context.Context, sessionName, paneID string, getenv func(string) string) error {
+	return runAttach(ctx, sessionName, paneID, getenv)
+}
+
+func runAttach(ctx context.Context, sessionName, paneID string, getenv func(string) string) error {
+	if paneID != "" {
+		if err := runQuiet(ctx, Command{Args: SelectWindowArgsWithServer(tmuxserver.Label(getenv), paneID)}); err != nil {
+			return err
+		}
+		if err := runQuiet(ctx, Command{Args: SelectPaneArgsWithServer(tmuxserver.Label(getenv), paneID)}); err != nil {
+			return err
+		}
+	}
 	commands := CommandsWithServer(tmuxserver.Label(getenv), sessionName, getenv("TMUX"))
 	for i, c := range commands {
 		if i < len(commands)-1 {
