@@ -1,0 +1,71 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+usage() {
+  echo "usage: ./dev install" >&2
+}
+
+if [[ $# -ne 0 ]]; then
+  usage
+  exit 2
+fi
+
+env_value() {
+  local pid="$1"
+  local name="$2"
+  local entry key
+
+  if [[ ! -r "/proc/$pid/environ" ]]; then
+    return 0
+  fi
+
+  while IFS= read -r -d '' entry; do
+    key="${entry%%=*}"
+    if [[ "$key" == "$name" ]]; then
+      printf '%s\n' "${entry#*=}"
+      return 0
+    fi
+  done < "/proc/$pid/environ"
+  return 0
+}
+
+standard_daemon_pids=()
+for proc in /proc/[0-9]*; do
+  pid="${proc##*/}"
+  comm=""
+  if [[ -r "$proc/comm" ]]; then
+    IFS= read -r comm < "$proc/comm" || true
+  fi
+  if [[ "$comm" != "tmux-coderd" ]]; then
+    continue
+  fi
+
+  port="$(env_value "$pid" TMUX_CODERD_PORT)"
+  tmux_server="$(env_value "$pid" TMUX_CODER_TMUX_SERVER)"
+  if [[ ( -z "$port" || "$port" == "64357" ) && ( -z "$tmux_server" || "$tmux_server" == "tmux-coder" ) ]]; then
+    standard_daemon_pids+=("$pid")
+  fi
+done
+
+if [[ ${#standard_daemon_pids[@]} -gt 0 ]]; then
+  kill "${standard_daemon_pids[@]}"
+  printf 'killed standard tmux-coderd pid %s\n' "${standard_daemon_pids[@]}"
+else
+  echo "no standard tmux-coderd processes found"
+fi
+
+if tmux -L tmux-coder kill-server 2>/dev/null; then
+  echo "killed tmux server tmux-coder"
+else
+  echo "no tmux server tmux-coder found"
+fi
+
+"$root_dir/scripts/build" daemon
+"$root_dir/scripts/build" client
+
+(
+  cd "$root_dir"
+  go install ./cmd/tmux-coder ./cmd/tmux-coderd
+)

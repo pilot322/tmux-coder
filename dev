@@ -6,6 +6,7 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 usage() {
   cat <<'USAGE'
 usage:
+  ./dev install
   ./dev build client|daemon
   ./dev path client|daemon
   ./dev kill [-a]
@@ -22,7 +23,7 @@ _tmux_coder_dev_completion() {
   prev="${COMP_WORDS[COMP_CWORD-1]}"
 
   if [[ $COMP_CWORD -eq 1 ]]; then
-    COMPREPLY=( $(compgen -W "build path kill completion" -- "$cur") )
+    COMPREPLY=( $(compgen -W "install build path kill completion" -- "$cur") )
     return 0
   fi
 
@@ -39,7 +40,7 @@ _tmux_coder_dev_completion() {
   esac
 }
 
-complete -F _tmux_coder_dev_completion ./dev dev
+complete -F _tmux_coder_dev_completion ./dev
 BASH
 }
 
@@ -49,7 +50,7 @@ if [[ $# -eq 0 ]]; then
 fi
 
 case "$1" in
-  build|path|kill)
+  install|build|path|kill)
     exec "$root_dir/scripts/$1" "${@:2}"
     ;;
   completion)
