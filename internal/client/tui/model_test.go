@@ -44,7 +44,10 @@ func (a *fakeAPI) DeleteProject(_ context.Context, id int) error {
 
 func TestModelEnterSelectsProjectMainSessionAndQuits(t *testing.T) {
 	m := NewModel(context.Background(), &fakeAPI{})
-	updated, _ := m.Update(listMsg{projects: []httpclient.Project{{ID: 1, MainSessionName: "api-main"}}})
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 1, MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{{ProjectID: 1, SessionName: "api-main", Type: "main"}},
+	})
 	m = updated.(Model)
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
@@ -68,6 +71,46 @@ func TestModelViewUsesProjectTitle(t *testing.T) {
 	}
 }
 
+func TestModelStartsWithSessionsShown(t *testing.T) {
+	m := NewModel(context.Background(), &fakeAPI{})
+	if !m.showSessions {
+		t.Fatal("expected sessions to be shown by default")
+	}
+}
+
+func TestModelInitialSessionSelectsMatchingSession(t *testing.T) {
+	m := NewModel(context.Background(), &fakeAPI{}, "web-feature")
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{
+			{ID: 1, MainSessionName: "api-main"},
+			{ID: 2, MainSessionName: "web-main"},
+		},
+		sessions: []httpclient.Session{
+			{ProjectID: 1, SessionName: "api-main", Type: "main"},
+			{ProjectID: 2, SessionName: "web-main", Type: "main"},
+			{ProjectID: 2, SessionName: "web-feature", Type: "worktree"},
+		},
+	})
+	m = updated.(Model)
+
+	if m.selectedSession != 2 || m.initialSession != "" {
+		t.Fatalf("selectedSession=%d initialSession=%q", m.selectedSession, m.initialSession)
+	}
+}
+
+func TestModelInitialSessionIgnoresMissingSession(t *testing.T) {
+	m := NewModel(context.Background(), &fakeAPI{}, "missing")
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 1, MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{{ProjectID: 1, SessionName: "api-main", Type: "main"}},
+	})
+	m = updated.(Model)
+
+	if m.selectedSession != 0 || m.initialSession != "" {
+		t.Fatalf("selectedSession=%d initialSession=%q", m.selectedSession, m.initialSession)
+	}
+}
+
 func TestModelToggleSessionsSelectsCurrentProjectMainSession(t *testing.T) {
 	m := NewModel(context.Background(), &fakeAPI{})
 	projects := []httpclient.Project{
@@ -81,6 +124,8 @@ func TestModelToggleSessionsSelectsCurrentProjectMainSession(t *testing.T) {
 		{ProjectID: 2, SessionName: "web-main", Type: "main"},
 	}
 	updated, _ := m.Update(listMsg{projects: projects, sessions: sessions})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	m = updated.(Model)
@@ -111,8 +156,6 @@ func TestModelToggleSessionsOffSelectsOwningProject(t *testing.T) {
 	}
 	updated, _ := m.Update(listMsg{projects: projects, sessions: sessions})
 	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
-	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
@@ -132,8 +175,6 @@ func TestModelExpandedViewRendersSessionsUnderProject(t *testing.T) {
 			{ProjectID: 1, SessionName: "api-main", Type: "main"},
 		},
 	})
-	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
 	m = updated.(Model)
 
 	view := m.View()
@@ -161,7 +202,10 @@ func TestModelListCommandFetchesProjectsAndSessions(t *testing.T) {
 func TestModelWorktreePromptCreatesSessionForSelectedProject(t *testing.T) {
 	api := &fakeAPI{createdSession: httpclient.Session{ProjectID: 7, SessionName: "api-feature-login", Type: "worktree", Branch: "feature/login"}}
 	m := NewModel(context.Background(), api)
-	updated, _ := m.Update(listMsg{projects: []httpclient.Project{{ID: 7, MainSessionName: "api-main"}}})
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{{ProjectID: 7, SessionName: "api-main", Type: "main"}},
+	})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
 	m = updated.(Model)
@@ -225,8 +269,6 @@ func TestModelWorktreePromptUsesSelectedSessionOwner(t *testing.T) {
 		},
 	})
 	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
-	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
@@ -240,7 +282,10 @@ func TestModelWorktreePromptUsesSelectedSessionOwner(t *testing.T) {
 func TestModelWorktreePromptEscCancels(t *testing.T) {
 	api := &fakeAPI{}
 	m := NewModel(context.Background(), api)
-	updated, _ := m.Update(listMsg{projects: []httpclient.Project{{ID: 7, MainSessionName: "api-main"}}})
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{{ProjectID: 7, SessionName: "api-main", Type: "main"}},
+	})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("w")})
 	m = updated.(Model)
@@ -255,7 +300,10 @@ func TestModelWorktreePromptEscCancels(t *testing.T) {
 func TestModelDeleteConfirmationDeletesSelectedProject(t *testing.T) {
 	api := &fakeAPI{}
 	m := NewModel(context.Background(), api)
-	updated, _ := m.Update(listMsg{projects: []httpclient.Project{{ID: 7}}})
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{{ProjectID: 7, SessionName: "api-main", Type: "main"}},
+	})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
 	m = updated.(Model)

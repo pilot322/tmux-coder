@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"os/exec"
+	"strings"
 
 	"github.com/pilot322/tmux-coder/internal/tmuxserver"
 )
@@ -37,6 +38,18 @@ func CommandsWithServer(serverLabel, sessionName string, tmuxEnv string) []Comma
 		{Args: []string{"-L", serverLabel, "switch-client", "-t", sessionName}},
 		{Args: attach.Args, UnsetTMUX: true},
 	}
+}
+
+func CurrentSession(ctx context.Context, getenv func(string) string) string {
+	if getenv("TMUX") == "" {
+		return ""
+	}
+	cmd := exec.CommandContext(ctx, "tmux", "display-message", "-p", "#S")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }
 
 func Run(ctx context.Context, sessionName string, getenv func(string) string) error {

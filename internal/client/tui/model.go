@@ -34,6 +34,7 @@ type Model struct {
 	worktreeBranch       string
 	worktreeProjectID    int
 	pendingSelectSession string
+	initialSession       string
 	attach               string
 }
 
@@ -76,8 +77,8 @@ var keys = struct {
 	quit:     key.NewBinding(key.WithKeys("q", "esc", "ctrl+c")),
 }
 
-func Run(ctx context.Context, api API) (string, bool, error) {
-	m := NewModel(ctx, api)
+func Run(ctx context.Context, api API, initialSession ...string) (string, bool, error) {
+	m := NewModel(ctx, api, initialSession...)
 	final, err := tea.NewProgram(m).Run()
 	if err != nil {
 		return "", false, err
@@ -89,8 +90,12 @@ func Run(ctx context.Context, api API) (string, bool, error) {
 	return m.attach, true, nil
 }
 
-func NewModel(ctx context.Context, api API) Model {
-	return Model{ctx: ctx, api: api, loading: true}
+func NewModel(ctx context.Context, api API, initialSession ...string) Model {
+	m := Model{ctx: ctx, api: api, loading: true, showSessions: true}
+	if len(initialSession) > 0 {
+		m.initialSession = initialSession[0]
+	}
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
@@ -110,6 +115,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.status = ""
 		m.confirm = false
 		m.clampSelection()
+		m.selectInitialSession()
 		m.selectPendingSession()
 	case deleteMsg:
 		m.loading = false
@@ -361,6 +367,20 @@ func (m *Model) selectPendingSession() {
 		}
 	}
 	m.pendingSelectSession = ""
+}
+
+func (m *Model) selectInitialSession() {
+	if m.initialSession == "" {
+		return
+	}
+	defer func() { m.initialSession = "" }()
+	rows := m.sessionRows()
+	for i, s := range rows {
+		if sessionName(s) == m.initialSession {
+			m.selectedSession = i
+			return
+		}
+	}
 }
 
 func (m Model) writeSessionRows(b *strings.Builder) {

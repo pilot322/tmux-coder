@@ -1,6 +1,7 @@
 package tmuxattach_test
 
 import (
+	"context"
 	"reflect"
 	"testing"
 
@@ -55,5 +56,12 @@ func TestCommandsWithServerUsesCustomLabel(t *testing.T) {
 	want := []tmuxattach.Command{{Args: []string{"-L", "tmux-coder-test-1", "attach-session", "-t", "api-main"}}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("commands = %#v", got)
+	}
+}
+
+func TestCurrentSessionOutsideTmuxReturnsEmpty(t *testing.T) {
+	got := tmuxattach.CurrentSession(context.Background(), func(string) string { return "" })
+	if got != "" {
+		t.Fatalf("current session = %q, want empty", got)
 	}
 }

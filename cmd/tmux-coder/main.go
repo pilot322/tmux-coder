@@ -31,7 +31,8 @@ func run(ctx context.Context, args []string, getenv func(string) string, getwd f
 
 	api := httpclient.New(addr, http.DefaultClient)
 	if len(args) == 0 {
-		sessionName, ok, err := tui.Run(ctx, api)
+		currentSession := tmuxattach.CurrentSession(ctx, getenv)
+		sessionName, ok, err := tui.Run(ctx, api, currentSession)
 		if err != nil || !ok {
 			return err
 		}
