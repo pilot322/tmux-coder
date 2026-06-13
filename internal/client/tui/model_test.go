@@ -217,6 +217,23 @@ func TestModelExpandedViewRendersSessionsUnderProject(t *testing.T) {
 	}
 }
 
+func TestModelExpandedViewRendersWorktreeWithParentMetadata(t *testing.T) {
+	m := NewModel(context.Background(), &fakeAPI{})
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 1, Title: "Backend API", FullPath: "/work/api", MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{
+			{ID: 1, ProjectID: 1, SessionName: "api-main", Type: "main"},
+			{ID: 2, ParentSessionID: 1, ProjectID: 1, SessionName: "api-work", Type: "worktree", Branch: "feature/api"},
+		},
+	})
+	m = updated.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, "- api-work (feature/api)") {
+		t.Fatalf("view missing parented worktree row: %q", view)
+	}
+}
+
 func TestModelAgentViewRendersAgentsUnderSessions(t *testing.T) {
 	m := NewModel(context.Background(), &fakeAPI{})
 	updated, _ := m.Update(listMsg{
@@ -231,6 +248,29 @@ func TestModelAgentViewRendersAgentsUnderSessions(t *testing.T) {
 	view := m.View()
 	if !strings.Contains(view, "- api-main") || !strings.Contains(view, "- reviewer [running]") {
 		t.Fatalf("view missing session agent rows: %q", view)
+	}
+}
+
+func TestModelAgentViewIndentsAgentsUnderSecondarySessions(t *testing.T) {
+	m := NewModel(context.Background(), &fakeAPI{})
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 1, Title: "Backend API", FullPath: "/work/api", MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{
+			{ID: 10, ProjectID: 1, SessionName: "api-main", TmuxName: "api_main", Type: "main"},
+			{ID: 11, ParentSessionID: 10, ProjectID: 1, SessionName: "pkg", TmuxName: "api_pkg", Type: "secondary"},
+			{ID: 12, ParentSessionID: 11, ProjectID: 1, SessionName: "inner", TmuxName: "api_inner", Type: "secondary"},
+		},
+		agents: []httpclient.Agent{{ID: 20, ProjectID: 1, SessionID: 12, DisplayName: "reviewer", TmuxPaneID: "%7", Status: "running"}},
+	})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = updated.(Model)
+
+	view := m.View()
+	secondary := strings.Index(view, "    - inner")
+	agent := strings.Index(view, "        - reviewer [running]")
+	if secondary < 0 || agent < 0 || secondary > agent {
+		t.Fatalf("agent under secondary not indented below secondary session: %q", view)
 	}
 }
 
@@ -491,6 +531,87 @@ func TestModelDeleteOnMainSessionDoesNotDeleteProject(t *testing.T) {
 
 	if m.confirm || cmd != nil || api.deleted != 0 || api.deletedSession != 0 || m.status != "only worktree sessions can be destroyed" {
 		t.Fatalf("confirm=%v cmd=%v deleted=%d deletedSession=%d status=%q", m.confirm, cmd, api.deleted, api.deletedSession, m.status)
+	}
+}
+
+func TestModelSessionRowsRenderSecondaryTreeIndented(t *testing.T) {
+	m := NewModel(context.Background(), &fakeAPI{})
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, Title: "API", FullPath: "/work/api", MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{
+			{ID: 3, ParentSessionID: 2, ProjectID: 7, SessionName: "inner", Type: "secondary"},
+			{ID: 1, Parent: -1, ProjectID: 7, SessionName: "api.main", Type: "main"},
+			{ID: 2, ParentSessionID: 1, ProjectID: 7, SessionName: "pkg", Type: "secondary"},
+		},
+	})
+	m = updated.(Model)
+
+	view := m.View()
+	main := strings.Index(view, "- api.main")
+	parent := strings.Index(view, "  - pkg")
+	child := strings.Index(view, "    - inner")
+	if main < 0 || parent < 0 || child < 0 || !(main < parent && parent < child) {
+		t.Fatalf("secondary tree not rendered in order/indentation: %q", view)
+	}
+}
+
+func TestModelSecondaryPromptCreatesSessionFromSelectedSession(t *testing.T) {
+	api := &fakeAPI{createdSession: httpclient.Session{ID: 2, ProjectID: 7, SessionName: "pkg", Type: "secondary"}}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+	})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("S")})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("pkg")})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("Tools")})
+	m = updated.(Model)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if !m.loading || cmd == nil {
+		t.Fatalf("loading=%v cmd nil=%v", m.loading, cmd == nil)
+	}
+	_ = cmd().(createSessionMsg)
+	if len(api.created) != 1 {
+		t.Fatalf("created calls = %d", len(api.created))
+	}
+	in := api.created[0]
+	if in.Type != "secondary" || in.ParentSessionID != 1 || in.RelativeWorkingDirectory != "pkg" || in.PreferredName != "Tools" || in.OnDelete != "cascade" {
+		t.Fatalf("create input = %+v", in)
+	}
+}
+
+func TestModelDeleteConfirmationDeletesSelectedSecondarySession(t *testing.T) {
+	api := &fakeAPI{}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{
+			{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"},
+			{ID: 2, ParentSessionID: 1, ProjectID: 7, SessionName: "pkg", Type: "secondary", OnDelete: "cascade"},
+		},
+	})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
+	m = updated.(Model)
+	if !m.confirm || m.confirmDelete != deleteSecondarySession || m.confirmDeleteID != 2 || !strings.Contains(m.View(), "Delete secondary session using cascade policy? y/n") {
+		t.Fatalf("confirm=%v target=%d id=%d view=%q", m.confirm, m.confirmDelete, m.confirmDeleteID, m.View())
+	}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = updated.(Model)
+	if !m.loading || cmd == nil {
+		t.Fatalf("expected delete command and loading state")
+	}
+	msg := cmd().(deleteMsg)
+	if msg.err != nil || api.deletedSession != 2 || api.deleteForce {
+		t.Fatalf("delete msg=%+v deletedSession=%d force=%v", msg, api.deletedSession, api.deleteForce)
 	}
 }
 

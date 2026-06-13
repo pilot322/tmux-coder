@@ -28,6 +28,15 @@ const (
 	deleteProject
 	deleteWorktreeSession
 	deleteAgent
+	deleteSecondarySession
+)
+
+type secondaryPromptStep uint8
+
+const (
+	secondaryPromptNone secondaryPromptStep = iota
+	secondaryPromptRelativeWorkingDirectory
+	secondaryPromptPreferredName
 )
 
 type rowKind uint8
@@ -69,6 +78,11 @@ type Model struct {
 	creatingWorktree     bool
 	worktreeBranch       string
 	worktreeProjectID    int
+	creatingSecondary    bool
+	secondaryStep        secondaryPromptStep
+	secondaryParentID    int
+	secondaryRelwd       string
+	secondaryName        string
 	pendingSelectSession string
 	initialSession       string
 	attach               AttachTarget
@@ -92,27 +106,37 @@ type createSessionMsg struct {
 }
 
 var (
-	titleStyle  = lipgloss.NewStyle().Bold(true)
-	errorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
-	mutedStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
-	selectStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("12"))
+	titleStyle     = lipgloss.NewStyle().Bold(true)
+	errorStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	mutedStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
+	selectStyle    = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("15"))
+	mainStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
+	worktreeStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("208"))
+	secondaryStyle = []lipgloss.Style{
+		lipgloss.NewStyle().Foreground(lipgloss.Color("39")), // depth 1
+		lipgloss.NewStyle().Foreground(lipgloss.Color("33")), // depth 2
+		lipgloss.NewStyle().Foreground(lipgloss.Color("27")), // depth 3
+		lipgloss.NewStyle().Foreground(lipgloss.Color("21")), // depth 4
+		lipgloss.NewStyle().Foreground(lipgloss.Color("19")), // depth 5+
+	}
 )
 
 var keys = struct {
-	up, down, top, bottom, enter, del, refresh, sessions, agents, worktree, help, quit key.Binding
+	up, down, top, bottom, enter, del, refresh, sessions, agents, worktree, secondary, help, quit key.Binding
 }{
-	up:       key.NewBinding(key.WithKeys("up", "k")),
-	down:     key.NewBinding(key.WithKeys("down", "j")),
-	top:      key.NewBinding(key.WithKeys("g")),
-	bottom:   key.NewBinding(key.WithKeys("G")),
-	enter:    key.NewBinding(key.WithKeys("enter")),
-	del:      key.NewBinding(key.WithKeys("X")),
-	refresh:  key.NewBinding(key.WithKeys("r")),
-	sessions: key.NewBinding(key.WithKeys("s")),
-	agents:   key.NewBinding(key.WithKeys("a")),
-	worktree: key.NewBinding(key.WithKeys("w")),
-	help:     key.NewBinding(key.WithKeys("?")),
-	quit:     key.NewBinding(key.WithKeys("q", "esc", "ctrl+c")),
+	up:        key.NewBinding(key.WithKeys("up", "k")),
+	down:      key.NewBinding(key.WithKeys("down", "j")),
+	top:       key.NewBinding(key.WithKeys("g")),
+	bottom:    key.NewBinding(key.WithKeys("G")),
+	enter:     key.NewBinding(key.WithKeys("enter")),
+	del:       key.NewBinding(key.WithKeys("X")),
+	refresh:   key.NewBinding(key.WithKeys("r")),
+	sessions:  key.NewBinding(key.WithKeys("s")),
+	agents:    key.NewBinding(key.WithKeys("a")),
+	worktree:  key.NewBinding(key.WithKeys("w")),
+	secondary: key.NewBinding(key.WithKeys("S")),
+	help:      key.NewBinding(key.WithKeys("?")),
+	quit:      key.NewBinding(key.WithKeys("q", "esc", "ctrl+c")),
 }
 
 func Run(ctx context.Context, api API, initialSession ...string) (AttachTarget, bool, error) {
@@ -175,11 +199,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.creatingWorktree = false
 		m.worktreeBranch = ""
 		m.worktreeProjectID = 0
+		m.creatingSecondary = false
+		m.secondaryStep = secondaryPromptNone
+		m.secondaryParentID = 0
+		m.secondaryRelwd = ""
+		m.secondaryName = ""
 		m.pendingSelectSession = sessionName(msg.session)
 		m.showSessions = true
 		m.loading = true
 		return m, m.listCmd()
 	case tea.KeyMsg:
+		if m.creatingSecondary {
+			return m.updateSecondaryPrompt(msg)
+		}
 		if m.creatingWorktree {
 			return m.updateWorktreePrompt(msg)
 		}
@@ -237,6 +269,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.creatingWorktree = true
 				m.worktreeBranch = ""
 				m.worktreeProjectID = project.ID
+				m.status = ""
+			}
+		case key.Matches(msg, keys.secondary):
+			if session, ok := m.selectedSessionRow(); ok {
+				m.creatingSecondary = true
+				m.secondaryStep = secondaryPromptRelativeWorkingDirectory
+				m.secondaryParentID = session.ID
+				m.secondaryRelwd = session.RelativeWorkingDirectory
+				m.secondaryName = ""
 				m.status = ""
 			}
 		case key.Matches(msg, keys.up):
@@ -304,6 +345,19 @@ func (m Model) View() string {
 			b.WriteString("\nDestroy worktree session and worktree? y/n\n")
 		case deleteAgent:
 			b.WriteString("\nDelete agent? y/n\n")
+		case deleteSecondarySession:
+			policy := "cascade"
+			if s, ok := m.sessionByID(m.confirmDeleteID); ok && s.OnDelete != "" {
+				policy = s.OnDelete
+			}
+			b.WriteString("\nDelete secondary session using " + policy + " policy? y/n\n")
+		}
+	}
+	if m.creatingSecondary {
+		if m.secondaryStep == secondaryPromptPreferredName {
+			b.WriteString("\nPreferred name (optional): " + m.secondaryName + "\n")
+		} else {
+			b.WriteString("\nRelative working directory: " + m.secondaryRelwd + "\n")
 		}
 	}
 	if m.creatingWorktree {
@@ -312,12 +366,14 @@ func (m Model) View() string {
 	if m.status != "" {
 		b.WriteString("\n" + errorStyle.Render(m.status) + "\n")
 	}
-	if m.creatingWorktree {
+	if m.creatingSecondary {
+		b.WriteString("\n" + mutedStyle.Render("enter next/create  esc cancel") + "\n")
+	} else if m.creatingWorktree {
 		b.WriteString("\n" + mutedStyle.Render("enter create  esc cancel") + "\n")
 	} else if m.help {
-		b.WriteString("\nKeys: j/k or arrows move, g/G jump, enter attach, s sessions, a agents, w worktree, X delete, r refresh, ? help, q quit\n")
+		b.WriteString("\nKeys: j/k or arrows move, g/G jump, enter attach, s sessions, a agents, w worktree, S secondary, X delete, r refresh, ? help, q quit\n")
 	} else {
-		b.WriteString("\n" + mutedStyle.Render("j/k move  enter attach  s sessions  a agents  w worktree  X delete  r refresh  ? help  q quit") + "\n")
+		b.WriteString("\n" + mutedStyle.Render("j/k move  enter attach  s sessions  a agents  w worktree  S secondary  X delete  r refresh  ? help  q quit") + "\n")
 	}
 	return b.String()
 }
@@ -346,9 +402,24 @@ func (m Model) deleteCmd(target deleteTarget, id int) tea.Cmd {
 			return deleteMsg{id: id, err: m.api.DeleteSession(m.ctx, id, true)}
 		case deleteAgent:
 			return deleteMsg{id: id, err: m.api.DeleteAgent(m.ctx, id)}
+		case deleteSecondarySession:
+			return deleteMsg{id: id, err: m.api.DeleteSession(m.ctx, id, false)}
 		default:
 			return deleteMsg{id: id}
 		}
+	}
+}
+
+func (m Model) createSecondaryCmd(parentID int, relwd, preferredName string) tea.Cmd {
+	return func() tea.Msg {
+		session, err := m.api.CreateSession(m.ctx, httpclient.CreateSessionInput{
+			Type:                     "secondary",
+			ParentSessionID:          parentID,
+			RelativeWorkingDirectory: strings.TrimSpace(relwd),
+			PreferredName:            strings.TrimSpace(preferredName),
+			OnDelete:                 "cascade",
+		})
+		return createSessionMsg{session: session, err: err}
 	}
 }
 
@@ -391,6 +462,49 @@ func (m Model) updateWorktreePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.createWorktreeCmd(m.worktreeProjectID, branch)
 	case tea.KeyRunes:
 		m.worktreeBranch += string(msg.Runes)
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m Model) updateSecondaryPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.creatingSecondary = false
+		m.secondaryStep = secondaryPromptNone
+		m.secondaryParentID = 0
+		m.secondaryRelwd = ""
+		m.secondaryName = ""
+		m.status = ""
+		return m, nil
+	case tea.KeyBackspace, tea.KeyCtrlH:
+		if m.secondaryStep == secondaryPromptPreferredName {
+			if len(m.secondaryName) > 0 {
+				m.secondaryName = m.secondaryName[:len(m.secondaryName)-1]
+			}
+		} else if len(m.secondaryRelwd) > 0 {
+			m.secondaryRelwd = m.secondaryRelwd[:len(m.secondaryRelwd)-1]
+		}
+		return m, nil
+	case tea.KeyEnter:
+		if m.secondaryStep == secondaryPromptRelativeWorkingDirectory {
+			m.secondaryRelwd = strings.TrimSpace(m.secondaryRelwd)
+			m.secondaryStep = secondaryPromptPreferredName
+			m.status = ""
+			return m, nil
+		}
+		m.secondaryName = strings.TrimSpace(m.secondaryName)
+		m.status = ""
+		m.loading = true
+		return m, m.createSecondaryCmd(m.secondaryParentID, m.secondaryRelwd, m.secondaryName)
+	case tea.KeyRunes:
+		if m.secondaryStep == secondaryPromptPreferredName {
+			m.secondaryName += string(msg.Runes)
+		} else {
+			m.secondaryRelwd += string(msg.Runes)
+		}
 		return m, nil
 	}
 	return m, nil
@@ -481,14 +595,27 @@ func (m Model) writeSessionRows(b *strings.Builder) {
 			if s.ProjectID != p.ID {
 				continue
 			}
-			line := "- " + sessionName(s)
+			prefix := strings.Repeat("  ", m.sessionDepth(s))
+			content := "- " + sessionName(s)
 			if s.Branch != "" {
-				line += " (" + s.Branch + ")"
+				content += " (" + s.Branch + ")"
+			}
+			switch s.Type {
+			case "main":
+				content = mainStyle.Render(content)
+			case "worktree":
+				content = worktreeStyle.Render(content)
+			case "secondary":
+				d := m.sessionDepth(s)
+				if d >= len(secondaryStyle) {
+					d = len(secondaryStyle) - 1
+				}
+				content = secondaryStyle[d].Render(content)
 			}
 			if selected == m.selectedSession {
-				line = selectStyle.Render("> " + line)
+				line = selectStyle.Render("> " + prefix + content)
 			} else {
-				line = "  " + line
+				line = "  " + prefix + content
 			}
 			b.WriteString("  " + line + "\n")
 			selected++
@@ -497,13 +624,13 @@ func (m Model) writeSessionRows(b *strings.Builder) {
 				continue
 			}
 			for _, a := range m.agentsForSession(s.ID) {
-				line := "- " + agentLabel(a)
+				line := strings.Repeat("  ", m.sessionDepth(s)+1) + "- " + agentLabel(a)
 				if selected == m.selectedSession {
 					line = selectStyle.Render("> " + line)
 				} else {
 					line = "  " + line
 				}
-				b.WriteString("    " + line + "\n")
+				b.WriteString("  " + line + "\n")
 				selected++
 			}
 		}
@@ -546,18 +673,54 @@ func (m Model) sessionViewRows() []viewRow {
 func (m Model) sessionRows() []httpclient.Session {
 	rows := make([]httpclient.Session, 0, len(m.sessions))
 	for _, p := range m.projects {
+		mainID := 0
 		for _, s := range m.sessions {
-			if s.ProjectID == p.ID && isMainSession(s, p) {
-				rows = append(rows, s)
+			if s.ProjectID != p.ID || !isMainSession(s, p) {
+				continue
 			}
+			rows = append(rows, s)
+			mainID = s.ID
+			rows = m.appendSecondaryChildren(rows, p.ID, s.ID)
 		}
 		for _, s := range m.sessions {
-			if s.ProjectID == p.ID && !isMainSession(s, p) {
-				rows = append(rows, s)
+			if s.ProjectID != p.ID || s.Type != "worktree" {
+				continue
 			}
+			rows = append(rows, s)
+			rows = m.appendSecondaryChildren(rows, p.ID, s.ID)
+		}
+		if mainID == 0 {
+			rows = m.appendSecondaryChildren(rows, p.ID, 0)
 		}
 	}
 	return rows
+}
+
+func (m Model) appendSecondaryChildren(rows []httpclient.Session, projectID, parent int) []httpclient.Session {
+	for _, s := range m.sessions {
+		if s.ProjectID != projectID || s.Type != "secondary" || parentID(s) != parent {
+			continue
+		}
+		rows = append(rows, s)
+		rows = m.appendSecondaryChildren(rows, projectID, s.ID)
+	}
+	return rows
+}
+
+func (m Model) sessionDepth(s httpclient.Session) int {
+	if s.Type != "secondary" {
+		return 0
+	}
+	depth := 0
+	for id := parentID(s); id > 0; {
+		parent, ok := m.sessionByID(id)
+		if !ok || parent.Type != "secondary" {
+			return depth + 1
+		}
+		depth++
+		id = parentID(parent)
+	}
+	return depth
 }
 
 func (m Model) selectedProject() (httpclient.Project, bool) {
@@ -607,6 +770,12 @@ func (m *Model) requestDeleteConfirmation() {
 	if m.showSessions {
 		s, ok := m.selectedSessionRow()
 		if !ok {
+			return
+		}
+		if s.Type == "secondary" {
+			m.confirm = true
+			m.confirmDelete = deleteSecondarySession
+			m.confirmDeleteID = s.ID
 			return
 		}
 		if s.Type != "worktree" {
@@ -786,4 +955,14 @@ func agentLabel(a httpclient.Agent) string {
 		return fmt.Sprintf("%s [%s]", name, a.Status)
 	}
 	return name
+}
+
+func parentID(s httpclient.Session) int {
+	if s.ParentSessionID != 0 {
+		return s.ParentSessionID
+	}
+	if s.Parent > 0 {
+		return s.Parent
+	}
+	return 0
 }

@@ -21,16 +21,19 @@ type Project struct {
 }
 
 type Session struct {
-	ID          int     `json:"id"`
-	Parent      int     `json:"parent"`
-	ProjectID   int     `json:"projectId"`
-	Name        string  `json:"name"`
-	SessionName string  `json:"sessionName"`
-	TmuxName    string  `json:"tmuxSessionName"`
-	Type        string  `json:"type"`
-	Branch      string  `json:"branch,omitempty"`
-	Worktree    string  `json:"worktreePath,omitempty"`
-	Project     Project `json:"project"`
+	ID                       int     `json:"id"`
+	Parent                   int     `json:"parent"`
+	ParentSessionID          int     `json:"parentSessionId,omitempty"`
+	ProjectID                int     `json:"projectId"`
+	Name                     string  `json:"name"`
+	SessionName              string  `json:"sessionName"`
+	TmuxName                 string  `json:"tmuxSessionName"`
+	Type                     string  `json:"type"`
+	Branch                   string  `json:"branch,omitempty"`
+	Worktree                 string  `json:"worktreePath,omitempty"`
+	RelativeWorkingDirectory string  `json:"relativeWorkingDirectory,omitempty"`
+	OnDelete                 string  `json:"onDelete,omitempty"`
+	Project                  Project `json:"project"`
 }
 
 type Agent struct {
@@ -61,11 +64,15 @@ type ListAgentsInput struct {
 }
 
 type CreateSessionInput struct {
-	ProjectID  int    `json:"projectId"`
-	Type       string `json:"type"`
-	Branch     string `json:"branch,omitempty"`
-	Create     bool   `json:"create,omitempty"`
-	BaseBranch string `json:"baseBranch,omitempty"`
+	ProjectID                int    `json:"projectId,omitempty"`
+	Type                     string `json:"type"`
+	Branch                   string `json:"branch,omitempty"`
+	Create                   bool   `json:"create,omitempty"`
+	BaseBranch               string `json:"baseBranch,omitempty"`
+	ParentSessionID          int    `json:"parentSessionId,omitempty"`
+	RelativeWorkingDirectory string `json:"relativeWorkingDirectory,omitempty"`
+	PreferredName            string `json:"preferredName,omitempty"`
+	OnDelete                 string `json:"onDelete,omitempty"`
 }
 
 type ListSessionsInput struct {

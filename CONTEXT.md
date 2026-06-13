@@ -21,7 +21,7 @@ A **Session** tied 1:1 to a git worktree for the same **Project**. Created with 
 _Avoid_: Branch session
 
 **Secondary Session**:
-A child **Session** that stems from a **Main Session** or **Worktree Session**. Represents a sub-context within the same worktree (e.g. `packages/frontend`) and may be declared in a **Config File**.
+A child **Session** that stems from a **Main Session**, **Worktree Session**, or another **Secondary Session**. Represents a sub-context within the same worktree (e.g. `packages/frontend`) and may be declared in a **Config File**.
 _Avoid_: Sub-session, nested session
 
 **Daemon**:

@@ -43,7 +43,7 @@ func (uc *DeleteSession) Execute(ctx context.Context, in DeleteSessionInput) err
 	case domain.MainSession:
 		return fmt.Errorf("%w: main sessions cannot be deleted through /sessions", ErrValidation)
 	case domain.SecondarySession:
-		return ErrNotImplemented
+		return uc.deleteSecondary(ctx, session)
 	case domain.WorktreeSession:
 		// continue
 	default:
@@ -72,4 +72,66 @@ func (uc *DeleteSession) Execute(ctx context.Context, in DeleteSessionInput) err
 		}
 		return uc.sessions.Delete(ctx, session.ID())
 	})
+}
+
+func (uc *DeleteSession) deleteSecondary(ctx context.Context, session *domain.Session) error {
+	var sessions []*domain.Session
+	if err := uc.lock.WithRead(func() error {
+		s, err := uc.sessions.GetAll(ctx)
+		sessions = s
+		return err
+	}); err != nil {
+		return err
+	}
+
+	toDelete := []*domain.Session{session}
+	if session.OnDelete() != "inherit" {
+		toDelete = append(toDelete, secondaryDescendants(sessions, session.ID())...)
+	}
+	for _, s := range toDelete {
+		exists, err := uc.tmux.Exists(ctx, s.TmuxName())
+		if err != nil {
+			return fmt.Errorf("%w: %v", ErrGateway, err)
+		}
+		if exists {
+			if err := uc.tmux.Kill(ctx, s.TmuxName()); err != nil {
+				return fmt.Errorf("%w: %v", ErrGateway, err)
+			}
+		}
+	}
+
+	return uc.lock.WithWrite(func() error {
+		if session.OnDelete() == "inherit" {
+			for _, s := range sessions {
+				if s.Type() != domain.SecondarySession || s.Parent() != session.ID() {
+					continue
+				}
+				updated := domain.NewSecondarySessionWithTmuxName(s.ID(), session.Parent(), s.ProjectID(), s.Name(), s.TmuxName(), s.RelativeWorkingDirectory(), s.OnDelete())
+				if _, err := uc.sessions.Update(ctx, updated); err != nil {
+					return err
+				}
+			}
+		}
+		for _, s := range toDelete {
+			if err := uc.agents.DeleteBySessionID(ctx, s.ID()); err != nil {
+				return err
+			}
+			if err := uc.sessions.Delete(ctx, s.ID()); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+func secondaryDescendants(sessions []*domain.Session, parentID int) []*domain.Session {
+	var out []*domain.Session
+	for _, s := range sessions {
+		if s.Type() != domain.SecondarySession || s.Parent() != parentID {
+			continue
+		}
+		out = append(out, s)
+		out = append(out, secondaryDescendants(sessions, s.ID())...)
+	}
+	return out
 }

@@ -51,6 +51,7 @@ type ISessionRepository interface {
 	GetByID(ctx context.Context, id int) (*domain.Session, error)
 	GetAll(ctx context.Context) ([]*domain.Session, error)
 	GetByProjectID(ctx context.Context, projectID int) ([]*domain.Session, error)
+	Update(ctx context.Context, s *domain.Session) (*domain.Session, error)
 	Delete(ctx context.Context, id int) error
 }
 

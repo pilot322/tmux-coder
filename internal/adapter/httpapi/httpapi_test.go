@@ -329,11 +329,59 @@ func TestPostSessions_CreatesWorktreeSessionAndRejectsDuplicateBranch(t *testing
 	}
 }
 
-func TestPostSessions_SecondaryNotImplemented(t *testing.T) {
+func TestPostSessions_CreatesSecondarySession(t *testing.T) {
 	mux := newServer()
-	rec := do(t, mux, "POST", "/sessions", `{"projectId":1,"type":"secondary"}`)
-	if rec.Code != http.StatusNotImplemented {
-		t.Fatalf("secondary create status = %d, want 501", rec.Code)
+	projectPath := t.TempDir()
+	if err := os.Mkdir(filepath.Join(projectPath, "pkg"), 0o755); err != nil {
+		t.Fatalf("mkdir pkg: %v", err)
+	}
+	rec := do(t, mux, "POST", "/projects", `{"fullPath":"`+projectPath+`"}`)
+	var project struct {
+		ID int `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &project)
+	parentID := getSessionID(t, mux, project.ID)
+
+	body := `{"type":"secondary","parentSessionId":` + strconv.Itoa(parentID) + `,"relativeWorkingDirectory":"pkg/","onDelete":"cascade"}`
+	rec = do(t, mux, "POST", "/sessions", body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("secondary create status = %d, want 201 (body: %s)", rec.Code, rec.Body)
+	}
+	var created struct {
+		ID                       int    `json:"id"`
+		Parent                   int    `json:"parent"`
+		ParentSessionID          int    `json:"parentSessionId"`
+		ProjectID                int    `json:"projectId"`
+		SessionName              string `json:"sessionName"`
+		TmuxName                 string `json:"tmuxSessionName"`
+		Type                     string `json:"type"`
+		RelativeWorkingDirectory string `json:"relativeWorkingDirectory"`
+		OnDelete                 string `json:"onDelete"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if created.ID == 0 || created.Parent != parentID || created.ParentSessionID != parentID || created.ProjectID != project.ID || created.SessionName != "pkg" || created.TmuxName != filepath.Base(projectPath)+"_pkg" || created.Type != "secondary" || created.RelativeWorkingDirectory != "pkg" || created.OnDelete != "cascade" {
+		t.Fatalf("unexpected secondary: %+v", created)
+	}
+
+	rec = do(t, mux, "GET", "/sessions?type=secondary&projectId="+strconv.Itoa(project.ID), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET secondary status = %d, want 200", rec.Code)
+	}
+	var listed struct {
+		Sessions []struct {
+			ID                       int    `json:"id"`
+			ParentSessionID          int    `json:"parentSessionId"`
+			RelativeWorkingDirectory string `json:"relativeWorkingDirectory"`
+			OnDelete                 string `json:"onDelete"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(listed.Sessions) != 1 || listed.Sessions[0].ID != created.ID || listed.Sessions[0].ParentSessionID != parentID || listed.Sessions[0].RelativeWorkingDirectory != "pkg" || listed.Sessions[0].OnDelete != "cascade" {
+		t.Fatalf("unexpected listed secondary: %+v", listed.Sessions)
 	}
 }
 
@@ -360,6 +408,71 @@ func TestDeleteSessions_DeletesWorktreeSession(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
 	if len(resp.Sessions) != 0 {
 		t.Fatalf("worktree session should be gone: %+v", resp.Sessions)
+	}
+}
+
+func TestDeleteSessions_SecondaryCascadeDeletesDescendants(t *testing.T) {
+	mux := newServer()
+	projectPath := t.TempDir()
+	for _, dir := range []string{"pkg", "pkg/internal"} {
+		if err := os.MkdirAll(filepath.Join(projectPath, dir), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	rec := do(t, mux, "POST", "/projects", `{"fullPath":"`+projectPath+`"}`)
+	var project struct {
+		ID int `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &project)
+	mainID := getSessionID(t, mux, project.ID)
+	parentID := createSecondarySession(t, mux, mainID, "pkg", "")
+	childID := createSecondarySession(t, mux, parentID, "pkg/internal", "")
+
+	if rec := do(t, mux, "DELETE", "/sessions/"+strconv.Itoa(parentID), ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE secondary status = %d, want 204 (body: %s)", rec.Code, rec.Body)
+	}
+	rec = do(t, mux, "GET", "/sessions?type=secondary&projectId="+strconv.Itoa(project.ID), "")
+	var listed struct {
+		Sessions []struct {
+			ID int `json:"id"`
+		} `json:"sessions"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &listed)
+	if len(listed.Sessions) != 0 {
+		t.Fatalf("expected secondary cascade to delete %d and %d, got %+v", parentID, childID, listed.Sessions)
+	}
+}
+
+func TestDeleteSessions_SecondaryInheritReparentsDirectChildren(t *testing.T) {
+	mux := newServer()
+	projectPath := t.TempDir()
+	for _, dir := range []string{"pkg", "pkg/internal"} {
+		if err := os.MkdirAll(filepath.Join(projectPath, dir), 0o755); err != nil {
+			t.Fatalf("mkdir %s: %v", dir, err)
+		}
+	}
+	rec := do(t, mux, "POST", "/projects", `{"fullPath":"`+projectPath+`"}`)
+	var project struct {
+		ID int `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &project)
+	mainID := getSessionID(t, mux, project.ID)
+	parentID := createSecondarySession(t, mux, mainID, "pkg", "inherit")
+	childID := createSecondarySession(t, mux, parentID, "pkg/internal", "")
+
+	if rec := do(t, mux, "DELETE", "/sessions/"+strconv.Itoa(parentID), ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE secondary status = %d, want 204 (body: %s)", rec.Code, rec.Body)
+	}
+	rec = do(t, mux, "GET", "/sessions?type=secondary&projectId="+strconv.Itoa(project.ID), "")
+	var listed struct {
+		Sessions []struct {
+			ID              int `json:"id"`
+			ParentSessionID int `json:"parentSessionId"`
+		} `json:"sessions"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &listed)
+	if len(listed.Sessions) != 1 || listed.Sessions[0].ID != childID || listed.Sessions[0].ParentSessionID != mainID {
+		t.Fatalf("expected child %d reparented to %d, got %+v", childID, mainID, listed.Sessions)
 	}
 }
 
@@ -589,4 +702,22 @@ func createAgent(t *testing.T, mux *http.ServeMux, projectID, sessionID int) int
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &agent)
 	return agent.ID
+}
+
+func createSecondarySession(t *testing.T, mux *http.ServeMux, parentID int, relwd, onDelete string) int {
+	t.Helper()
+	body := `{"type":"secondary","parentSessionId":` + strconv.Itoa(parentID) + `,"relativeWorkingDirectory":"` + relwd + `"`
+	if onDelete != "" {
+		body += `,"onDelete":"` + onDelete + `"`
+	}
+	body += `}`
+	rec := do(t, mux, "POST", "/sessions", body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create secondary status = %d, want 201 (body: %s)", rec.Code, rec.Body)
+	}
+	var session struct {
+		ID int `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &session)
+	return session.ID
 }

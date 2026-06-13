@@ -22,6 +22,8 @@ type Session struct {
 	kind      SessionType
 	branch    string
 	worktree  string
+	relwd     string
+	onDelete  string
 }
 
 // NewSession builds a Session. Use parent == -1 for a parentless session.
@@ -51,6 +53,25 @@ func NewWorktreeSession(id, projectID int, name, branch, worktree string) *Sessi
 	}
 }
 
+// NewSecondarySession builds a Secondary Session with its parent and lifecycle metadata.
+func NewSecondarySession(id, parent, projectID int, name, relativeWorkingDirectory, onDelete string) *Session {
+	return NewSecondarySessionWithTmuxName(id, parent, projectID, name, DeriveTmuxSessionName(name), relativeWorkingDirectory, onDelete)
+}
+
+// NewSecondarySessionWithTmuxName builds a Secondary Session with an explicit tmux target name.
+func NewSecondarySessionWithTmuxName(id, parent, projectID int, name, tmuxName, relativeWorkingDirectory, onDelete string) *Session {
+	return &Session{
+		id:        id,
+		parent:    parent,
+		projectID: projectID,
+		name:      name,
+		tmuxName:  tmuxName,
+		kind:      SecondarySession,
+		relwd:     relativeWorkingDirectory,
+		onDelete:  onDelete,
+	}
+}
+
 func DeriveTmuxSessionName(name string) string {
 	return strings.ReplaceAll(name, ".", "_")
 }
@@ -65,3 +86,5 @@ func (s *Session) Branch() string    { return s.branch }
 func (s *Session) WorktreePath() string {
 	return s.worktree
 }
+func (s *Session) RelativeWorkingDirectory() string { return s.relwd }
+func (s *Session) OnDelete() string                 { return s.onDelete }

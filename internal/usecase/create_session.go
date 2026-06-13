@@ -4,17 +4,23 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 )
 
 type CreateSessionInput struct {
-	ProjectID  int
-	Type       domain.SessionType
-	Branch     string
-	Create     bool
-	BaseBranch string
+	ProjectID                int
+	Type                     domain.SessionType
+	Branch                   string
+	Create                   bool
+	BaseBranch               string
+	ParentSessionID          int
+	RelativeWorkingDirectory string
+	PreferredName            string
+	OnDelete                 string
 }
 
 type CreateSession struct {
@@ -31,7 +37,7 @@ func NewCreateSession(p IProjectRepository, s ISessionRepository, tmux SessionGa
 
 func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*domain.Session, error) {
 	if in.Type == domain.SecondarySession {
-		return nil, ErrNotImplemented
+		return uc.createSecondary(ctx, in)
 	}
 	if in.Type == domain.MainSession {
 		return nil, fmt.Errorf("%w: main sessions cannot be created through /sessions", ErrValidation)
@@ -144,6 +150,155 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 	}
 
 	return session, nil
+}
+
+func (uc *CreateSession) createSecondary(ctx context.Context, in CreateSessionInput) (*domain.Session, error) {
+	if in.ParentSessionID <= 0 {
+		return nil, fmt.Errorf("%w: parentSessionId is required", ErrValidation)
+	}
+	onDelete := in.OnDelete
+	if onDelete == "" {
+		onDelete = "cascade"
+	}
+	if onDelete != "cascade" && onDelete != "inherit" {
+		return nil, fmt.Errorf("%w: onDelete must be cascade or inherit", ErrValidation)
+	}
+	relwd, err := normalizeRelativeWorkingDirectory(in.RelativeWorkingDirectory)
+	if err != nil {
+		return nil, err
+	}
+	preferredName := strings.TrimSpace(in.PreferredName)
+	if relwd == "" && preferredName == "" {
+		return nil, fmt.Errorf("%w: preferredName is required when relativeWorkingDirectory is empty", ErrValidation)
+	}
+
+	var project *domain.Project
+	var parent *domain.Session
+	var name string
+	var tmuxName string
+	var workingDir string
+	if err := uc.lock.WithRead(func() error {
+		p, parentSession, root, err := uc.secondaryParentRoot(ctx, in.ParentSessionID)
+		if err != nil {
+			return err
+		}
+		if in.ProjectID != 0 && in.ProjectID != parentSession.ProjectID() {
+			return fmt.Errorf("%w: projectId must match parent session project", ErrValidation)
+		}
+		if depth, err := uc.sessionDepth(ctx, parentSession.ID()); err != nil {
+			return err
+		} else if depth >= 5 {
+			return fmt.Errorf("%w: maximum session depth exceeded", ErrValidation)
+		}
+		project = p
+		parent = parentSession
+		workingDir = filepath.Join(root, relwd)
+		sessions, err := uc.sessions.GetAll(ctx)
+		if err != nil {
+			return err
+		}
+		used := make(map[string]bool, len(sessions))
+		for _, s := range sessions {
+			used[s.Name()] = true
+		}
+		base := preferredName
+		if base == "" {
+			base = filepath.Base(relwd)
+		}
+		name = domain.DeriveSecondarySessionName(base, func(n string) bool { return used[n] })
+		tmuxName = domain.DeriveSecondaryTmuxSessionName(project.FullPath(), name)
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+
+	info, err := os.Stat(workingDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, fmt.Errorf("%w: relativeWorkingDirectory must exist", ErrValidation)
+		}
+		return nil, fmt.Errorf("%w: %v", ErrGateway, err)
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("%w: relativeWorkingDirectory must be a directory", ErrValidation)
+	}
+
+	if err := uc.tmux.Create(ctx, tmuxName, workingDir); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrGateway, err)
+	}
+
+	var session *domain.Session
+	if err := uc.lock.WithWrite(func() error {
+		s, err := uc.sessions.Create(ctx, domain.NewSecondarySessionWithTmuxName(0, parent.ID(), project.ID(), name, tmuxName, relwd, onDelete))
+		session = s
+		return err
+	}); err != nil {
+		_ = uc.tmux.Kill(ctx, tmuxName)
+		return nil, err
+	}
+	return session, nil
+}
+
+func normalizeRelativeWorkingDirectory(raw string) (string, error) {
+	trimmed := strings.TrimSpace(raw)
+	if trimmed == "" || trimmed == "." {
+		return "", nil
+	}
+	if filepath.IsAbs(trimmed) {
+		return "", fmt.Errorf("%w: relativeWorkingDirectory must be relative", ErrValidation)
+	}
+	clean := filepath.Clean(trimmed)
+	if clean == "." {
+		return "", nil
+	}
+	if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+		return "", fmt.Errorf("%w: relativeWorkingDirectory must not escape the session root", ErrValidation)
+	}
+	return clean, nil
+}
+
+func (uc *CreateSession) secondaryParentRoot(ctx context.Context, parentID int) (*domain.Project, *domain.Session, string, error) {
+	parent, err := uc.sessions.GetByID(ctx, parentID)
+	if err != nil {
+		return nil, nil, "", err
+	}
+	project, err := uc.projects.GetByID(ctx, parent.ProjectID())
+	if err != nil {
+		return nil, nil, "", err
+	}
+	root := project.FullPath()
+	for s := parent; s != nil; {
+		switch s.Type() {
+		case domain.MainSession:
+			return project, parent, root, nil
+		case domain.WorktreeSession:
+			return project, parent, s.WorktreePath(), nil
+		case domain.SecondarySession:
+			if s.Parent() <= 0 {
+				return nil, nil, "", fmt.Errorf("%w: secondary parent chain is invalid", ErrValidation)
+			}
+			s, err = uc.sessions.GetByID(ctx, s.Parent())
+			if err != nil {
+				return nil, nil, "", err
+			}
+		default:
+			return nil, nil, "", fmt.Errorf("%w: unsupported parent session type", ErrValidation)
+		}
+	}
+	return nil, nil, "", fmt.Errorf("%w: secondary parent chain is invalid", ErrValidation)
+}
+
+func (uc *CreateSession) sessionDepth(ctx context.Context, sessionID int) (int, error) {
+	depth := 0
+	for id := sessionID; id > 0; {
+		s, err := uc.sessions.GetByID(ctx, id)
+		if err != nil {
+			return 0, err
+		}
+		depth++
+		id = s.Parent()
+	}
+	return depth, nil
 }
 
 func (uc *CreateSession) rollbackCreatedWorktree(ctx context.Context, repoPath, worktreePath, branch string, worktreeCreated, branchCreated bool) {

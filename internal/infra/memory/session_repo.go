@@ -28,6 +28,8 @@ func (r *MemorySessionRepository) Create(ctx context.Context, s *domain.Session)
 	stored := domain.NewSession(id, s.Parent(), s.ProjectID(), s.Name(), s.Type())
 	if s.Type() == domain.WorktreeSession {
 		stored = domain.NewWorktreeSession(id, s.ProjectID(), s.Name(), s.Branch(), s.WorktreePath())
+	} else if s.Type() == domain.SecondarySession {
+		stored = domain.NewSecondarySessionWithTmuxName(id, s.Parent(), s.ProjectID(), s.Name(), s.TmuxName(), s.RelativeWorkingDirectory(), s.OnDelete())
 	}
 	r.sessions[id] = stored
 	return stored, nil
@@ -59,6 +61,20 @@ func (r *MemorySessionRepository) GetByProjectID(ctx context.Context, projectID 
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID() < out[j].ID() })
 	return out, nil
+}
+
+func (r *MemorySessionRepository) Update(ctx context.Context, s *domain.Session) (*domain.Session, error) {
+	if _, ok := r.sessions[s.ID()]; !ok {
+		return nil, usecase.ErrSessionNotFound
+	}
+	stored := domain.NewSession(s.ID(), s.Parent(), s.ProjectID(), s.Name(), s.Type())
+	if s.Type() == domain.WorktreeSession {
+		stored = domain.NewWorktreeSession(s.ID(), s.ProjectID(), s.Name(), s.Branch(), s.WorktreePath())
+	} else if s.Type() == domain.SecondarySession {
+		stored = domain.NewSecondarySessionWithTmuxName(s.ID(), s.Parent(), s.ProjectID(), s.Name(), s.TmuxName(), s.RelativeWorkingDirectory(), s.OnDelete())
+	}
+	r.sessions[s.ID()] = stored
+	return stored, nil
 }
 
 func (r *MemorySessionRepository) Delete(ctx context.Context, id int) error {

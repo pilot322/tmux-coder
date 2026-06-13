@@ -149,18 +149,26 @@ func (sc *SessionController) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	s, err := sc.create.Execute(r.Context(), usecase.CreateSessionInput{
-		ProjectID:  req.ProjectID,
-		Type:       kind,
-		Branch:     req.Branch,
-		Create:     req.Create,
-		BaseBranch: req.BaseBranch,
+		ProjectID:                req.ProjectID,
+		Type:                     kind,
+		Branch:                   req.Branch,
+		Create:                   req.Create,
+		BaseBranch:               req.BaseBranch,
+		ParentSessionID:          req.ParentSessionID,
+		RelativeWorkingDirectory: req.RelativeWorkingDirectory,
+		PreferredName:            req.PreferredName,
+		OnDelete:                 req.OnDelete,
 	})
 	if err != nil {
 		writeUsecaseError(w, err)
 		return
 	}
 
-	views, err := sc.list.Execute(r.Context(), usecase.GetSessionsInput{ProjectID: &req.ProjectID})
+	projectID := req.ProjectID
+	if projectID == 0 {
+		projectID = s.ProjectID()
+	}
+	views, err := sc.list.Execute(r.Context(), usecase.GetSessionsInput{ProjectID: &projectID})
 	if err != nil {
 		writeUsecaseError(w, err)
 		return
@@ -347,15 +355,18 @@ func parseBoolQuery(raw string) (bool, error) {
 
 func sessionDTO(s *domain.Session, p *domain.Project, mainSessionName, mainTmuxSessionName, branch string) sessionResponse {
 	return sessionResponse{
-		ID:          s.ID(),
-		Parent:      s.Parent(),
-		ProjectID:   s.ProjectID(),
-		Name:        s.Name(),
-		SessionName: s.Name(),
-		TmuxName:    s.TmuxName(),
-		Type:        sessionTypeString(s.Type()),
-		Branch:      branch,
-		Worktree:    s.WorktreePath(),
+		ID:                       s.ID(),
+		Parent:                   s.Parent(),
+		ParentSessionID:          s.Parent(),
+		ProjectID:                s.ProjectID(),
+		Name:                     s.Name(),
+		SessionName:              s.Name(),
+		TmuxName:                 s.TmuxName(),
+		Type:                     sessionTypeString(s.Type()),
+		Branch:                   branch,
+		Worktree:                 s.WorktreePath(),
+		RelativeWorkingDirectory: s.RelativeWorkingDirectory(),
+		OnDelete:                 s.OnDelete(),
 		Project: projectResponse{
 			ID:                  p.ID(),
 			Title:               p.Title(),

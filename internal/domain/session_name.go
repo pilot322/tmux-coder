@@ -32,6 +32,22 @@ func DeriveWorktreeSessionName(projectPath, branch string, isTaken func(name str
 	return candidate
 }
 
+// DeriveSecondarySessionName returns a globally unique Secondary Session name.
+func DeriveSecondarySessionName(preferredName string, isTaken func(name string) bool) string {
+	base := sanitize(preferredName)
+	candidate := base
+	for n := 2; isTaken(candidate); n++ {
+		candidate = fmt.Sprintf("%s-%d", base, n)
+	}
+	return candidate
+}
+
+// DeriveSecondaryTmuxSessionName returns the tmux target for a Secondary Session.
+// The CLI-facing Secondary Session name remains unprefixed.
+func DeriveSecondaryTmuxSessionName(projectPath, sessionName string) string {
+	return sanitize(filepath.Base(projectPath)) + "_" + DeriveTmuxSessionName(sessionName)
+}
+
 // sanitize replaces reserved separator characters (".", ":") and any
 // whitespace with "-". Path separators are also replaced so branch names can
 // safely become sibling directory basenames.

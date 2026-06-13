@@ -21,24 +21,31 @@ type projectsResponse struct {
 }
 
 type createSessionRequest struct {
-	ProjectID  int    `json:"projectId"`
-	Type       string `json:"type"`
-	Branch     string `json:"branch"`
-	Create     bool   `json:"create"`
-	BaseBranch string `json:"baseBranch"`
+	ProjectID                int    `json:"projectId"`
+	Type                     string `json:"type"`
+	Branch                   string `json:"branch"`
+	Create                   bool   `json:"create"`
+	BaseBranch               string `json:"baseBranch"`
+	ParentSessionID          int    `json:"parentSessionId"`
+	RelativeWorkingDirectory string `json:"relativeWorkingDirectory"`
+	PreferredName            string `json:"preferredName"`
+	OnDelete                 string `json:"onDelete"`
 }
 
 type sessionResponse struct {
-	ID          int             `json:"id"`
-	Parent      int             `json:"parent"`
-	ProjectID   int             `json:"projectId"`
-	Name        string          `json:"name"`
-	SessionName string          `json:"sessionName"`
-	TmuxName    string          `json:"tmuxSessionName"`
-	Type        string          `json:"type"`
-	Branch      string          `json:"branch,omitempty"`
-	Worktree    string          `json:"worktreePath,omitempty"`
-	Project     projectResponse `json:"project"`
+	ID                       int             `json:"id"`
+	Parent                   int             `json:"parent"`
+	ParentSessionID          int             `json:"parentSessionId,omitempty"`
+	ProjectID                int             `json:"projectId"`
+	Name                     string          `json:"name"`
+	SessionName              string          `json:"sessionName"`
+	TmuxName                 string          `json:"tmuxSessionName"`
+	Type                     string          `json:"type"`
+	Branch                   string          `json:"branch,omitempty"`
+	Worktree                 string          `json:"worktreePath,omitempty"`
+	RelativeWorkingDirectory string          `json:"relativeWorkingDirectory,omitempty"`
+	OnDelete                 string          `json:"onDelete,omitempty"`
+	Project                  projectResponse `json:"project"`
 }
 
 type sessionsResponse struct {

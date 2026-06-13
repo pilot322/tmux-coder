@@ -8,12 +8,14 @@ import (
 )
 
 func reconcileWorktreeSessions(ctx context.Context, sessions ISessionRepository, git GitWorktreeGateway, tmux SessionGateway, lock StateLock) error {
+	var allSessions []*domain.Session
 	var worktrees []*domain.Session
 	if err := lock.WithRead(func() error {
 		all, err := sessions.GetAll(ctx)
 		if err != nil {
 			return err
 		}
+		allSessions = all
 		for _, s := range all {
 			if s.Type() == domain.WorktreeSession {
 				worktrees = append(worktrees, s)
@@ -42,7 +44,21 @@ func reconcileWorktreeSessions(ctx context.Context, sessions ISessionRepository,
 				return fmt.Errorf("%w: %v", ErrGateway, err)
 			}
 		}
-		prune = append(prune, s.ID())
+		toPrune := append([]*domain.Session{s}, secondaryDescendants(allSessions, s.ID())...)
+		for _, descendant := range toPrune[1:] {
+			tmuxExists, err := tmux.Exists(ctx, descendant.TmuxName())
+			if err != nil {
+				return fmt.Errorf("%w: %v", ErrGateway, err)
+			}
+			if tmuxExists {
+				if err := tmux.Kill(ctx, descendant.TmuxName()); err != nil {
+					return fmt.Errorf("%w: %v", ErrGateway, err)
+				}
+			}
+		}
+		for _, p := range toPrune {
+			prune = append(prune, p.ID())
+		}
 	}
 
 	if len(prune) == 0 {
