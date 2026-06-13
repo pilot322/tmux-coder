@@ -25,9 +25,9 @@ func DeriveMainSessionName(fullPath string, isTaken func(name string) bool) stri
 func DeriveWorktreeSessionName(projectPath, branch string, isTaken func(name string) bool) string {
 	base := sanitize(filepath.Base(projectPath))
 	slug := sanitize(branch)
-	candidate := base + "-" + slug
+	candidate := base + "." + slug
 	for n := 2; isTaken(candidate); n++ {
-		candidate = fmt.Sprintf("%s-%s-%d", base, slug, n)
+		candidate = fmt.Sprintf("%s.%s-%d", base, slug, n)
 	}
 	return candidate
 }

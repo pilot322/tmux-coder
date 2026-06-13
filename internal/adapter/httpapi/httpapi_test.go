@@ -247,7 +247,7 @@ func TestPostSessions_CreatesWorktreeSessionAndRejectsDuplicateBranch(t *testing
 	if err := json.Unmarshal(rec.Body.Bytes(), &session); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if session.ID == 0 || session.SessionName != "api-feature-login" || session.Type != "worktree" || session.Branch != "feature/login" || session.Worktree != "/work/api-feature-login" {
+	if session.ID == 0 || session.SessionName != "api.feature-login" || session.Type != "worktree" || session.Branch != "feature/login" || session.Worktree != "/work/api.feature-login" {
 		t.Fatalf("unexpected session: %+v", session)
 	}
 

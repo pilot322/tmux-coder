@@ -40,3 +40,26 @@ func TestDeriveMainSessionName(t *testing.T) {
 		})
 	}
 }
+
+func TestDeriveWorktreeSessionName(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		branch  string
+		isTaken func(string) bool
+		want    string
+	}{
+		{"basename dot branch slug", "/work/api", "feature/login", taken(), "api.feature-login"},
+		{"numeric suffix on first collision", "/work/api", "feature/login", taken("api.feature-login"), "api.feature-login-2"},
+		{"sanitizes basename before dot separator", "/work/my.api", "feature", taken(), "my-api.feature"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := domain.DeriveWorktreeSessionName(tt.path, tt.branch, tt.isTaken)
+			if got != tt.want {
+				t.Errorf("DeriveWorktreeSessionName(%q, %q) = %q, want %q", tt.path, tt.branch, got, tt.want)
+			}
+		})
+	}
+}
