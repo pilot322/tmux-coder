@@ -9,7 +9,7 @@ A base directory managed by tmux-coder, with all **Sessions** attributed to it. 
 _Avoid_: Workspace, repository
 
 **Session**:
-A 1:1 wrapper around a tmux session on the dedicated tmux server. tmux-coder adds metadata (type, parent, project association) and lifecycle management. Comes in three types: **Main Session**, **Worktree Session**, and **Secondary Session**.
+A 1:1 wrapper around a tmux session on the dedicated tmux server. tmux-coder stores both a user-facing `sessionName` and a `tmuxSessionName` target name, adds metadata (type, parent, project association), and manages lifecycle. Comes in three types: **Main Session**, **Worktree Session**, and **Secondary Session**.
 _Avoid_: Window, terminal, shell
 
 **Main Session**:

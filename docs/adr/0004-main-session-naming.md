@@ -6,9 +6,9 @@ Accepted
 
 ## Context
 
-Every Project has exactly one Main Session, whose `sessionName` is also the name of its tmux session on the **dedicated** tmux server (`-L tmux-coder`). Because that server is shared across all Projects, every Main Session name must be globally unique on it, and raw `fullPath` values are not suitable tmux session names.
+Every Project has exactly one Main Session. Its user-facing `sessionName` is distinct from its actual tmux target name on the **dedicated** tmux server (`-L tmux-coder`): dots are allowed in `sessionName` for readability, but tmux parses dots in targets as pane separators, so `tmuxSessionName` replaces dots with underscores.
 
-The obvious readable choice, `<basename>.main`, is not unique: two Projects at different paths but the same basename (`/work/api` and `/personal/api`) both derive `api.main`, and the second `tmux new-session -s api.main` collides.
+The obvious readable choice, `<basename>.main`, is not unique: two Projects at different paths but the same basename (`/work/api` and `/personal/api`) both derive `api.main`, and the second create would collide on the derived tmux target `api_main`.
 
 Three options were considered:
 
@@ -18,11 +18,11 @@ Three options were considered:
 
 ## Decision
 
-Option 3. The create flow derives `<basename>.main`, checks the session repo for an existing name, and bumps a numeric suffix until it finds a free one. The chosen name is stored on the Session and the API response composes `mainSessionName` from a Main Session lookup.
+Option 3. The create flow derives `<basename>.main`, checks the session repo for an existing name, and bumps a numeric suffix until it finds a free one. The chosen name is stored on the Session as `sessionName`; the actual tmux target is stored as `tmuxSessionName` by replacing `.` with `_`. The API response composes `mainSessionName` from a Main Session lookup and exposes `mainTmuxSessionName` for clients that need to attach.
 
 ## Consequences
 
 - Names are human-readable when attaching, and creation never fails on a name collision.
 - The name is no longer predictable from `fullPath` alone — given a path you cannot assume its main session is `<basename>.main`; you must look it up (the suffix depends on creation order).
-- The free-name search and the name assignment must happen inside the same write-locked critical section, or two concurrent creates could both pick `api.main` (see ADR-0003).
+- The free-name search and the name assignment must happen inside the same write-locked critical section, or two concurrent creates could both pick `api.main` / `api_main` (see ADR-0003).
 - A future reader might "simplify" this to `<basename>-<id>` for predictability; that is a real alternative but trades away readability, which was the point of choosing this scheme.

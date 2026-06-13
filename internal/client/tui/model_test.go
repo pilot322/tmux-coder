@@ -15,6 +15,8 @@ type fakeAPI struct {
 	sessions          []httpclient.Session
 	listErr           error
 	deleted           int
+	deletedSession    int
+	deleteForce       bool
 	created           []httpclient.CreateSessionInput
 	createdSession    httpclient.Session
 	createErr         error
@@ -39,6 +41,12 @@ func (a *fakeAPI) CreateSession(_ context.Context, in httpclient.CreateSessionIn
 
 func (a *fakeAPI) DeleteProject(_ context.Context, id int) error {
 	a.deleted = id
+	return nil
+}
+
+func (a *fakeAPI) DeleteSession(_ context.Context, id int, force bool) error {
+	a.deletedSession = id
+	a.deleteForce = force
 	return nil
 }
 
@@ -305,6 +313,8 @@ func TestModelDeleteConfirmationDeletesSelectedProject(t *testing.T) {
 		sessions: []httpclient.Session{{ProjectID: 7, SessionName: "api-main", Type: "main"}},
 	})
 	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
 	m = updated.(Model)
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
@@ -315,6 +325,56 @@ func TestModelDeleteConfirmationDeletesSelectedProject(t *testing.T) {
 	msg := cmd().(deleteMsg)
 	if msg.err != nil || api.deleted != 7 {
 		t.Fatalf("delete msg = %+v deleted=%d", msg, api.deleted)
+	}
+}
+
+func TestModelDeleteConfirmationDestroysSelectedWorktreeSession(t *testing.T) {
+	api := &fakeAPI{}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{
+			{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"},
+			{ID: 2, ProjectID: 7, SessionName: "api.feature-login", Type: "worktree", Branch: "feature/login"},
+		},
+	})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
+	m = updated.(Model)
+
+	if !m.confirm || m.confirmDelete != deleteWorktreeSession || m.confirmDeleteID != 2 {
+		t.Fatalf("confirm=%v target=%d id=%d", m.confirm, m.confirmDelete, m.confirmDeleteID)
+	}
+	if !strings.Contains(m.View(), "Destroy worktree session and worktree? y/n") {
+		t.Fatalf("missing worktree confirmation: %q", m.View())
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = updated.(Model)
+	if !m.loading || cmd == nil {
+		t.Fatalf("expected delete command and loading state")
+	}
+	msg := cmd().(deleteMsg)
+	if msg.err != nil || api.deletedSession != 2 || !api.deleteForce || api.deleted != 0 {
+		t.Fatalf("delete msg=%+v deletedSession=%d force=%v deletedProject=%d", msg, api.deletedSession, api.deleteForce, api.deleted)
+	}
+}
+
+func TestModelDeleteOnMainSessionDoesNotDeleteProject(t *testing.T) {
+	api := &fakeAPI{}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+	})
+	m = updated.(Model)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
+	m = updated.(Model)
+
+	if m.confirm || cmd != nil || api.deleted != 0 || api.deletedSession != 0 || m.status != "only worktree sessions can be destroyed" {
+		t.Fatalf("confirm=%v cmd=%v deleted=%d deletedSession=%d status=%q", m.confirm, cmd, api.deleted, api.deletedSession, m.status)
 	}
 }
 

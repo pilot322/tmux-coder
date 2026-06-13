@@ -16,7 +16,16 @@ type API interface {
 	ListSessions(context.Context, httpclient.ListSessionsInput) ([]httpclient.Session, error)
 	CreateSession(context.Context, httpclient.CreateSessionInput) (httpclient.Session, error)
 	DeleteProject(context.Context, int) error
+	DeleteSession(context.Context, int, bool) error
 }
+
+type deleteTarget uint8
+
+const (
+	deleteNothing deleteTarget = iota
+	deleteProject
+	deleteWorktreeSession
+)
 
 type Model struct {
 	ctx                  context.Context
@@ -28,6 +37,8 @@ type Model struct {
 	status               string
 	loading              bool
 	confirm              bool
+	confirmDelete        deleteTarget
+	confirmDeleteID      int
 	help                 bool
 	showSessions         bool
 	creatingWorktree     bool
@@ -114,6 +125,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.sessions = msg.sessions
 		m.status = ""
 		m.confirm = false
+		m.confirmDelete = deleteNothing
+		m.confirmDeleteID = 0
 		m.clampSelection()
 		m.selectInitialSession()
 		m.selectPendingSession()
@@ -146,19 +159,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.confirm {
 			switch msg.String() {
 			case "y":
-				if len(m.projects) == 0 {
-					m.confirm = false
-					return m, nil
-				}
-				project, ok := m.selectedProject()
-				if !ok {
+				if m.confirmDelete == deleteNothing {
 					m.confirm = false
 					return m, nil
 				}
 				m.loading = true
-				return m, m.deleteCmd(project.ID)
+				return m, m.deleteCmd(m.confirmDelete, m.confirmDeleteID)
 			case "n", "esc":
 				m.confirm = false
+				m.confirmDelete = deleteNothing
+				m.confirmDeleteID = 0
 				return m, nil
 			}
 		}
@@ -220,9 +230,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.selected = len(m.projects) - 1
 			}
 		case key.Matches(msg, keys.del):
-			if _, ok := m.selectedProject(); ok {
-				m.confirm = true
-			}
+			m.requestDeleteConfirmation()
 		case key.Matches(msg, keys.enter):
 			if target, ok := m.attachTarget(); ok {
 				m.attach = target
@@ -256,8 +264,13 @@ func (m Model) View() string {
 		}
 	}
 
-	if m.confirm && len(m.projects) > 0 {
-		b.WriteString("\nDelete project? y/n\n")
+	if m.confirm {
+		switch m.confirmDelete {
+		case deleteProject:
+			b.WriteString("\nDelete project? y/n\n")
+		case deleteWorktreeSession:
+			b.WriteString("\nDestroy worktree session and worktree? y/n\n")
+		}
 	}
 	if m.creatingWorktree {
 		b.WriteString("\nNew worktree branch: " + m.worktreeBranch + "\n")
@@ -286,9 +299,16 @@ func (m Model) listCmd() tea.Cmd {
 	}
 }
 
-func (m Model) deleteCmd(id int) tea.Cmd {
+func (m Model) deleteCmd(target deleteTarget, id int) tea.Cmd {
 	return func() tea.Msg {
-		return deleteMsg{id: id, err: m.api.DeleteProject(m.ctx, id)}
+		switch target {
+		case deleteProject:
+			return deleteMsg{id: id, err: m.api.DeleteProject(m.ctx, id)}
+		case deleteWorktreeSession:
+			return deleteMsg{id: id, err: m.api.DeleteSession(m.ctx, id, true)}
+		default:
+			return deleteMsg{id: id}
+		}
 	}
 }
 
@@ -441,6 +461,47 @@ func (m Model) selectedProject() (httpclient.Project, bool) {
 		return httpclient.Project{}, false
 	}
 	return m.projects[m.selected], true
+}
+
+func (m Model) selectedSessionRow() (httpclient.Session, bool) {
+	if !m.showSessions {
+		return httpclient.Session{}, false
+	}
+	rows := m.sessionRows()
+	if m.selectedSession < 0 || m.selectedSession >= len(rows) {
+		return httpclient.Session{}, false
+	}
+	return rows[m.selectedSession], true
+}
+
+func (m *Model) requestDeleteConfirmation() {
+	m.confirm = false
+	m.confirmDelete = deleteNothing
+	m.confirmDeleteID = 0
+	m.status = ""
+
+	if m.showSessions {
+		s, ok := m.selectedSessionRow()
+		if !ok {
+			return
+		}
+		if s.Type != "worktree" {
+			m.status = "only worktree sessions can be destroyed"
+			return
+		}
+		m.confirm = true
+		m.confirmDelete = deleteWorktreeSession
+		m.confirmDeleteID = s.ID
+		return
+	}
+
+	project, ok := m.selectedProject()
+	if !ok {
+		return
+	}
+	m.confirm = true
+	m.confirmDelete = deleteProject
+	m.confirmDeleteID = project.ID
 }
 
 func (m Model) attachTarget() (string, bool) {
