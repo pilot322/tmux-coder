@@ -13,15 +13,18 @@ import (
 type fakeAPI struct {
 	projects          []httpclient.Project
 	sessions          []httpclient.Session
+	agents            []httpclient.Agent
 	listErr           error
 	deleted           int
 	deletedSession    int
+	deletedAgent      int
 	deleteForce       bool
 	created           []httpclient.CreateSessionInput
 	createdSession    httpclient.Session
 	createErr         error
 	listProjectsCalls int
 	listSessionsCalls int
+	listAgentsCalls   int
 }
 
 func (a *fakeAPI) ListProjects(context.Context) ([]httpclient.Project, error) {
@@ -32,6 +35,11 @@ func (a *fakeAPI) ListProjects(context.Context) ([]httpclient.Project, error) {
 func (a *fakeAPI) ListSessions(context.Context, httpclient.ListSessionsInput) ([]httpclient.Session, error) {
 	a.listSessionsCalls++
 	return a.sessions, nil
+}
+
+func (a *fakeAPI) ListAgents(context.Context, httpclient.ListAgentsInput) ([]httpclient.Agent, error) {
+	a.listAgentsCalls++
+	return a.agents, nil
 }
 
 func (a *fakeAPI) CreateSession(_ context.Context, in httpclient.CreateSessionInput) (httpclient.Session, error) {
@@ -50,6 +58,11 @@ func (a *fakeAPI) DeleteSession(_ context.Context, id int, force bool) error {
 	return nil
 }
 
+func (a *fakeAPI) DeleteAgent(_ context.Context, id int) error {
+	a.deletedAgent = id
+	return nil
+}
+
 func TestModelEnterSelectsProjectMainSessionAndQuits(t *testing.T) {
 	m := NewModel(context.Background(), &fakeAPI{})
 	updated, _ := m.Update(listMsg{
@@ -60,7 +73,7 @@ func TestModelEnterSelectsProjectMainSessionAndQuits(t *testing.T) {
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
 
-	if m.attach != "api_main" {
+	if m.attach.SessionName != "api_main" || m.attach.PaneID != "" {
 		t.Fatalf("attach = %+v", m.attach)
 	}
 	if cmd == nil {
@@ -83,6 +96,19 @@ func TestModelStartsWithSessionsShown(t *testing.T) {
 	m := NewModel(context.Background(), &fakeAPI{})
 	if !m.showSessions {
 		t.Fatal("expected sessions to be shown by default")
+	}
+	if m.showAgents {
+		t.Fatal("expected agents to be hidden by default")
+	}
+}
+
+func TestModelTogglesAgents(t *testing.T) {
+	m := NewModel(context.Background(), &fakeAPI{})
+	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = updated.(Model)
+
+	if !m.showAgents {
+		t.Fatal("expected agents to be shown after toggle")
 	}
 }
 
@@ -146,8 +172,8 @@ func TestModelToggleSessionsSelectsCurrentProjectMainSession(t *testing.T) {
 
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
-	if m.attach != "web-main" || cmd == nil {
-		t.Fatalf("attach=%q cmd nil=%v", m.attach, cmd == nil)
+	if m.attach.SessionName != "web-main" || cmd == nil {
+		t.Fatalf("attach=%+v cmd nil=%v", m.attach, cmd == nil)
 	}
 }
 
@@ -191,6 +217,62 @@ func TestModelExpandedViewRendersSessionsUnderProject(t *testing.T) {
 	}
 }
 
+func TestModelAgentViewRendersAgentsUnderSessions(t *testing.T) {
+	m := NewModel(context.Background(), &fakeAPI{})
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 1, Title: "Backend API", FullPath: "/work/api", MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{{ID: 10, ProjectID: 1, SessionName: "api-main", TmuxName: "api_main", Type: "main"}},
+		agents:   []httpclient.Agent{{ID: 20, ProjectID: 1, SessionID: 10, DisplayName: "reviewer", TmuxPaneID: "%7", Status: "running"}},
+	})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = updated.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, "- api-main") || !strings.Contains(view, "- reviewer [running]") {
+		t.Fatalf("view missing session agent rows: %q", view)
+	}
+}
+
+func TestModelAgentViewRendersAgentsUnderProjects(t *testing.T) {
+	m := NewModel(context.Background(), &fakeAPI{})
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 1, Title: "Backend API", FullPath: "/work/api", MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{{ID: 10, ProjectID: 1, SessionName: "api-main", Type: "main"}},
+		agents:   []httpclient.Agent{{ID: 20, ProjectID: 1, SessionID: 10, DisplayName: "reviewer", TmuxPaneID: "%7", Status: "running"}},
+	})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = updated.(Model)
+
+	view := m.View()
+	if !strings.Contains(view, "Backend API") || !strings.Contains(view, "- reviewer [running]") {
+		t.Fatalf("view missing project agent rows: %q", view)
+	}
+}
+
+func TestModelEnterSelectsAgentPane(t *testing.T) {
+	m := NewModel(context.Background(), &fakeAPI{})
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 1, MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{{ID: 10, ProjectID: 1, SessionName: "api-main", TmuxName: "api_main", Type: "main"}},
+		agents:   []httpclient.Agent{{ID: 20, ProjectID: 1, SessionID: 10, DisplayName: "reviewer", TmuxPaneID: "%7", Status: "running"}},
+	})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m = updated.(Model)
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+
+	if m.attach.SessionName != "api_main" || m.attach.PaneID != "%7" || cmd == nil {
+		t.Fatalf("attach=%+v cmd nil=%v", m.attach, cmd == nil)
+	}
+}
+
 func TestModelListCommandFetchesProjectsAndSessions(t *testing.T) {
 	api := &fakeAPI{
 		projects: []httpclient.Project{{ID: 1, MainSessionName: "api-main"}},
@@ -202,8 +284,8 @@ func TestModelListCommandFetchesProjectsAndSessions(t *testing.T) {
 	if msg.err != nil || len(msg.projects) != 1 || len(msg.sessions) != 1 {
 		t.Fatalf("msg = %+v", msg)
 	}
-	if api.listProjectsCalls != 1 || api.listSessionsCalls != 1 {
-		t.Fatalf("listProjectsCalls=%d listSessionsCalls=%d", api.listProjectsCalls, api.listSessionsCalls)
+	if api.listProjectsCalls != 1 || api.listSessionsCalls != 1 || api.listAgentsCalls != 1 {
+		t.Fatalf("listProjectsCalls=%d listSessionsCalls=%d listAgentsCalls=%d", api.listProjectsCalls, api.listSessionsCalls, api.listAgentsCalls)
 	}
 }
 
@@ -359,6 +441,40 @@ func TestModelDeleteConfirmationDestroysSelectedWorktreeSession(t *testing.T) {
 	msg := cmd().(deleteMsg)
 	if msg.err != nil || api.deletedSession != 2 || !api.deleteForce || api.deleted != 0 {
 		t.Fatalf("delete msg=%+v deletedSession=%d force=%v deletedProject=%d", msg, api.deletedSession, api.deleteForce, api.deleted)
+	}
+}
+
+func TestModelDeleteConfirmationDeletesSelectedAgent(t *testing.T) {
+	api := &fakeAPI{}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+		agents:   []httpclient.Agent{{ID: 12, ProjectID: 7, SessionID: 1, DisplayName: "reviewer", TmuxPaneID: "%12", Status: "running"}},
+	})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
+	m = updated.(Model)
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("X")})
+	m = updated.(Model)
+
+	if !m.confirm || m.confirmDelete != deleteAgent || m.confirmDeleteID != 12 {
+		t.Fatalf("confirm=%v target=%d id=%d", m.confirm, m.confirmDelete, m.confirmDeleteID)
+	}
+	if !strings.Contains(m.View(), "Delete agent? y/n") {
+		t.Fatalf("missing agent confirmation: %q", m.View())
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("y")})
+	m = updated.(Model)
+	if !m.loading || cmd == nil {
+		t.Fatalf("expected delete command and loading state")
+	}
+	msg := cmd().(deleteMsg)
+	if msg.err != nil || api.deletedAgent != 12 || api.deletedSession != 0 || api.deleted != 0 {
+		t.Fatalf("delete msg=%+v deletedAgent=%d deletedSession=%d deletedProject=%d", msg, api.deletedAgent, api.deletedSession, api.deleted)
 	}
 }
 
