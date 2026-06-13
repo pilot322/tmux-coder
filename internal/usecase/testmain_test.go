@@ -11,7 +11,7 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	path := filepath.Join(dir, "tmux-coderd-wrapper")
+	path := filepath.Join(dir, "tmux-coder")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		panic(err)
 	}

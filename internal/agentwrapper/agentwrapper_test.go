@@ -1,4 +1,4 @@
-package main
+package agentwrapper_test
 
 import (
 	"bytes"
@@ -12,41 +12,52 @@ import (
 	"syscall"
 	"testing"
 	"time"
+
+	"github.com/pilot322/tmux-coder/internal/agentwrapper"
 )
 
-type fakeWrapperClient struct {
+type fakeClient struct {
 	started chan int
 	events  []string
 }
 
-func (c *fakeWrapperClient) SendAgentStarted(ctx context.Context, id int, pgid int) error {
+func (c *fakeClient) SendAgentStarted(ctx context.Context, id int, pgid int) error {
 	c.started <- pgid
 	return nil
 }
 
-func (c *fakeWrapperClient) SendAgentEvent(ctx context.Context, id int, event string) error {
+func (c *fakeClient) SendAgentEvent(ctx context.Context, id int, event string) error {
 	c.events = append(c.events, event)
 	return nil
 }
 
 func TestRunInjectsPaneEnvAndDispatchesEvents(t *testing.T) {
 	script := writeExecutable(t, "agent", "#!/bin/sh\nprintf '%s' \"$TMUX_CODER_PANE_ID\"\n")
-	client := &fakeWrapperClient{started: make(chan int, 1)}
+	client := &fakeClient{started: make(chan int, 1)}
 	var stdout bytes.Buffer
 
-	code := run([]string{"7", script}, func(key string) string {
-		if key == "TMUX_CODER_PANE_ID" {
-			return "%55"
-		}
-		return ""
-	}, nil, &stdout, &bytes.Buffer{}, exec.CommandContext, func(string, *http.Client) agentEventClient { return client })
+	code := agentwrapper.Run(agentwrapper.RunConfig{
+		Args: []string{"7", script},
+		Getenv: func(key string) string {
+			if key == "TMUX_CODER_PANE_ID" {
+				return "%55"
+			}
+			return ""
+		},
+		Stdin:          nil,
+		Stdout:         &stdout,
+		Stderr:         &bytes.Buffer{},
+		CommandContext: exec.CommandContext,
+		NewClient:      func(string, *http.Client) agentwrapper.AgentEventClient { return client },
+	})
 	if code != 0 {
 		t.Fatalf("exit code = %d", code)
 	}
 	if stdout.String() != "%55" {
 		t.Fatalf("stdout = %q, want pane id", stdout.String())
 	}
-	if pgid := <-client.started; pgid <= 0 {
+	pgid := <-client.started
+	if pgid <= 0 {
 		t.Fatalf("pgid = %d, want positive", pgid)
 	}
 	if len(client.events) != 1 || client.events[0] != "exited" {
@@ -56,8 +67,15 @@ func TestRunInjectsPaneEnvAndDispatchesEvents(t *testing.T) {
 
 func TestRunReturnsChildExitCode(t *testing.T) {
 	script := writeExecutable(t, "agent", "#!/bin/sh\nexit 23\n")
-	client := &fakeWrapperClient{started: make(chan int, 1)}
-	code := run([]string{"7", script}, func(string) string { return "" }, nil, &bytes.Buffer{}, &bytes.Buffer{}, exec.CommandContext, func(string, *http.Client) agentEventClient { return client })
+	client := &fakeClient{started: make(chan int, 1)}
+	code := agentwrapper.Run(agentwrapper.RunConfig{
+		Args:           []string{"7", script},
+		Getenv:         func(string) string { return "" },
+		Stdout:         &bytes.Buffer{},
+		Stderr:         &bytes.Buffer{},
+		CommandContext: exec.CommandContext,
+		NewClient:      func(string, *http.Client) agentwrapper.AgentEventClient { return client },
+	})
 	if code != 23 {
 		t.Fatalf("exit code = %d, want 23", code)
 	}
@@ -68,10 +86,17 @@ func TestRunForwardsSignalsToChildProcessGroup(t *testing.T) {
 	marker := filepath.Join(dir, "term")
 	ready := filepath.Join(dir, "ready")
 	script := writeExecutable(t, "agent", "#!/bin/sh\ntrap 'printf term > \"$1\"; exit 0' TERM\nprintf ready > \"$2\"\nwhile true; do sleep 1 & wait $!; done\n")
-	client := &fakeWrapperClient{started: make(chan int, 1)}
+	client := &fakeClient{started: make(chan int, 1)}
 	done := make(chan int, 1)
 	go func() {
-		done <- run([]string{"7", scriptWithArgs(t, script, marker, ready)}, func(string) string { return "" }, nil, &bytes.Buffer{}, &bytes.Buffer{}, exec.CommandContext, func(string, *http.Client) agentEventClient { return client })
+		done <- agentwrapper.Run(agentwrapper.RunConfig{
+			Args:           []string{"7", scriptWithArgs(t, script, marker, ready)},
+			Getenv:         func(string) string { return "" },
+			Stdout:         &bytes.Buffer{},
+			Stderr:         &bytes.Buffer{},
+			CommandContext: exec.CommandContext,
+			NewClient:      func(string, *http.Client) agentwrapper.AgentEventClient { return client },
+		})
 	}()
 
 	select {
@@ -136,13 +161,13 @@ func waitForFile(t *testing.T, path string) {
 }
 
 func TestDaemonBaseURL(t *testing.T) {
-	if got := daemonBaseURL(""); got != "http://127.0.0.1:64357" {
+	if got := agentwrapper.DaemonBaseURL(""); got != "http://127.0.0.1:64357" {
 		t.Fatalf("default = %q", got)
 	}
-	if got := daemonBaseURL("127.0.0.1:7000"); got != "http://127.0.0.1:7000" {
+	if got := agentwrapper.DaemonBaseURL("127.0.0.1:7000"); got != "http://127.0.0.1:7000" {
 		t.Fatalf("host = %q", got)
 	}
-	if got := daemonBaseURL("http://localhost:7000"); !strings.HasPrefix(got, "http://") {
+	if got := agentwrapper.DaemonBaseURL("http://localhost:7000"); !strings.HasPrefix(got, "http://") {
 		t.Fatalf("url = %q", got)
 	}
 }

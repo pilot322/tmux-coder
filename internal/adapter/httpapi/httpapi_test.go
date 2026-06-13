@@ -22,7 +22,7 @@ func TestMain(m *testing.M) {
 	if err != nil {
 		panic(err)
 	}
-	path := filepath.Join(dir, "tmux-coderd-wrapper")
+	path := filepath.Join(dir, "tmux-coder")
 	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		panic(err)
 	}
@@ -418,7 +418,9 @@ func TestGetAgents_ListsAgents(t *testing.T) {
 	sessionID := getSessionID(t, mux, project.ID)
 
 	rec = do(t, mux, "POST", "/agents", `{"projectId":`+strconv.Itoa(project.ID)+`,"sessionId":`+strconv.Itoa(sessionID)+`,"kind":"opencode"}`)
-	_ = json.Unmarshal(rec.Body.Bytes(), nil)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create agent status = %d, want 201 (body: %s)", rec.Code, rec.Body)
+	}
 
 	rec = do(t, mux, "GET", "/agents", "")
 	if rec.Code != http.StatusOK {

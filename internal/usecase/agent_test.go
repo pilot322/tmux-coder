@@ -3,6 +3,7 @@ package usecase_test
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -13,6 +14,7 @@ import (
 
 type fakeAgentGateway struct {
 	createdWindows []string
+	commands       []string
 	paneIDCounter  int
 	panes          map[string]bool
 	killErr        error
@@ -35,6 +37,7 @@ func (g *fakeAgentGateway) NewWindow(ctx context.Context, sessionName, workingDi
 	paneID := "%" + itoa(g.paneIDCounter)
 	g.panes[paneID] = true
 	g.createdWindows = append(g.createdWindows, sessionName)
+	g.commands = append(g.commands, command)
 	return paneID, nil
 }
 
@@ -115,6 +118,9 @@ func TestCreateAgent_OwnedPane(t *testing.T) {
 	}
 	if result.Agent.DisplayName() == "" {
 		t.Fatal("want non-empty default display name")
+	}
+	if len(gw.commands) != 1 || !strings.Contains(gw.commands[0], "agent-wrapper") {
+		t.Fatalf("commands = %v, want agent-wrapper subcommand", gw.commands)
 	}
 }
 

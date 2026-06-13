@@ -121,7 +121,7 @@ func (uc *CreateAgent) Execute(ctx context.Context, in CreateAgentInput) (Create
 
 	if paneOwned {
 		env := agentEnvVars(agent, in.DaemonAddr)
-		cmd, err := wrapperCommand(agent.ID(), in.Kind)
+		cmd, err := agentWrapperCommand(agent.ID(), in.Kind)
 		if err != nil {
 			_ = uc.lock.WithWrite(func() error {
 				return uc.agents.Delete(ctx, agent.ID())
@@ -170,13 +170,13 @@ func agentEnvVars(agent *domain.Agent, daemonAddr string) []string {
 	}
 }
 
-func wrapperCommand(agentID int, kind string) (string, error) {
+func agentWrapperCommand(agentID int, kind string) (string, error) {
 	executable, _ := os.Executable()
-	wrapper, err := binresolve.ResolveSiblingThenPath(executable, "tmux-coderd-wrapper", exec.LookPath)
+	tmuxCoder, err := binresolve.ResolveSiblingThenPath(executable, "tmux-coder", exec.LookPath)
 	if err != nil {
 		return "", err
 	}
-	return fmt.Sprintf("%q %d %s", wrapper, agentID, kind), nil
+	return fmt.Sprintf("%q agent-wrapper %d %s", tmuxCoder, agentID, kind), nil
 }
 
 func validStablePaneID(paneID string) bool {

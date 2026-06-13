@@ -53,7 +53,7 @@ The in-memory data structure in the **Daemon** that tracks active **TC Agents** 
 _Avoid_: Agent store, agent list
 
 **Event**:
-A notification sent by a **TC Agent** wrapper or hook system to the **Daemon**. Carries a type, agent ID, and optional payload; lifecycle events change active registry state, while richer semantic events can be added later.
+A notification sent by the **TC Agent** `tmux-coder agent-wrapper` subcommand or hook system to the **Daemon**. Carries a type, agent ID, and optional payload; lifecycle events change active registry state, while richer semantic events can be added later.
 _Avoid_: Message, signal, notification
 
 **Reconciliation**:

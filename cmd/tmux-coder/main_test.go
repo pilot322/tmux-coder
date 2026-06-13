@@ -9,6 +9,18 @@ import (
 	"github.com/pilot322/tmux-coder/internal/client/httpclient"
 )
 
+func TestIsAgentWrapperMode(t *testing.T) {
+	if !isAgentWrapperMode([]string{"tmux-coder", "agent-wrapper", "7", "opencode"}) {
+		t.Fatal("expected agent-wrapper mode")
+	}
+	if isAgentWrapperMode([]string{"tmux-coder", "new"}) {
+		t.Fatal("did not expect agent-wrapper mode for `new`")
+	}
+	if isAgentWrapperMode([]string{"tmux-coder"}) {
+		t.Fatal("did not expect agent-wrapper mode with no subcommand")
+	}
+}
+
 type fakeAgentAPI struct {
 	sessions []httpclient.Session
 	created  httpclient.CreateAgentInput
