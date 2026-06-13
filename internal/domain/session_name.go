@@ -20,11 +20,24 @@ func DeriveMainSessionName(fullPath string, isTaken func(name string) bool) stri
 	return candidate
 }
 
+// DeriveWorktreeSessionName returns the tmux session name for a Worktree
+// Session. The same value is also used as the sibling worktree directory name.
+func DeriveWorktreeSessionName(projectPath, branch string, isTaken func(name string) bool) string {
+	base := sanitize(filepath.Base(projectPath))
+	slug := sanitize(branch)
+	candidate := base + "-" + slug
+	for n := 2; isTaken(candidate); n++ {
+		candidate = fmt.Sprintf("%s-%s-%d", base, slug, n)
+	}
+	return candidate
+}
+
 // sanitize replaces characters tmux forbids in session names (".", ":") and
-// any whitespace with "-".
+// any whitespace with "-". Path separators are also replaced so branch names
+// can safely become sibling directory basenames.
 func sanitize(s string) string {
 	return strings.Map(func(r rune) rune {
-		if r == '.' || r == ':' || unicode.IsSpace(r) {
+		if r == '.' || r == ':' || r == '/' || r == '\\' || unicode.IsSpace(r) {
 			return '-'
 		}
 		return r

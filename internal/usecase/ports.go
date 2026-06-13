@@ -18,6 +18,20 @@ var ErrProjectNotFound = errors.New("project not found")
 // maps it to 502 Bad Gateway.
 var ErrGateway = errors.New("session gateway failure")
 
+// ErrValidation is returned for invalid API inputs or requests that violate the
+// current session creation/deletion rules. The HTTP layer maps it to 400.
+var ErrValidation = errors.New("validation error")
+
+// ErrConflict is returned for expected Git/session state conflicts, such as a
+// duplicate Worktree Session or dirty worktree removal. The HTTP layer maps it to 409.
+var ErrConflict = errors.New("conflict")
+
+// ErrNotImplemented marks Session operations intentionally out of this slice.
+var ErrNotImplemented = errors.New("not implemented")
+
+// ErrSessionNotFound is returned when a Session id is unknown.
+var ErrSessionNotFound = errors.New("session not found")
+
 // IProjectRepository persists Projects. The repository assigns ids, so Create
 // returns the stored Project with its id set.
 type IProjectRepository interface {
@@ -31,9 +45,22 @@ type IProjectRepository interface {
 // ISessionRepository persists Sessions. The repository assigns ids on Create.
 type ISessionRepository interface {
 	Create(ctx context.Context, s *domain.Session) (*domain.Session, error)
+	GetByID(ctx context.Context, id int) (*domain.Session, error)
 	GetAll(ctx context.Context) ([]*domain.Session, error)
 	GetByProjectID(ctx context.Context, projectID int) ([]*domain.Session, error)
 	Delete(ctx context.Context, id int) error
+}
+
+// GitWorktreeGateway is the port to Git for Worktree Session lifecycle.
+type GitWorktreeGateway interface {
+	ValidateBranchName(ctx context.Context, branch string) error
+	IsWorktreeRoot(ctx context.Context, path string) (bool, error)
+	LocalBranchExists(ctx context.Context, repoPath, branch string) (bool, error)
+	ResolveCommit(ctx context.Context, repoPath, ref string) (bool, error)
+	WorktreePathExists(ctx context.Context, path string) (bool, error)
+	AddWorktree(ctx context.Context, repoPath, worktreePath, branch, baseBranch string, create bool) error
+	RemoveWorktree(ctx context.Context, worktreePath string, force bool) error
+	DeleteBranch(ctx context.Context, repoPath, branch string) error
 }
 
 // SessionGateway is the port to the dedicated tmux server. Its failures map to

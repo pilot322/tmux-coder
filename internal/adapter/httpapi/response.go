@@ -19,13 +19,20 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, errorResponse{Error: msg})
 }
 
-// writeUsecaseError maps domain/usecase errors to HTTP status codes: an
-// unknown project is 404, a tmux failure is 502, anything else is 500.
+// writeUsecaseError maps domain/usecase errors to HTTP status codes.
 func writeUsecaseError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, domain.ErrInvalidProjectTitle):
 		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, usecase.ErrValidation):
+		writeError(w, http.StatusBadRequest, err.Error())
+	case errors.Is(err, usecase.ErrConflict):
+		writeError(w, http.StatusConflict, err.Error())
+	case errors.Is(err, usecase.ErrNotImplemented):
+		writeError(w, http.StatusNotImplemented, err.Error())
 	case errors.Is(err, usecase.ErrProjectNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, usecase.ErrSessionNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, usecase.ErrGateway):
 		writeError(w, http.StatusBadGateway, err.Error())

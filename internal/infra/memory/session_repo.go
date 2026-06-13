@@ -26,8 +26,19 @@ func (r *MemorySessionRepository) Create(ctx context.Context, s *domain.Session)
 	id := r.nextID
 	r.nextID++
 	stored := domain.NewSession(id, s.Parent(), s.ProjectID(), s.Name(), s.Type())
+	if s.Type() == domain.WorktreeSession {
+		stored = domain.NewWorktreeSession(id, s.ProjectID(), s.Name(), s.Branch(), s.WorktreePath())
+	}
 	r.sessions[id] = stored
 	return stored, nil
+}
+
+func (r *MemorySessionRepository) GetByID(ctx context.Context, id int) (*domain.Session, error) {
+	s, ok := r.sessions[id]
+	if !ok {
+		return nil, usecase.ErrSessionNotFound
+	}
+	return s, nil
 }
 
 func (r *MemorySessionRepository) GetAll(ctx context.Context) ([]*domain.Session, error) {

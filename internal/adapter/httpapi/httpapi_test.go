@@ -31,15 +31,47 @@ func (g *stubGateway) Exists(ctx context.Context, name string) (bool, error) {
 	return g.exists[name], nil
 }
 
+type stubGit struct {
+	paths map[string]bool
+}
+
+func (g *stubGit) ValidateBranchName(ctx context.Context, branch string) error   { return nil }
+func (g *stubGit) IsWorktreeRoot(ctx context.Context, path string) (bool, error) { return true, nil }
+func (g *stubGit) LocalBranchExists(ctx context.Context, repoPath, branch string) (bool, error) {
+	return true, nil
+}
+func (g *stubGit) ResolveCommit(ctx context.Context, repoPath, ref string) (bool, error) {
+	return true, nil
+}
+func (g *stubGit) WorktreePathExists(ctx context.Context, path string) (bool, error) {
+	return g.paths[path], nil
+}
+func (g *stubGit) AddWorktree(ctx context.Context, repoPath, worktreePath, branch, baseBranch string, create bool) error {
+	g.paths[worktreePath] = true
+	return nil
+}
+func (g *stubGit) RemoveWorktree(ctx context.Context, worktreePath string, force bool) error {
+	delete(g.paths, worktreePath)
+	return nil
+}
+func (g *stubGit) DeleteBranch(ctx context.Context, repoPath, branch string) error { return nil }
+
 func newServer() *http.ServeMux {
 	state := memory.NewDaemonState()
 	gw := &stubGateway{exists: make(map[string]bool)}
+	git := &stubGit{paths: make(map[string]bool)}
 
 	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gw, state, state.Config())
 	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state)
 	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), gw, state)
+	createSession := usecase.NewCreateSession(state.Projects(), state.Sessions(), gw, git, state)
+	listSessions := usecase.NewGetSessions(state.Projects(), state.Sessions(), state)
+	deleteSession := usecase.NewDeleteSession(state.Sessions(), gw, git, state)
 
-	return httpapi.NewRouter(httpapi.NewProjectController(create, list, del))
+	return httpapi.NewRouter(
+		httpapi.NewProjectController(create, list, del),
+		httpapi.NewSessionController(createSession, listSessions, deleteSession),
+	)
 }
 
 func do(t *testing.T, mux *http.ServeMux, method, path, body string) *httptest.ResponseRecorder {
@@ -163,5 +195,97 @@ func TestDeleteProjects_NoContentThenNotFound(t *testing.T) {
 	}
 	if rec := do(t, mux, "DELETE", "/projects/9999", ""); rec.Code != http.StatusNotFound {
 		t.Fatalf("DELETE unknown status = %d, want 404", rec.Code)
+	}
+}
+
+func TestGetSessions_ListsMainSessionWithProjectTitle(t *testing.T) {
+	mux := newServer()
+	do(t, mux, "POST", "/projects", `{"fullPath":"/work/api","title":"Backend API"}`)
+
+	rec := do(t, mux, "GET", "/sessions", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /sessions status = %d, want 200", rec.Code)
+	}
+	var resp struct {
+		Sessions []struct {
+			SessionName string `json:"sessionName"`
+			Type        string `json:"type"`
+			Project     struct {
+				Title           string `json:"title"`
+				MainSessionName string `json:"mainSessionName"`
+			} `json:"project"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Sessions) != 1 || resp.Sessions[0].SessionName != "api-main" || resp.Sessions[0].Type != "main" || resp.Sessions[0].Project.Title != "Backend API" || resp.Sessions[0].Project.MainSessionName != "api-main" {
+		t.Fatalf("unexpected sessions: %+v", resp.Sessions)
+	}
+}
+
+func TestPostSessions_CreatesWorktreeSessionAndRejectsDuplicateBranch(t *testing.T) {
+	mux := newServer()
+	rec := do(t, mux, "POST", "/projects", `{"fullPath":"/work/api"}`)
+	var project struct {
+		ID int `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &project)
+
+	body := `{"projectId":` + strconv.Itoa(project.ID) + `,"type":"worktree","branch":"feature/login"}`
+	rec = do(t, mux, "POST", "/sessions", body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /sessions status = %d, want 201 (body: %s)", rec.Code, rec.Body)
+	}
+	var session struct {
+		ID          int    `json:"id"`
+		SessionName string `json:"sessionName"`
+		Type        string `json:"type"`
+		Branch      string `json:"branch"`
+		Worktree    string `json:"worktreePath"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &session); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if session.ID == 0 || session.SessionName != "api-feature-login" || session.Type != "worktree" || session.Branch != "feature/login" || session.Worktree != "/work/api-feature-login" {
+		t.Fatalf("unexpected session: %+v", session)
+	}
+
+	if rec := do(t, mux, "POST", "/sessions", body); rec.Code != http.StatusConflict {
+		t.Fatalf("duplicate branch status = %d, want 409", rec.Code)
+	}
+}
+
+func TestPostSessions_SecondaryNotImplemented(t *testing.T) {
+	mux := newServer()
+	rec := do(t, mux, "POST", "/sessions", `{"projectId":1,"type":"secondary"}`)
+	if rec.Code != http.StatusNotImplemented {
+		t.Fatalf("secondary create status = %d, want 501", rec.Code)
+	}
+}
+
+func TestDeleteSessions_DeletesWorktreeSession(t *testing.T) {
+	mux := newServer()
+	rec := do(t, mux, "POST", "/projects", `{"fullPath":"/work/api"}`)
+	var project struct {
+		ID int `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &project)
+	rec = do(t, mux, "POST", "/sessions", `{"projectId":`+strconv.Itoa(project.ID)+`,"type":"worktree","branch":"feature/login"}`)
+	var session struct {
+		ID int `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &session)
+
+	if rec := do(t, mux, "DELETE", "/sessions/"+strconv.Itoa(session.ID), ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE /sessions status = %d, want 204", rec.Code)
+	}
+	rec = do(t, mux, "GET", "/sessions?type=worktree&projectId="+strconv.Itoa(project.ID), "")
+	var resp struct {
+		Sessions []struct{} `json:"sessions"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.Sessions) != 0 {
+		t.Fatalf("worktree session should be gone: %+v", resp.Sessions)
 	}
 }

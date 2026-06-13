@@ -131,6 +131,9 @@ func (uc *CreateProject) reconcile(ctx context.Context, project *domain.Project)
 	}
 
 	for _, s := range sessions {
+		if s.Type() == domain.WorktreeSession {
+			continue
+		}
 		exists, err := uc.gateway.Exists(ctx, s.Name())
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrGateway, err)

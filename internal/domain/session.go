@@ -17,6 +17,8 @@ type Session struct {
 	projectID int
 	name      string
 	kind      SessionType
+	branch    string
+	worktree  string
 }
 
 // NewSession builds a Session. Use parent == -1 for a parentless session.
@@ -30,8 +32,26 @@ func NewSession(id, parent, projectID int, name string, kind SessionType) *Sessi
 	}
 }
 
+// NewWorktreeSession builds a Worktree Session with the Git metadata tmux-coder
+// needs to enforce duplicate branch creation and remove the owned worktree.
+func NewWorktreeSession(id, projectID int, name, branch, worktree string) *Session {
+	return &Session{
+		id:        id,
+		parent:    -1,
+		projectID: projectID,
+		name:      name,
+		kind:      WorktreeSession,
+		branch:    branch,
+		worktree:  worktree,
+	}
+}
+
 func (s *Session) ID() int           { return s.id }
 func (s *Session) Parent() int       { return s.parent }
 func (s *Session) ProjectID() int    { return s.projectID }
 func (s *Session) Name() string      { return s.name }
 func (s *Session) Type() SessionType { return s.kind }
+func (s *Session) Branch() string    { return s.branch }
+func (s *Session) WorktreePath() string {
+	return s.worktree
+}

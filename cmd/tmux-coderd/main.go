@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/pilot322/tmux-coder/internal/adapter/httpapi"
+	gitinfra "github.com/pilot322/tmux-coder/internal/infra/git"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
 	"github.com/pilot322/tmux-coder/internal/infra/tmux"
 	"github.com/pilot322/tmux-coder/internal/usecase"
@@ -25,13 +26,18 @@ func main() {
 
 	state := memory.NewDaemonState()
 	gateway := tmux.NewTmuxGateway()
+	git := gitinfra.NewGateway()
 
 	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gateway, state, state.Config())
 	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state)
 	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), gateway, state)
+	createSession := usecase.NewCreateSession(state.Projects(), state.Sessions(), gateway, git, state)
+	listSessions := usecase.NewGetSessions(state.Projects(), state.Sessions(), state)
+	deleteSession := usecase.NewDeleteSession(state.Sessions(), gateway, git, state)
 
 	controller := httpapi.NewProjectController(create, list, del)
-	router := httpapi.NewRouter(controller)
+	sessionController := httpapi.NewSessionController(createSession, listSessions, deleteSession)
+	router := httpapi.NewRouter(controller, sessionController)
 
 	log.Printf("tmux-coderd listening on %s", addr)
 	if err := http.ListenAndServe(addr, router); err != nil {
