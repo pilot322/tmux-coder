@@ -1,0 +1,117 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+tmux_server_env="TMUX_CODER_TMUX_SERVER"
+default_tmux_server="tmux-coder"
+
+usage() {
+  echo "usage: ./dev kill [-a]" >&2
+}
+
+if [[ $# -gt 1 ]]; then
+  usage
+  exit 2
+fi
+
+all=0
+case "${1:-}" in
+  "")
+    ;;
+  -a)
+    all=1
+    ;;
+  *)
+    usage
+    exit 2
+    ;;
+esac
+
+local_daemon="$root_dir/bin/tmux-coderd"
+if [[ $all -eq 0 && ! -e "$local_daemon" ]]; then
+  echo "local daemon binary not found: $local_daemon" >&2
+  exit 1
+fi
+
+local_daemon_real=""
+if [[ $all -eq 0 ]]; then
+  local_daemon_real="$(readlink -f "$local_daemon")"
+fi
+
+pids=()
+tmux_servers=()
+
+tmux_server_for_pid() {
+  local pid="$1"
+  local entry key value
+  value=""
+
+  if [[ -r "/proc/$pid/environ" ]]; then
+    while IFS= read -r -d '' entry; do
+      key="${entry%%=*}"
+      if [[ "$key" == "$tmux_server_env" ]]; then
+        value="${entry#*=}"
+        break
+      fi
+    done < "/proc/$pid/environ"
+  fi
+
+  if [[ -z "$value" ]]; then
+    value="$default_tmux_server"
+  fi
+  printf '%s\n' "$value"
+}
+
+add_tmux_server() {
+  local server="$1"
+  local existing
+  for existing in "${tmux_servers[@]}"; do
+    if [[ "$existing" == "$server" ]]; then
+      return
+    fi
+  done
+  tmux_servers+=("$server")
+}
+
+for proc in /proc/[0-9]*; do
+  pid="${proc##*/}"
+  comm=""
+  if [[ -r "$proc/comm" ]]; then
+    IFS= read -r comm < "$proc/comm" || true
+  fi
+  if [[ "$comm" != "tmux-coderd" ]]; then
+    continue
+  fi
+
+  exe="$(readlink "$proc/exe" 2>/dev/null || true)"
+  exe="${exe% (deleted)}"
+  if [[ -z "$exe" ]]; then
+    continue
+  fi
+
+  if [[ $all -eq 1 ]]; then
+    if [[ "$exe" == */bin/tmux-coderd ]]; then
+      pids+=("$pid")
+      add_tmux_server "$(tmux_server_for_pid "$pid")"
+    fi
+  elif [[ "$(readlink -f "$exe")" == "$local_daemon_real" ]]; then
+    pids+=("$pid")
+    add_tmux_server "$(tmux_server_for_pid "$pid")"
+  fi
+done
+
+if [[ ${#pids[@]} -eq 0 ]]; then
+  echo "no matching tmux-coderd processes found"
+  exit 0
+fi
+
+kill "${pids[@]}"
+printf 'killed tmux-coderd pid %s\n' "${pids[@]}"
+
+for server in "${tmux_servers[@]}"; do
+  if tmux -L "$server" kill-server 2>/dev/null; then
+    printf 'killed tmux server %s\n' "$server"
+  else
+    printf 'no tmux server %s found\n' "$server"
+  fi
+done

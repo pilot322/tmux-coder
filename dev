@@ -8,6 +8,7 @@ usage() {
 usage:
   ./dev build client|daemon
   ./dev path client|daemon
+  ./dev kill [-a]
   ./dev completion bash
 USAGE
 }
@@ -21,13 +22,16 @@ _tmux_coder_dev_completion() {
   prev="${COMP_WORDS[COMP_CWORD-1]}"
 
   if [[ $COMP_CWORD -eq 1 ]]; then
-    COMPREPLY=( $(compgen -W "build path completion" -- "$cur") )
+    COMPREPLY=( $(compgen -W "build path kill completion" -- "$cur") )
     return 0
   fi
 
   case "$prev" in
     build|path)
       COMPREPLY=( $(compgen -W "client daemon" -- "$cur") )
+      ;;
+    kill)
+      COMPREPLY=( $(compgen -W "-a" -- "$cur") )
       ;;
     completion)
       COMPREPLY=( $(compgen -W "bash" -- "$cur") )
@@ -45,7 +49,7 @@ if [[ $# -eq 0 ]]; then
 fi
 
 case "$1" in
-  build|path)
+  build|path|kill)
     exec "$root_dir/scripts/$1" "${@:2}"
     ;;
   completion)
