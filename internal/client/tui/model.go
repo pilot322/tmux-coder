@@ -153,7 +153,7 @@ func Run(ctx context.Context, api API, initialSession ...string) (AttachTarget, 
 }
 
 func NewModel(ctx context.Context, api API, initialSession ...string) Model {
-	m := Model{ctx: ctx, api: api, loading: true, showSessions: true}
+	m := Model{ctx: ctx, api: api, loading: true, showSessions: true, showAgents: true}
 	if len(initialSession) > 0 {
 		m.initialSession = initialSession[0]
 	}

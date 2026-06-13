@@ -92,23 +92,32 @@ func TestModelViewUsesProjectTitle(t *testing.T) {
 	}
 }
 
-func TestModelStartsWithSessionsShown(t *testing.T) {
+func TestModelStartsWithSessionsAndAgentsShown(t *testing.T) {
 	m := NewModel(context.Background(), &fakeAPI{})
 	if !m.showSessions {
 		t.Fatal("expected sessions to be shown by default")
 	}
-	if m.showAgents {
-		t.Fatal("expected agents to be hidden by default")
+	if !m.showAgents {
+		t.Fatal("expected agents to be shown by default")
 	}
 }
 
 func TestModelTogglesAgents(t *testing.T) {
 	m := NewModel(context.Background(), &fakeAPI{})
+	if !m.showAgents {
+		t.Fatal("expected agents to be shown by default")
+	}
+
 	updated, _ := m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	m = updated.(Model)
+	if m.showAgents {
+		t.Fatal("expected agents to be hidden after toggle")
+	}
 
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
+	m = updated.(Model)
 	if !m.showAgents {
-		t.Fatal("expected agents to be shown after toggle")
+		t.Fatal("expected agents to be shown after second toggle")
 	}
 }
 
@@ -242,8 +251,6 @@ func TestModelAgentViewRendersAgentsUnderSessions(t *testing.T) {
 		agents:   []httpclient.Agent{{ID: 20, ProjectID: 1, SessionID: 10, DisplayName: "reviewer", TmuxPaneID: "%7", Status: "running"}},
 	})
 	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	m = updated.(Model)
 
 	view := m.View()
 	if !strings.Contains(view, "- api-main") || !strings.Contains(view, "- reviewer [running]") {
@@ -262,8 +269,6 @@ func TestModelAgentViewIndentsAgentsUnderSecondarySessions(t *testing.T) {
 		},
 		agents: []httpclient.Agent{{ID: 20, ProjectID: 1, SessionID: 12, DisplayName: "reviewer", TmuxPaneID: "%7", Status: "running"}},
 	})
-	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	m = updated.(Model)
 
 	view := m.View()
@@ -284,8 +289,6 @@ func TestModelAgentViewRendersAgentsUnderProjects(t *testing.T) {
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("s")})
 	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
-	m = updated.(Model)
 
 	view := m.View()
 	if !strings.Contains(view, "Backend API") || !strings.Contains(view, "- reviewer [running]") {
@@ -300,8 +303,6 @@ func TestModelEnterSelectsAgentPane(t *testing.T) {
 		sessions: []httpclient.Session{{ID: 10, ProjectID: 1, SessionName: "api-main", TmuxName: "api_main", Type: "main"}},
 		agents:   []httpclient.Agent{{ID: 20, ProjectID: 1, SessionID: 10, DisplayName: "reviewer", TmuxPaneID: "%7", Status: "running"}},
 	})
-	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	m = updated.(Model)
@@ -492,8 +493,6 @@ func TestModelDeleteConfirmationDeletesSelectedAgent(t *testing.T) {
 		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
 		agents:   []httpclient.Agent{{ID: 12, ProjectID: 7, SessionID: 1, DisplayName: "reviewer", TmuxPaneID: "%12", Status: "running"}},
 	})
-	m = updated.(Model)
-	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")})
 	m = updated.(Model)
 	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("j")})
 	m = updated.(Model)
