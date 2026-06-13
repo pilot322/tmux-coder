@@ -31,11 +31,11 @@ func run(ctx context.Context, args []string, getenv func(string) string, getwd f
 
 	api := httpclient.New(addr, http.DefaultClient)
 	if len(args) == 0 {
-		project, ok, err := tui.Run(ctx, api)
+		sessionName, ok, err := tui.Run(ctx, api)
 		if err != nil || !ok {
 			return err
 		}
-		return tmuxattach.Run(ctx, project.MainSessionName, getenv)
+		return tmuxattach.Run(ctx, sessionName, getenv)
 	}
 	if len(args) == 1 && (args[0] == "o" || args[0] == "open") {
 		cwd, err := getwd()
