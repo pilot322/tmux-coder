@@ -16,6 +16,7 @@ import (
 	"strings"
 	"syscall"
 	"time"
+	"unsafe"
 )
 
 // AgentEventClient is the small subset of the daemon HTTP client needed by the
@@ -89,6 +90,12 @@ func Run(cfg RunConfig) int {
 	if err != nil {
 		pgid = cmd.Process.Pid
 	}
+	restoreTerminal, err := foregroundProcessGroup(cfg.Stdin, pgid)
+	if err != nil {
+		fmt.Fprintf(cfg.Stderr, "failed to give terminal to %s: %v\n", kind, err)
+	} else {
+		_ = syscall.Kill(-pgid, syscall.SIGCONT)
+	}
 
 	notifyCtx, notifyCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer notifyCancel()
@@ -104,6 +111,7 @@ func Run(cfg RunConfig) int {
 		_ = syscall.Kill(-pgid, sig.(syscall.Signal))
 		waitErr = <-waitCh
 	}
+	restoreTerminal()
 
 	eventCtx, eventCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer eventCancel()
@@ -160,6 +168,53 @@ func WithEnv(env []string, values ...string) []string {
 		}
 	}
 	return out
+}
+
+func foregroundProcessGroup(stdin io.Reader, pgid int) (func(), error) {
+	file, ok := stdin.(*os.File)
+	if !ok || file == nil {
+		return func() {}, nil
+	}
+	fd := file.Fd()
+	original, err := terminalProcessGroup(fd)
+	if err != nil {
+		if errors.Is(err, syscall.ENOTTY) || errors.Is(err, syscall.ENODEV) || errors.Is(err, syscall.EINVAL) {
+			return func() {}, nil
+		}
+		return func() {}, err
+	}
+	if err := setTerminalProcessGroup(fd, pgid); err != nil {
+		return func() {}, err
+	}
+	return func() {
+		ignoreSignalDuring(syscall.SIGTTOU, func() {
+			_ = setTerminalProcessGroup(fd, original)
+		})
+	}, nil
+}
+
+func terminalProcessGroup(fd uintptr) (int, error) {
+	var pgid int32
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCGPGRP, uintptr(unsafe.Pointer(&pgid)))
+	if errno != 0 {
+		return 0, errno
+	}
+	return int(pgid), nil
+}
+
+func setTerminalProcessGroup(fd uintptr, pgid int) error {
+	v := int32(pgid)
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, fd, syscall.TIOCSPGRP, uintptr(unsafe.Pointer(&v)))
+	if errno != 0 {
+		return errno
+	}
+	return nil
+}
+
+func ignoreSignalDuring(sig os.Signal, fn func()) {
+	signal.Ignore(sig)
+	defer signal.Reset(sig)
+	fn()
 }
 
 func configValue(getenv func(string) string, env []string, key string) string {
