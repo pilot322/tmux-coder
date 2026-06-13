@@ -17,11 +17,11 @@ The single **Session** per **Project** that always exists — the home base for 
 _Avoid_: Root session, default session
 
 **Worktree Session**:
-A **Session** tied 1:1 to a git worktree. Created and destroyed with the worktree.
+A **Session** tied 1:1 to a git worktree for the same **Project**. Created with its git worktree; deleting the Worktree Session removes that worktree, while deleting the Project only removes tmux-coder's ownership of the Session.
 _Avoid_: Branch session
 
 **Secondary Session**:
-A child **Session** that stems from a **Main Session** or **Worktree Session**. Represents a sub-context within the same worktree (e.g. `packages/frontend`). Can be defined declaratively in config so they are auto-created when a worktree spins up.
+A child **Session** that stems from a **Main Session** or **Worktree Session**. Represents a sub-context within the same worktree (e.g. `packages/frontend`) and may be declared in a **Config File**.
 _Avoid_: Sub-session, nested session
 
 **Daemon**:
@@ -49,7 +49,7 @@ A notification fired by a **TC Agent**'s hook system to the **Daemon** via `tmux
 _Avoid_: Message, signal, notification
 
 **Reconciliation**:
-The process by which the **Daemon** heals drift between its in-memory record of a **Session** and the actual state of the tmux server — recreating a tmux session that has gone missing, or tolerating one that is already absent when a removal is requested. Triggered on write operations, never on plain reads.
+The process by which the **Daemon** heals drift between its in-memory record of a **Session** and the runtime resources it owns: the tmux session for every **Session**, and the git worktree for a **Worktree Session**. Triggered on write operations, never on plain reads.
 _Avoid_: Sync, refresh, resync
 
 **Config File** (`.tmux-coder.toml`):
@@ -64,8 +64,8 @@ _Avoid_: Settings, project file, manifest
 >
 > **Dev**: I just created a new worktree for the auth feature. Will it also get frontend and backend sessions?
 >
-> **Domain expert**: Yes. The config declares those **Secondary Sessions** on every worktree, so the new **Worktree Session** spawned them automatically when it was created.
+> **Domain expert**: Those are **Secondary Sessions** declared by the project config. The new **Worktree Session** is the parent context they belong under when that config is applied to a worktree.
 >
 > **Dev**: How is the Daemon involved?
 >
-> **Domain expert**: The **Client** sent a "create worktree" command to the **Daemon**. The Daemon created the git worktree, spun up the **Worktree Session** and its **Secondary Sessions** on the tmux server, ran the configured hooks, and stored the runtime state in SQLite.
+> **Domain expert**: The **Client** sent a "create worktree" command to the **Daemon**. The Daemon created the git worktree, spun up the **Worktree Session** on the tmux server, and recorded the Session as runtime state.
