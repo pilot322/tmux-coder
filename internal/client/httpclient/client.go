@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
+	"strconv"
 	"strings"
 )
 
@@ -15,6 +17,31 @@ type Project struct {
 	Title           string `json:"title"`
 	FullPath        string `json:"fullPath"`
 	MainSessionName string `json:"mainSessionName"`
+}
+
+type Session struct {
+	ID          int     `json:"id"`
+	Parent      int     `json:"parent"`
+	ProjectID   int     `json:"projectId"`
+	Name        string  `json:"name"`
+	SessionName string  `json:"sessionName"`
+	Type        string  `json:"type"`
+	Branch      string  `json:"branch,omitempty"`
+	Worktree    string  `json:"worktreePath,omitempty"`
+	Project     Project `json:"project"`
+}
+
+type CreateSessionInput struct {
+	ProjectID  int    `json:"projectId"`
+	Type       string `json:"type"`
+	Branch     string `json:"branch,omitempty"`
+	Create     bool   `json:"create,omitempty"`
+	BaseBranch string `json:"baseBranch,omitempty"`
+}
+
+type ListSessionsInput struct {
+	Type      string
+	ProjectID *int
 }
 
 type Client struct {
@@ -69,6 +96,60 @@ func (c *Client) CreateProject(ctx context.Context, fullPath string, title ...st
 
 func (c *Client) DeleteProject(ctx context.Context, id int) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, fmt.Sprintf("%s/projects/%d", c.baseURL, id), nil)
+	if err != nil {
+		return err
+	}
+	return c.doJSON(req, http.StatusNoContent, nil)
+}
+
+func (c *Client) ListSessions(ctx context.Context, in ListSessionsInput) ([]Session, error) {
+	values := url.Values{}
+	if in.Type != "" {
+		values.Set("type", in.Type)
+	}
+	if in.ProjectID != nil {
+		values.Set("projectId", strconv.Itoa(*in.ProjectID))
+	}
+	endpoint := c.baseURL + "/sessions"
+	if encoded := values.Encode(); encoded != "" {
+		endpoint += "?" + encoded
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, err
+	}
+	var resp struct {
+		Sessions []Session `json:"sessions"`
+	}
+	if err := c.doJSON(req, http.StatusOK, &resp); err != nil {
+		return nil, err
+	}
+	return resp.Sessions, nil
+}
+
+func (c *Client) CreateSession(ctx context.Context, in CreateSessionInput) (Session, error) {
+	body, err := json.Marshal(in)
+	if err != nil {
+		return Session{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/sessions", bytes.NewReader(body))
+	if err != nil {
+		return Session{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var session Session
+	if err := c.doJSON(req, http.StatusCreated, &session); err != nil {
+		return Session{}, err
+	}
+	return session, nil
+}
+
+func (c *Client) DeleteSession(ctx context.Context, id int, force bool) error {
+	endpoint := fmt.Sprintf("%s/sessions/%d", c.baseURL, id)
+	if force {
+		endpoint += "?force=true"
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, endpoint, nil)
 	if err != nil {
 		return err
 	}

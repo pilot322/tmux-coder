@@ -72,3 +72,57 @@ func TestClientReturnsAPIErrorMessage(t *testing.T) {
 		t.Fatalf("error = %v", err)
 	}
 }
+
+func TestClientListCreateDeleteSessions(t *testing.T) {
+	var deleted bool
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method + " " + r.URL.Path {
+		case "GET /sessions":
+			if r.URL.Query().Get("type") != "worktree" || r.URL.Query().Get("projectId") != "7" {
+				t.Fatalf("query = %q, want type=worktree&projectId=7", r.URL.RawQuery)
+			}
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"sessions":[{"id":3,"projectId":7,"name":"api-feature","sessionName":"api-feature","type":"worktree","branch":"feature","worktreePath":"/work/api-feature","project":{"id":7,"title":"API","fullPath":"/work/api"}}]}`))
+		case "POST /sessions":
+			var req httpclient.CreateSessionInput
+			_ = json.NewDecoder(r.Body).Decode(&req)
+			if req.ProjectID != 7 || req.Type != "worktree" || req.Branch != "feature" || !req.Create || req.BaseBranch != "main" {
+				t.Fatalf("request = %+v", req)
+			}
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":4,"projectId":7,"name":"api-feature","sessionName":"api-feature","type":"worktree","branch":"feature","worktreePath":"/work/api-feature","project":{"id":7,"title":"API","fullPath":"/work/api"}}`))
+		case "DELETE /sessions/4":
+			if r.URL.Query().Get("force") != "true" {
+				t.Fatalf("force query = %q, want true", r.URL.RawQuery)
+			}
+			deleted = true
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer server.Close()
+
+	c := httpclient.New(server.URL, server.Client())
+	projectID := 7
+	sessions, err := c.ListSessions(context.Background(), httpclient.ListSessionsInput{Type: "worktree", ProjectID: &projectID})
+	if err != nil {
+		t.Fatalf("list sessions: %v", err)
+	}
+	if len(sessions) != 1 || sessions[0].SessionName != "api-feature" || sessions[0].Project.Title != "API" {
+		t.Fatalf("unexpected sessions: %+v", sessions)
+	}
+	created, err := c.CreateSession(context.Background(), httpclient.CreateSessionInput{ProjectID: 7, Type: "worktree", Branch: "feature", Create: true, BaseBranch: "main"})
+	if err != nil {
+		t.Fatalf("create session: %v", err)
+	}
+	if created.ID != 4 || created.Worktree != "/work/api-feature" {
+		t.Fatalf("unexpected created session: %+v", created)
+	}
+	if err := c.DeleteSession(context.Background(), 4, true); err != nil {
+		t.Fatalf("delete session: %v", err)
+	}
+	if !deleted {
+		t.Fatal("delete endpoint was not called")
+	}
+}
