@@ -3,8 +3,11 @@ package httpapi_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -13,6 +16,23 @@ import (
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "tmux-coder-httpapi-test-*")
+	if err != nil {
+		panic(err)
+	}
+	path := filepath.Join(dir, "tmux-coder")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		panic(err)
+	}
+	oldPath := os.Getenv("PATH")
+	_ = os.Setenv("PATH", dir+string(os.PathListSeparator)+oldPath)
+	code := m.Run()
+	_ = os.Setenv("PATH", oldPath)
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
 
 // stubGateway is a tmux stand-in that always succeeds and tracks presence.
 type stubGateway struct {
@@ -60,21 +80,65 @@ func (g *stubGit) CurrentBranch(ctx context.Context, repoPath string) (string, e
 	return "main", nil
 }
 
+type stubAgentGateway struct {
+	panes   map[string]bool
+	created []stubNewWindowCall
+}
+
+type stubNewWindowCall struct {
+	sessionName string
+	workingDir  string
+	command     string
+	env         []string
+}
+
+func (g *stubAgentGateway) NewWindow(ctx context.Context, sessionName, workingDir, command string, env []string) (string, error) {
+	paneID := fmt.Sprintf("%%%d", len(g.created)+1)
+	g.created = append(g.created, stubNewWindowCall{sessionName, workingDir, command, env})
+	g.panes[paneID] = true
+	return paneID, nil
+}
+
+func (g *stubAgentGateway) PaneExists(ctx context.Context, paneID string) (bool, error) {
+	return g.panes[paneID], nil
+}
+
+func (g *stubAgentGateway) KillPane(ctx context.Context, paneID string) error {
+	delete(g.panes, paneID)
+	return nil
+}
+
+func (g *stubAgentGateway) ListPanes(ctx context.Context, sessionName string) ([]string, error) {
+	var result []string
+	for id, exists := range g.panes {
+		if exists {
+			result = append(result, id)
+		}
+	}
+	return result, nil
+}
+
 func newServer() *http.ServeMux {
 	state := memory.NewDaemonState()
 	gw := &stubGateway{exists: make(map[string]bool)}
 	git := &stubGit{paths: make(map[string]bool)}
+	agentGw := &stubAgentGateway{panes: make(map[string]bool)}
 
 	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gw, state, state.Config())
 	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state)
-	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), gw, state)
+	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), state.Agents(), gw, state)
 	createSession := usecase.NewCreateSession(state.Projects(), state.Sessions(), gw, git, state)
 	listSessions := usecase.NewGetSessions(state.Projects(), state.Sessions(), git, state)
-	deleteSession := usecase.NewDeleteSession(state.Sessions(), gw, git, state)
+	deleteSession := usecase.NewDeleteSession(state.Sessions(), state.Agents(), gw, git, state)
+	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state)
+	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), agentGw, state)
+	agentEvent := usecase.NewAgentEvent(state.Agents(), state)
+	deleteAgent := usecase.NewDeleteAgent(state.Agents(), agentGw, nil, state)
 
 	return httpapi.NewRouter(
 		httpapi.NewProjectController(create, list, del),
 		httpapi.NewSessionController(createSession, listSessions, deleteSession),
+		httpapi.NewAgentController(createAgent, listAgents, agentEvent, deleteAgent),
 	)
 }
 
@@ -297,4 +361,232 @@ func TestDeleteSessions_DeletesWorktreeSession(t *testing.T) {
 	if len(resp.Sessions) != 0 {
 		t.Fatalf("worktree session should be gone: %+v", resp.Sessions)
 	}
+}
+
+func TestPostAgents_CreatesAgentInSession(t *testing.T) {
+	mux := newServer()
+	rec := do(t, mux, "POST", "/projects", `{"fullPath":"/work/api"}`)
+	var project struct {
+		ID int `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &project)
+
+	rec = do(t, mux, "GET", "/sessions", "")
+	var sessions struct {
+		Sessions []struct {
+			ID int `json:"id"`
+		} `json:"sessions"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &sessions)
+	if len(sessions.Sessions) == 0 {
+		t.Fatal("expected at least one session after creating project")
+	}
+	sessionID := sessions.Sessions[0].ID
+
+	body := `{"projectId":` + strconv.Itoa(project.ID) + `,"sessionId":` + strconv.Itoa(sessionID) + `,"kind":"opencode"}`
+	rec = do(t, mux, "POST", "/agents", body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /agents status = %d, want 201 (body: %s)", rec.Code, rec.Body)
+	}
+	var agent struct {
+		ID          int    `json:"id"`
+		ProjectID   int    `json:"projectId"`
+		SessionID   int    `json:"sessionId"`
+		Kind        string `json:"kind"`
+		DisplayName string `json:"displayName"`
+		Status      string `json:"status"`
+		PaneOwned   bool   `json:"paneOwned"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &agent); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if agent.ID == 0 || agent.ProjectID != project.ID || agent.SessionID != sessionID || agent.Kind != "opencode" || agent.Status != "starting" || !agent.PaneOwned {
+		t.Fatalf("unexpected agent: %+v", agent)
+	}
+	if agent.DisplayName == "" {
+		t.Fatal("expected non-empty display name")
+	}
+}
+
+func TestGetAgents_ListsAgents(t *testing.T) {
+	mux := newServer()
+	rec := do(t, mux, "POST", "/projects", `{"fullPath":"/work/api"}`)
+	var project struct {
+		ID int `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &project)
+	sessionID := getSessionID(t, mux, project.ID)
+
+	rec = do(t, mux, "POST", "/agents", `{"projectId":`+strconv.Itoa(project.ID)+`,"sessionId":`+strconv.Itoa(sessionID)+`,"kind":"opencode"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create agent status = %d, want 201 (body: %s)", rec.Code, rec.Body)
+	}
+
+	rec = do(t, mux, "GET", "/agents", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /agents status = %d, want 200", rec.Code)
+	}
+	var resp struct {
+		Agents []struct {
+			Kind   string `json:"kind"`
+			Status string `json:"status"`
+		} `json:"agents"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.Agents) != 1 {
+		t.Fatalf("want 1 agent, got %d", len(resp.Agents))
+	}
+	if resp.Agents[0].Kind != "opencode" {
+		t.Fatalf("kind = %q, want opencode", resp.Agents[0].Kind)
+	}
+}
+
+func TestPostAgents_EventStarted(t *testing.T) {
+	mux := newServer()
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	agentID := createAgent(t, mux, projectID, sessionID)
+
+	rec := do(t, mux, "POST", "/agents/"+strconv.Itoa(agentID)+"/event", `{"event":"started"}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("POST event status = %d, want 204", rec.Code)
+	}
+
+	rec = do(t, mux, "GET", "/agents", "")
+	var resp struct {
+		Agents []struct {
+			Status string `json:"status"`
+		} `json:"agents"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.Agents) != 1 || resp.Agents[0].Status != "running" {
+		t.Fatalf("want running status, got %+v", resp.Agents)
+	}
+}
+
+func TestPostAgents_EventExitedRemovesAgent(t *testing.T) {
+	mux := newServer()
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	agentID := createAgent(t, mux, projectID, sessionID)
+
+	rec := do(t, mux, "POST", "/agents/"+strconv.Itoa(agentID)+"/event", `{"event":"exited"}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("POST event status = %d, want 204", rec.Code)
+	}
+
+	rec = do(t, mux, "GET", "/agents", "")
+	var resp struct {
+		Agents []struct{} `json:"agents"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.Agents) != 0 {
+		t.Fatalf("want 0 agents after exit, got %d", len(resp.Agents))
+	}
+}
+
+func TestPostAgents_InvalidEvent(t *testing.T) {
+	mux := newServer()
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	agentID := createAgent(t, mux, projectID, sessionID)
+
+	rec := do(t, mux, "POST", "/agents/"+strconv.Itoa(agentID)+"/event", `{"event":"unknown"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("unknown event status = %d, want 400", rec.Code)
+	}
+}
+
+func TestDeleteAgent(t *testing.T) {
+	mux := newServer()
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	agentID := createAgent(t, mux, projectID, sessionID)
+
+	rec := do(t, mux, "DELETE", "/agents/"+strconv.Itoa(agentID), "")
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE agent status = %d, want 204", rec.Code)
+	}
+}
+
+func TestDeleteAgent_NotFound(t *testing.T) {
+	mux := newServer()
+	rec := do(t, mux, "DELETE", "/agents/9999", "")
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("DELETE unknown agent status = %d, want 404", rec.Code)
+	}
+}
+
+func TestGetAgents_FilterByProjectAndSession(t *testing.T) {
+	mux := newServer()
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	_ = createAgent(t, mux, projectID, sessionID)
+
+	rec := do(t, mux, "GET", "/agents?projectId="+strconv.Itoa(projectID)+"&sessionId="+strconv.Itoa(sessionID), "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("GET /agents with filters status = %d, want 200", rec.Code)
+	}
+	var resp struct {
+		Agents []struct {
+			Kind string `json:"kind"`
+		} `json:"agents"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.Agents) != 1 {
+		t.Fatalf("want 1 agent, got %d", len(resp.Agents))
+	}
+}
+
+func TestGetAgents_InvalidFilterCombo(t *testing.T) {
+	mux := newServer()
+	do(t, mux, "POST", "/projects", `{"fullPath":"/work/api"}`)
+	rec := do(t, mux, "POST", "/projects", `{"fullPath":"/work/web"}`)
+	var project2 struct {
+		ID int `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &project2)
+	sessionID2 := getSessionID(t, mux, project2.ID)
+
+	rec = do(t, mux, "GET", "/agents?projectId=1&sessionId="+strconv.Itoa(sessionID2), "")
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("invalid filter combo status = %d, want 400", rec.Code)
+	}
+}
+
+func getSessionID(t *testing.T, mux *http.ServeMux, projectID int) int {
+	t.Helper()
+	rec := do(t, mux, "GET", "/sessions?projectId="+strconv.Itoa(projectID), "")
+	var resp struct {
+		Sessions []struct {
+			ID int `json:"id"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode sessions: %v", err)
+	}
+	if len(resp.Sessions) == 0 {
+		t.Fatal("no sessions found")
+	}
+	return resp.Sessions[0].ID
+}
+
+func createProjectAndGetSession(t *testing.T, mux *http.ServeMux) (int, int) {
+	t.Helper()
+	rec := do(t, mux, "POST", "/projects", `{"fullPath":"/work/api"}`)
+	var project struct {
+		ID int `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &project)
+	sessionID := getSessionID(t, mux, project.ID)
+	return project.ID, sessionID
+}
+
+func createAgent(t *testing.T, mux *http.ServeMux, projectID, sessionID int) int {
+	t.Helper()
+	body := `{"projectId":` + strconv.Itoa(projectID) + `,"sessionId":` + strconv.Itoa(sessionID) + `,"kind":"opencode"}`
+	rec := do(t, mux, "POST", "/agents", body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create agent status = %d, want 201 (body: %s)", rec.Code, rec.Body)
+	}
+	var agent struct {
+		ID int `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &agent)
+	return agent.ID
 }

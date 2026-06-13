@@ -15,6 +15,7 @@ type DaemonState struct {
 	mu       sync.RWMutex
 	projects *MemoryProjectRepository
 	sessions *MemorySessionRepository
+	agents   *MemoryAgentRepository
 	config   domain.DaemonConfig
 }
 
@@ -22,13 +23,15 @@ func NewDaemonState() *DaemonState {
 	return &DaemonState{
 		projects: NewMemoryProjectRepository(),
 		sessions: NewMemorySessionRepository(),
+		agents:   NewMemoryAgentRepository(),
 		config:   domain.DefaultDaemonConfig(),
 	}
 }
 
 func (d *DaemonState) Projects() usecase.IProjectRepository { return d.projects }
-func (d *DaemonState) Sessions() usecase.ISessionRepository { return d.sessions }
-func (d *DaemonState) Config() domain.DaemonConfig          { return d.config }
+func (d *DaemonState) Sessions() usecase.ISessionRepository  { return d.sessions }
+func (d *DaemonState) Agents() usecase.IAgentRepository      { return d.agents }
+func (d *DaemonState) Config() domain.DaemonConfig            { return d.config }
 
 func (d *DaemonState) WithRead(fn func() error) error {
 	d.mu.RLock()

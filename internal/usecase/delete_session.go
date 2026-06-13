@@ -15,13 +15,14 @@ type DeleteSessionInput struct {
 
 type DeleteSession struct {
 	sessions ISessionRepository
+	agents   IAgentRepository
 	tmux     SessionGateway
 	git      GitWorktreeGateway
 	lock     StateLock
 }
 
-func NewDeleteSession(s ISessionRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock) *DeleteSession {
-	return &DeleteSession{sessions: s, tmux: tmux, git: git, lock: l}
+func NewDeleteSession(s ISessionRepository, a IAgentRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock) *DeleteSession {
+	return &DeleteSession{sessions: s, agents: a, tmux: tmux, git: git, lock: l}
 }
 
 func (uc *DeleteSession) Execute(ctx context.Context, in DeleteSessionInput) error {
@@ -66,6 +67,9 @@ func (uc *DeleteSession) Execute(ctx context.Context, in DeleteSessionInput) err
 	}
 
 	return uc.lock.WithWrite(func() error {
+		if err := uc.agents.DeleteBySessionID(ctx, session.ID()); err != nil {
+			return err
+		}
 		return uc.sessions.Delete(ctx, session.ID())
 	})
 }

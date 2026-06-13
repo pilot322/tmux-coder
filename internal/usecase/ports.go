@@ -6,6 +6,7 @@ package usecase
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 )
@@ -31,6 +32,8 @@ var ErrNotImplemented = errors.New("not implemented")
 
 // ErrSessionNotFound is returned when a Session id is unknown.
 var ErrSessionNotFound = errors.New("session not found")
+
+var ErrAgentNotFound = errors.New("agent not found")
 
 // IProjectRepository persists Projects. The repository assigns ids, so Create
 // returns the stored Project with its id set.
@@ -77,4 +80,26 @@ type SessionGateway interface {
 type StateLock interface {
 	WithRead(fn func() error) error
 	WithWrite(fn func() error) error
+}
+
+type IAgentRepository interface {
+	Create(ctx context.Context, a *domain.Agent) (*domain.Agent, error)
+	GetByID(ctx context.Context, id int) (*domain.Agent, error)
+	GetAll(ctx context.Context) ([]*domain.Agent, error)
+	GetBySessionID(ctx context.Context, sessionID int) ([]*domain.Agent, error)
+	Update(ctx context.Context, a *domain.Agent) (*domain.Agent, error)
+	Delete(ctx context.Context, id int) error
+	DeleteByProjectID(ctx context.Context, projectID int) error
+	DeleteBySessionID(ctx context.Context, sessionID int) error
+}
+
+type AgentTmuxGateway interface {
+	NewWindow(ctx context.Context, sessionName, workingDir, command string, env []string) (string, error)
+	PaneExists(ctx context.Context, paneID string) (bool, error)
+	KillPane(ctx context.Context, paneID string) error
+	ListPanes(ctx context.Context, sessionName string) ([]string, error)
+}
+
+type AgentProcessGateway interface {
+	TerminateProcessGroup(ctx context.Context, pgid int, sigtermTimeout time.Duration) error
 }

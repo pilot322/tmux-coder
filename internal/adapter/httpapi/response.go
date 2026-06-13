@@ -34,6 +34,8 @@ func writeUsecaseError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, usecase.ErrSessionNotFound):
 		writeError(w, http.StatusNotFound, err.Error())
+	case errors.Is(err, usecase.ErrAgentNotFound):
+		writeError(w, http.StatusNotFound, err.Error())
 	case errors.Is(err, usecase.ErrGateway):
 		writeError(w, http.StatusBadGateway, err.Error())
 	default:

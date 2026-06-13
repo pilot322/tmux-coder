@@ -52,6 +52,18 @@ func CurrentSession(ctx context.Context, getenv func(string) string) string {
 	return strings.TrimSpace(string(out))
 }
 
+func CurrentPaneID(ctx context.Context, getenv func(string) string) string {
+	if getenv("TMUX") == "" {
+		return ""
+	}
+	cmd := exec.CommandContext(ctx, "tmux", "display-message", "-p", "#{pane_id}")
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
+}
+
 func Run(ctx context.Context, sessionName string, getenv func(string) string) error {
 	commands := CommandsWithServer(tmuxserver.Label(getenv), sessionName, getenv("TMUX"))
 	for i, c := range commands {
