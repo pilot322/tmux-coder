@@ -81,6 +81,31 @@ func TestRunReturnsChildExitCode(t *testing.T) {
 	}
 }
 
+func TestRunReadsDaemonAddrFromConfigEnv(t *testing.T) {
+	script := writeExecutable(t, "agent", "#!/bin/sh\nexit 0\n")
+	client := &fakeClient{started: make(chan int, 1)}
+	var baseURL string
+
+	code := agentwrapper.Run(agentwrapper.RunConfig{
+		Args:           []string{"7", script},
+		Getenv:         func(string) string { return "" },
+		Env:            []string{"TMUX_CODERD_ADDR=127.0.0.1:7000"},
+		Stdout:         &bytes.Buffer{},
+		Stderr:         &bytes.Buffer{},
+		CommandContext: exec.CommandContext,
+		NewClient: func(url string, _ *http.Client) agentwrapper.AgentEventClient {
+			baseURL = url
+			return client
+		},
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if baseURL != "http://127.0.0.1:7000" {
+		t.Fatalf("baseURL = %q", baseURL)
+	}
+}
+
 func TestRunForwardsSignalsToChildProcessGroup(t *testing.T) {
 	dir := t.TempDir()
 	marker := filepath.Join(dir, "term")

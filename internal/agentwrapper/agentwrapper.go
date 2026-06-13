@@ -57,8 +57,13 @@ func Run(cfg RunConfig) int {
 	}
 	kind := cfg.Args[1]
 
-	daemonAddr := DaemonBaseURL(cfg.Getenv("TMUX_CODERD_ADDR"))
-	paneID := cfg.Getenv("TMUX_CODER_PANE_ID")
+	env := cfg.Env
+	if env == nil {
+		env = os.Environ()
+	}
+
+	daemonAddr := DaemonBaseURL(configValue(cfg.Getenv, env, "TMUX_CODERD_ADDR"))
+	paneID := configValue(cfg.Getenv, env, "TMUX_CODER_PANE_ID")
 	if paneID == "" {
 		paneID = CurrentPaneID(context.Background())
 	}
@@ -68,11 +73,6 @@ func Run(cfg RunConfig) int {
 	defer signal.Stop(sigCh)
 
 	api := cfg.NewClient(daemonAddr, nil)
-
-	env := cfg.Env
-	if env == nil {
-		env = os.Environ()
-	}
 
 	cmd := cfg.CommandContext(context.Background(), kind)
 	cmd.Stdin = cfg.Stdin
@@ -160,4 +160,19 @@ func WithEnv(env []string, values ...string) []string {
 		}
 	}
 	return out
+}
+
+func configValue(getenv func(string) string, env []string, key string) string {
+	if getenv != nil {
+		if value := getenv(key); value != "" {
+			return value
+		}
+	}
+	for _, value := range env {
+		name, v, ok := strings.Cut(value, "=")
+		if ok && name == key {
+			return v
+		}
+	}
+	return ""
 }
