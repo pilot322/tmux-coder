@@ -26,11 +26,11 @@ func TestCreateProject_NewProject(t *testing.T) {
 	if res.Project.Title() != "api" {
 		t.Errorf("Title = %q, want api", res.Project.Title())
 	}
-	if res.MainSessionName != "api-main" {
-		t.Errorf("MainSessionName = %q, want %q", res.MainSessionName, "api-main")
+	if res.MainSessionName != "api.main" {
+		t.Errorf("MainSessionName = %q, want %q", res.MainSessionName, "api.main")
 	}
-	if len(gw.created) != 1 || gw.created[0].name != "api-main" || gw.created[0].dir != "/work/api" {
-		t.Errorf("gateway.Create calls = %+v, want one {api-main /work/api}", gw.created)
+	if len(gw.created) != 1 || gw.created[0].name != "api_main" || gw.created[0].dir != "/work/api" {
+		t.Errorf("gateway.Create calls = %+v, want one {api_main /work/api}", gw.created)
 	}
 	if gw.ranUnderLock {
 		t.Errorf("ADR-0003 violated: tmux exec ran inside the write lock")
@@ -138,7 +138,7 @@ func TestCreateProject_ReconcilesMissingSessionOnDuplicate(t *testing.T) {
 
 	_, _ = uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api"})
 	// Simulate the tmux session having died between requests.
-	gw.exists["api-main"] = false
+	gw.exists["api_main"] = false
 
 	if _, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api"}); err != nil {
 		t.Fatalf("Execute (reconcile): %v", err)
@@ -157,7 +157,7 @@ func TestCreateProject_BumpsNameOnCrossProjectCollision(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if res.MainSessionName != "api-main-2" {
-		t.Errorf("MainSessionName = %q, want %q", res.MainSessionName, "api-main-2")
+	if res.MainSessionName != "api.main-2" {
+		t.Errorf("MainSessionName = %q, want %q", res.MainSessionName, "api.main-2")
 	}
 }

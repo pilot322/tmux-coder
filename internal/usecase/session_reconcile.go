@@ -33,12 +33,12 @@ func reconcileWorktreeSessions(ctx context.Context, sessions ISessionRepository,
 		if exists {
 			continue
 		}
-		tmuxExists, err := tmux.Exists(ctx, s.Name())
+		tmuxExists, err := tmux.Exists(ctx, s.TmuxName())
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrGateway, err)
 		}
 		if tmuxExists {
-			if err := tmux.Kill(ctx, s.Name()); err != nil {
+			if err := tmux.Kill(ctx, s.TmuxName()); err != nil {
 				return fmt.Errorf("%w: %v", ErrGateway, err)
 			}
 		}

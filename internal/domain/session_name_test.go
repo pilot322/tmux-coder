@@ -22,13 +22,13 @@ func TestDeriveMainSessionName(t *testing.T) {
 		isTaken func(string) bool
 		want    string
 	}{
-		{"basename plus -main suffix", "/work/api", taken(), "api-main"},
-		{"numeric suffix on first collision", "/work/api", taken("api-main"), "api-main-2"},
-		{"keeps bumping past multiple collisions", "/work/api", taken("api-main", "api-main-2"), "api-main-3"},
-		{"sanitizes dots", "/work/my.api", taken(), "my-api-main"},
-		{"sanitizes colons", "/work/web:cache", taken(), "web-cache-main"},
-		{"sanitizes whitespace", "/work/my service", taken(), "my-service-main"},
-		{"ignores trailing slash", "/work/api/", taken(), "api-main"},
+		{"basename plus .main suffix", "/work/api", taken(), "api.main"},
+		{"numeric suffix on first collision", "/work/api", taken("api.main"), "api.main-2"},
+		{"keeps bumping past multiple collisions", "/work/api", taken("api.main", "api.main-2"), "api.main-3"},
+		{"sanitizes dots", "/work/my.api", taken(), "my-api.main"},
+		{"sanitizes colons", "/work/web:cache", taken(), "web-cache.main"},
+		{"sanitizes whitespace", "/work/my service", taken(), "my-service.main"},
+		{"ignores trailing slash", "/work/api/", taken(), "api.main"},
 	}
 
 	for _, tt := range tests {
@@ -61,5 +61,12 @@ func TestDeriveWorktreeSessionName(t *testing.T) {
 				t.Errorf("DeriveWorktreeSessionName(%q, %q) = %q, want %q", tt.path, tt.branch, got, tt.want)
 			}
 		})
+	}
+}
+
+func TestDeriveTmuxSessionNameReplacesDotSeparators(t *testing.T) {
+	got := domain.DeriveTmuxSessionName("api.feature-login")
+	if got != "api_feature-login" {
+		t.Fatalf("DeriveTmuxSessionName() = %q, want %q", got, "api_feature-login")
 	}
 }

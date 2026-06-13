@@ -13,10 +13,11 @@ import (
 )
 
 type Project struct {
-	ID              int    `json:"id"`
-	Title           string `json:"title"`
-	FullPath        string `json:"fullPath"`
-	MainSessionName string `json:"mainSessionName"`
+	ID                  int    `json:"id"`
+	Title               string `json:"title"`
+	FullPath            string `json:"fullPath"`
+	MainSessionName     string `json:"mainSessionName"`
+	MainTmuxSessionName string `json:"mainTmuxSessionName"`
 }
 
 type Session struct {
@@ -25,6 +26,7 @@ type Session struct {
 	ProjectID   int     `json:"projectId"`
 	Name        string  `json:"name"`
 	SessionName string  `json:"sessionName"`
+	TmuxName    string  `json:"tmuxSessionName"`
 	Type        string  `json:"type"`
 	Branch      string  `json:"branch,omitempty"`
 	Worktree    string  `json:"worktreePath,omitempty"`

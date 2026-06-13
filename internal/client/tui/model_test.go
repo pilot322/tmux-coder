@@ -45,14 +45,14 @@ func (a *fakeAPI) DeleteProject(_ context.Context, id int) error {
 func TestModelEnterSelectsProjectMainSessionAndQuits(t *testing.T) {
 	m := NewModel(context.Background(), &fakeAPI{})
 	updated, _ := m.Update(listMsg{
-		projects: []httpclient.Project{{ID: 1, MainSessionName: "api-main"}},
-		sessions: []httpclient.Session{{ProjectID: 1, SessionName: "api-main", Type: "main"}},
+		projects: []httpclient.Project{{ID: 1, MainSessionName: "api.main", MainTmuxSessionName: "api_main"}},
+		sessions: []httpclient.Session{{ProjectID: 1, SessionName: "api.main", TmuxName: "api_main", Type: "main"}},
 	})
 	m = updated.(Model)
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
 
-	if m.attach != "api-main" {
+	if m.attach != "api_main" {
 		t.Fatalf("attach = %+v", m.attach)
 	}
 	if cmd == nil {

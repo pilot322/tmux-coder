@@ -55,12 +55,12 @@ func (uc *DeleteSession) Execute(ctx context.Context, in DeleteSessionInput) err
 		}
 		return fmt.Errorf("%w: %v", ErrGateway, err)
 	}
-	exists, err := uc.tmux.Exists(ctx, session.Name())
+	exists, err := uc.tmux.Exists(ctx, session.TmuxName())
 	if err != nil {
 		return fmt.Errorf("%w: %v", ErrGateway, err)
 	}
 	if exists {
-		if err := uc.tmux.Kill(ctx, session.Name()); err != nil {
+		if err := uc.tmux.Kill(ctx, session.TmuxName()); err != nil {
 			return fmt.Errorf("%w: %v", ErrGateway, err)
 		}
 	}

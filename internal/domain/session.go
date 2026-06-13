@@ -1,5 +1,7 @@
 package domain
 
+import "strings"
+
 // SessionType enumerates the kinds of Session tmux-coder manages.
 type SessionType uint8
 
@@ -10,12 +12,13 @@ const (
 )
 
 // Session is a 1:1 wrapper around a tmux session on the dedicated server.
-// name is also the tmux target name and must be unique on that server.
+// name is the user-facing name; tmuxName is the actual tmux target name.
 type Session struct {
 	id        int
 	parent    int // -1 means parentless
 	projectID int
 	name      string
+	tmuxName  string
 	kind      SessionType
 	branch    string
 	worktree  string
@@ -28,6 +31,7 @@ func NewSession(id, parent, projectID int, name string, kind SessionType) *Sessi
 		parent:    parent,
 		projectID: projectID,
 		name:      name,
+		tmuxName:  DeriveTmuxSessionName(name),
 		kind:      kind,
 	}
 }
@@ -40,16 +44,22 @@ func NewWorktreeSession(id, projectID int, name, branch, worktree string) *Sessi
 		parent:    -1,
 		projectID: projectID,
 		name:      name,
+		tmuxName:  DeriveTmuxSessionName(name),
 		kind:      WorktreeSession,
 		branch:    branch,
 		worktree:  worktree,
 	}
 }
 
+func DeriveTmuxSessionName(name string) string {
+	return strings.ReplaceAll(name, ".", "_")
+}
+
 func (s *Session) ID() int           { return s.id }
 func (s *Session) Parent() int       { return s.parent }
 func (s *Session) ProjectID() int    { return s.projectID }
 func (s *Session) Name() string      { return s.name }
+func (s *Session) TmuxName() string  { return s.tmuxName }
 func (s *Session) Type() SessionType { return s.kind }
 func (s *Session) Branch() string    { return s.branch }
 func (s *Session) WorktreePath() string {

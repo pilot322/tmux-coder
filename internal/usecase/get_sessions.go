@@ -21,9 +21,10 @@ type GetSessionsInput struct {
 }
 
 type SessionView struct {
-	Session         *domain.Session
-	Project         *domain.Project
-	MainSessionName string
+	Session             *domain.Session
+	Project             *domain.Project
+	MainSessionName     string
+	MainTmuxSessionName string
 }
 
 type GetSessions struct {
@@ -51,10 +52,10 @@ func (uc *GetSessions) Execute(ctx context.Context, in GetSessionsInput) ([]Sess
 		for _, p := range projects {
 			projectsByID[p.ID()] = p
 		}
-		mainByProject := make(map[int]string)
+		mainByProject := make(map[int]*domain.Session)
 		for _, s := range sessions {
 			if s.Type() == domain.MainSession {
-				mainByProject[s.ProjectID()] = s.Name()
+				mainByProject[s.ProjectID()] = s
 			}
 		}
 
@@ -70,7 +71,12 @@ func (uc *GetSessions) Execute(ctx context.Context, in GetSessionsInput) ([]Sess
 			if p == nil {
 				continue
 			}
-			views = append(views, SessionView{Session: s, Project: p, MainSessionName: mainByProject[p.ID()]})
+			view := SessionView{Session: s, Project: p}
+			if main := mainByProject[p.ID()]; main != nil {
+				view.MainSessionName = main.Name()
+				view.MainTmuxSessionName = main.TmuxName()
+			}
+			views = append(views, view)
 		}
 		return nil
 	})

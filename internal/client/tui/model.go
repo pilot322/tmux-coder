@@ -376,7 +376,7 @@ func (m *Model) selectInitialSession() {
 	defer func() { m.initialSession = "" }()
 	rows := m.sessionRows()
 	for i, s := range rows {
-		if sessionName(s) == m.initialSession {
+		if sessionName(s) == m.initialSession || tmuxSessionName(s) == m.initialSession {
 			m.selectedSession = i
 			return
 		}
@@ -449,13 +449,13 @@ func (m Model) attachTarget() (string, bool) {
 		if m.selectedSession < 0 || m.selectedSession >= len(rows) {
 			return "", false
 		}
-		return sessionName(rows[m.selectedSession]), true
+		return tmuxSessionName(rows[m.selectedSession]), true
 	}
 	project, ok := m.selectedProject()
 	if !ok {
 		return "", false
 	}
-	return project.MainSessionName, true
+	return project.MainTmuxSessionName, true
 }
 
 func (m Model) mainSessionIndexForSelectedProject() int {
@@ -495,4 +495,11 @@ func sessionName(s httpclient.Session) string {
 		return s.SessionName
 	}
 	return s.Name
+}
+
+func tmuxSessionName(s httpclient.Session) string {
+	if s.TmuxName != "" {
+		return s.TmuxName
+	}
+	return sessionName(s)
 }

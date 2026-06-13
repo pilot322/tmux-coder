@@ -15,9 +15,10 @@ type CreateProjectInput struct {
 }
 
 type CreateProjectResult struct {
-	Project         *domain.Project
-	MainSessionName string
-	Created         bool // true if newly created, false if it already existed
+	Project             *domain.Project
+	MainSessionName     string
+	MainTmuxSessionName string
+	Created             bool // true if newly created, false if it already existed
 }
 
 type CreateProject struct {
@@ -79,19 +80,19 @@ func (uc *CreateProject) Execute(ctx context.Context, in CreateProjectInput) (Cr
 		if err := uc.reconcile(ctx, existing); err != nil {
 			return CreateProjectResult{}, err
 		}
-		name, err := uc.mainSessionName(ctx, existing.ID())
+		main, err := uc.mainSession(ctx, existing.ID())
 		if err != nil {
 			return CreateProjectResult{}, err
 		}
-		return CreateProjectResult{Project: existing, MainSessionName: name, Created: false}, nil
+		return CreateProjectResult{Project: existing, MainSessionName: main.Name(), MainTmuxSessionName: main.TmuxName(), Created: false}, nil
 	}
 
-	if err := uc.gateway.Create(ctx, session.Name(), project.FullPath()); err != nil {
+	if err := uc.gateway.Create(ctx, session.TmuxName(), project.FullPath()); err != nil {
 		uc.rollback(ctx, project.ID(), session.ID())
 		return CreateProjectResult{}, fmt.Errorf("%w: %v", ErrGateway, err)
 	}
 
-	return CreateProjectResult{Project: project, MainSessionName: session.Name(), Created: true}, nil
+	return CreateProjectResult{Project: project, MainSessionName: session.Name(), MainTmuxSessionName: session.TmuxName(), Created: true}, nil
 }
 
 func (uc *CreateProject) projectTitle(in CreateProjectInput) (string, error) {
@@ -134,22 +135,22 @@ func (uc *CreateProject) reconcile(ctx context.Context, project *domain.Project)
 		if s.Type() == domain.WorktreeSession {
 			continue
 		}
-		exists, err := uc.gateway.Exists(ctx, s.Name())
+		exists, err := uc.gateway.Exists(ctx, s.TmuxName())
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrGateway, err)
 		}
 		if exists {
 			continue
 		}
-		if err := uc.gateway.Create(ctx, s.Name(), project.FullPath()); err != nil {
+		if err := uc.gateway.Create(ctx, s.TmuxName(), project.FullPath()); err != nil {
 			return fmt.Errorf("%w: %v", ErrGateway, err)
 		}
 	}
 	return nil
 }
 
-func (uc *CreateProject) mainSessionName(ctx context.Context, projectID int) (string, error) {
-	var name string
+func (uc *CreateProject) mainSession(ctx context.Context, projectID int) (*domain.Session, error) {
+	var main *domain.Session
 	err := uc.lock.WithRead(func() error {
 		sessions, err := uc.sessions.GetByProjectID(ctx, projectID)
 		if err != nil {
@@ -157,13 +158,13 @@ func (uc *CreateProject) mainSessionName(ctx context.Context, projectID int) (st
 		}
 		for _, s := range sessions {
 			if s.Type() == domain.MainSession {
-				name = s.Name()
+				main = s
 				return nil
 			}
 		}
 		return nil
 	})
-	return name, err
+	return main, err
 }
 
 func (uc *CreateProject) rollback(ctx context.Context, projectID, sessionID int) {

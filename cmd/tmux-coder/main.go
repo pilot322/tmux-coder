@@ -47,7 +47,7 @@ func run(ctx context.Context, args []string, getenv func(string) string, getwd f
 		if err != nil {
 			return err
 		}
-		return tmuxattach.Run(ctx, project.MainSessionName, getenv)
+		return tmuxattach.Run(ctx, project.MainTmuxSessionName, getenv)
 	}
 	return fmt.Errorf("usage: tmux-coder [open|o]")
 }

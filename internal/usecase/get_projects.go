@@ -9,8 +9,9 @@ import (
 // ProjectView is a Project paired with its resolved main-session name, since
 // the name lives on the Main Session record, not on the Project.
 type ProjectView struct {
-	Project         *domain.Project
-	MainSessionName string
+	Project             *domain.Project
+	MainSessionName     string
+	MainTmuxSessionName string
 }
 
 type GetProjects struct {
@@ -37,16 +38,22 @@ func (uc *GetProjects) Execute(ctx context.Context) ([]ProjectView, error) {
 			return err
 		}
 
-		mainByProject := make(map[int]string)
+		mainByProject := make(map[int]*domain.Session)
 		for _, s := range sessions {
 			if s.Type() == domain.MainSession {
-				mainByProject[s.ProjectID()] = s.Name()
+				mainByProject[s.ProjectID()] = s
 			}
 		}
 
 		views = make([]ProjectView, 0, len(projects))
 		for _, p := range projects {
-			views = append(views, ProjectView{Project: p, MainSessionName: mainByProject[p.ID()]})
+			main := mainByProject[p.ID()]
+			view := ProjectView{Project: p}
+			if main != nil {
+				view.MainSessionName = main.Name()
+				view.MainTmuxSessionName = main.TmuxName()
+			}
+			views = append(views, view)
 		}
 		return nil
 	})

@@ -45,10 +45,11 @@ func (pc *ProjectController) Create(w http.ResponseWriter, r *http.Request) {
 		status = http.StatusCreated
 	}
 	writeJSON(w, status, projectResponse{
-		ID:              res.Project.ID(),
-		Title:           res.Project.Title(),
-		FullPath:        res.Project.FullPath(),
-		MainSessionName: res.MainSessionName,
+		ID:                  res.Project.ID(),
+		Title:               res.Project.Title(),
+		FullPath:            res.Project.FullPath(),
+		MainSessionName:     res.MainSessionName,
+		MainTmuxSessionName: res.MainTmuxSessionName,
 	})
 }
 
@@ -63,10 +64,11 @@ func (pc *ProjectController) List(w http.ResponseWriter, r *http.Request) {
 	resp := projectsResponse{Projects: make([]projectResponse, 0, len(views))}
 	for _, v := range views {
 		resp.Projects = append(resp.Projects, projectResponse{
-			ID:              v.Project.ID(),
-			Title:           v.Project.Title(),
-			FullPath:        v.Project.FullPath(),
-			MainSessionName: v.MainSessionName,
+			ID:                  v.Project.ID(),
+			Title:               v.Project.Title(),
+			FullPath:            v.Project.FullPath(),
+			MainSessionName:     v.MainSessionName,
+			MainTmuxSessionName: v.MainTmuxSessionName,
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)
@@ -119,7 +121,7 @@ func (sc *SessionController) List(w http.ResponseWriter, r *http.Request) {
 	}
 	resp := sessionsResponse{Sessions: make([]sessionResponse, 0, len(views))}
 	for _, v := range views {
-		resp.Sessions = append(resp.Sessions, sessionDTO(v.Session, v.Project, v.MainSessionName))
+		resp.Sessions = append(resp.Sessions, sessionDTO(v.Session, v.Project, v.MainSessionName, v.MainTmuxSessionName))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -154,7 +156,7 @@ func (sc *SessionController) Create(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, v := range views {
 		if v.Session.ID() == s.ID() {
-			writeJSON(w, http.StatusCreated, sessionDTO(v.Session, v.Project, v.MainSessionName))
+			writeJSON(w, http.StatusCreated, sessionDTO(v.Session, v.Project, v.MainSessionName, v.MainTmuxSessionName))
 			return
 		}
 	}
@@ -222,21 +224,23 @@ func parseBoolQuery(raw string) (bool, error) {
 	}
 }
 
-func sessionDTO(s *domain.Session, p *domain.Project, mainSessionName string) sessionResponse {
+func sessionDTO(s *domain.Session, p *domain.Project, mainSessionName, mainTmuxSessionName string) sessionResponse {
 	return sessionResponse{
 		ID:          s.ID(),
 		Parent:      s.Parent(),
 		ProjectID:   s.ProjectID(),
 		Name:        s.Name(),
 		SessionName: s.Name(),
+		TmuxName:    s.TmuxName(),
 		Type:        sessionTypeString(s.Type()),
 		Branch:      s.Branch(),
 		Worktree:    s.WorktreePath(),
 		Project: projectResponse{
-			ID:              p.ID(),
-			Title:           p.Title(),
-			FullPath:        p.FullPath(),
-			MainSessionName: mainSessionName,
+			ID:                  p.ID(),
+			Title:               p.Title(),
+			FullPath:            p.FullPath(),
+			MainSessionName:     mainSessionName,
+			MainTmuxSessionName: mainTmuxSessionName,
 		},
 	}
 }

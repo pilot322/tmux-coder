@@ -90,15 +90,16 @@ func TestPostProjects_CreatesThenReturnsExisting(t *testing.T) {
 		t.Fatalf("first POST status = %d, want 201 (body: %s)", rec.Code, rec.Body)
 	}
 	var created struct {
-		ID              int    `json:"id"`
-		Title           string `json:"title"`
-		FullPath        string `json:"fullPath"`
-		MainSessionName string `json:"mainSessionName"`
+		ID                  int    `json:"id"`
+		Title               string `json:"title"`
+		FullPath            string `json:"fullPath"`
+		MainSessionName     string `json:"mainSessionName"`
+		MainTmuxSessionName string `json:"mainTmuxSessionName"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if created.ID == 0 || created.Title != "api" || created.MainSessionName != "api-main" || created.FullPath != "/work/api" {
+	if created.ID == 0 || created.Title != "api" || created.MainSessionName != "api.main" || created.MainTmuxSessionName != "api_main" || created.FullPath != "/work/api" {
 		t.Errorf("unexpected body: %+v", created)
 	}
 
@@ -209,17 +210,19 @@ func TestGetSessions_ListsMainSessionWithProjectTitle(t *testing.T) {
 	var resp struct {
 		Sessions []struct {
 			SessionName string `json:"sessionName"`
+			TmuxName    string `json:"tmuxSessionName"`
 			Type        string `json:"type"`
 			Project     struct {
-				Title           string `json:"title"`
-				MainSessionName string `json:"mainSessionName"`
+				Title               string `json:"title"`
+				MainSessionName     string `json:"mainSessionName"`
+				MainTmuxSessionName string `json:"mainTmuxSessionName"`
 			} `json:"project"`
 		} `json:"sessions"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if len(resp.Sessions) != 1 || resp.Sessions[0].SessionName != "api-main" || resp.Sessions[0].Type != "main" || resp.Sessions[0].Project.Title != "Backend API" || resp.Sessions[0].Project.MainSessionName != "api-main" {
+	if len(resp.Sessions) != 1 || resp.Sessions[0].SessionName != "api.main" || resp.Sessions[0].TmuxName != "api_main" || resp.Sessions[0].Type != "main" || resp.Sessions[0].Project.Title != "Backend API" || resp.Sessions[0].Project.MainSessionName != "api.main" || resp.Sessions[0].Project.MainTmuxSessionName != "api_main" {
 		t.Fatalf("unexpected sessions: %+v", resp.Sessions)
 	}
 }
@@ -240,6 +243,7 @@ func TestPostSessions_CreatesWorktreeSessionAndRejectsDuplicateBranch(t *testing
 	var session struct {
 		ID          int    `json:"id"`
 		SessionName string `json:"sessionName"`
+		TmuxName    string `json:"tmuxSessionName"`
 		Type        string `json:"type"`
 		Branch      string `json:"branch"`
 		Worktree    string `json:"worktreePath"`
@@ -247,7 +251,7 @@ func TestPostSessions_CreatesWorktreeSessionAndRejectsDuplicateBranch(t *testing
 	if err := json.Unmarshal(rec.Body.Bytes(), &session); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if session.ID == 0 || session.SessionName != "api.feature-login" || session.Type != "worktree" || session.Branch != "feature/login" || session.Worktree != "/work/api.feature-login" {
+	if session.ID == 0 || session.SessionName != "api.feature-login" || session.TmuxName != "api_feature-login" || session.Type != "worktree" || session.Branch != "feature/login" || session.Worktree != "/work/api.feature-login" {
 		t.Fatalf("unexpected session: %+v", session)
 	}
 

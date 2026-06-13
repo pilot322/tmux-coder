@@ -36,14 +36,14 @@ func (uc *DeleteProject) Execute(ctx context.Context, id int) error {
 	}
 
 	for _, s := range sessions {
-		exists, err := uc.gateway.Exists(ctx, s.Name())
+		exists, err := uc.gateway.Exists(ctx, s.TmuxName())
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrGateway, err)
 		}
 		if !exists {
 			continue
 		}
-		if err := uc.gateway.Kill(ctx, s.Name()); err != nil {
+		if err := uc.gateway.Kill(ctx, s.TmuxName()); err != nil {
 			return fmt.Errorf("%w: %v", ErrGateway, err)
 		}
 	}

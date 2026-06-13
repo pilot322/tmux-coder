@@ -16,7 +16,7 @@ func TestClientListCreateDeleteProjects(t *testing.T) {
 		switch r.Method + " " + r.URL.Path {
 		case "GET /projects":
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"projects":[{"id":1,"title":"API","fullPath":"/work/api","mainSessionName":"api-main"}]}`))
+			_, _ = w.Write([]byte(`{"projects":[{"id":1,"title":"API","fullPath":"/work/api","mainSessionName":"api.main","mainTmuxSessionName":"api_main"}]}`))
 		case "POST /projects":
 			var req struct {
 				Title *string `json:"title"`
@@ -26,7 +26,7 @@ func TestClientListCreateDeleteProjects(t *testing.T) {
 				t.Fatalf("request title = %v, want Web", req.Title)
 			}
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"id":2,"title":"Web","fullPath":"/work/web","mainSessionName":"web-main"}`))
+			_, _ = w.Write([]byte(`{"id":2,"title":"Web","fullPath":"/work/web","mainSessionName":"web.main","mainTmuxSessionName":"web_main"}`))
 		case "DELETE /projects/2":
 			deleted = true
 			w.WriteHeader(http.StatusNoContent)
@@ -41,7 +41,7 @@ func TestClientListCreateDeleteProjects(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list: %v", err)
 	}
-	if len(projects) != 1 || projects[0].Title != "API" || projects[0].MainSessionName != "api-main" {
+	if len(projects) != 1 || projects[0].Title != "API" || projects[0].MainSessionName != "api.main" || projects[0].MainTmuxSessionName != "api_main" {
 		t.Fatalf("unexpected projects: %+v", projects)
 	}
 	created, err := c.CreateProject(context.Background(), "/work/web", "Web")
@@ -82,7 +82,7 @@ func TestClientListCreateDeleteSessions(t *testing.T) {
 				t.Fatalf("query = %q, want type=worktree&projectId=7", r.URL.RawQuery)
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"sessions":[{"id":3,"projectId":7,"name":"api-feature","sessionName":"api-feature","type":"worktree","branch":"feature","worktreePath":"/work/api-feature","project":{"id":7,"title":"API","fullPath":"/work/api"}}]}`))
+			_, _ = w.Write([]byte(`{"sessions":[{"id":3,"projectId":7,"name":"api.feature","sessionName":"api.feature","tmuxSessionName":"api_feature","type":"worktree","branch":"feature","worktreePath":"/work/api.feature","project":{"id":7,"title":"API","fullPath":"/work/api"}}]}`))
 		case "POST /sessions":
 			var req httpclient.CreateSessionInput
 			_ = json.NewDecoder(r.Body).Decode(&req)
@@ -90,7 +90,7 @@ func TestClientListCreateDeleteSessions(t *testing.T) {
 				t.Fatalf("request = %+v", req)
 			}
 			w.WriteHeader(http.StatusCreated)
-			_, _ = w.Write([]byte(`{"id":4,"projectId":7,"name":"api-feature","sessionName":"api-feature","type":"worktree","branch":"feature","worktreePath":"/work/api-feature","project":{"id":7,"title":"API","fullPath":"/work/api"}}`))
+			_, _ = w.Write([]byte(`{"id":4,"projectId":7,"name":"api.feature","sessionName":"api.feature","tmuxSessionName":"api_feature","type":"worktree","branch":"feature","worktreePath":"/work/api.feature","project":{"id":7,"title":"API","fullPath":"/work/api"}}`))
 		case "DELETE /sessions/4":
 			if r.URL.Query().Get("force") != "true" {
 				t.Fatalf("force query = %q, want true", r.URL.RawQuery)
@@ -109,14 +109,14 @@ func TestClientListCreateDeleteSessions(t *testing.T) {
 	if err != nil {
 		t.Fatalf("list sessions: %v", err)
 	}
-	if len(sessions) != 1 || sessions[0].SessionName != "api-feature" || sessions[0].Project.Title != "API" {
+	if len(sessions) != 1 || sessions[0].SessionName != "api.feature" || sessions[0].TmuxName != "api_feature" || sessions[0].Project.Title != "API" {
 		t.Fatalf("unexpected sessions: %+v", sessions)
 	}
 	created, err := c.CreateSession(context.Background(), httpclient.CreateSessionInput{ProjectID: 7, Type: "worktree", Branch: "feature", Create: true, BaseBranch: "main"})
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
-	if created.ID != 4 || created.Worktree != "/work/api-feature" {
+	if created.ID != 4 || created.Worktree != "/work/api.feature" || created.TmuxName != "api_feature" {
 		t.Fatalf("unexpected created session: %+v", created)
 	}
 	if err := c.DeleteSession(context.Background(), 4, true); err != nil {

@@ -11,7 +11,7 @@ import (
 )
 
 // deleteFixture seeds one project and returns a DeleteProject wired to the same
-// repos, gateway and lock, plus the created project's id and main session name.
+// repos, gateway and lock, plus the created project's id and tmux session name.
 func deleteFixture(ctx context.Context) (*usecase.DeleteProject, *memory.MemoryProjectRepository, *fakeGateway, int, string) {
 	projects := memory.NewMemoryProjectRepository()
 	sessions := memory.NewMemorySessionRepository()
@@ -22,7 +22,7 @@ func deleteFixture(ctx context.Context) (*usecase.DeleteProject, *memory.MemoryP
 	res, _ := create.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api"})
 
 	del := usecase.NewDeleteProject(projects, sessions, gw, lock)
-	return del, projects, gw, res.Project.ID(), res.MainSessionName
+	return del, projects, gw, res.Project.ID(), res.MainTmuxSessionName
 }
 
 func TestDeleteProject_KillsSessionsAndRemovesRecords(t *testing.T) {

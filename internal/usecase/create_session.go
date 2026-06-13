@@ -126,7 +126,8 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 	}
 	worktreeCreated := true
 
-	if err := uc.tmux.Create(ctx, name, worktreePath); err != nil {
+	tmuxName := domain.DeriveTmuxSessionName(name)
+	if err := uc.tmux.Create(ctx, tmuxName, worktreePath); err != nil {
 		uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
 		return nil, fmt.Errorf("%w: %v", ErrGateway, err)
 	}
@@ -137,7 +138,7 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 		session = s
 		return err
 	}); err != nil {
-		_ = uc.tmux.Kill(ctx, name)
+		_ = uc.tmux.Kill(ctx, tmuxName)
 		uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
 		return nil, err
 	}
