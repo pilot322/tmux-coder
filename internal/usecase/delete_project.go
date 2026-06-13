@@ -10,12 +10,13 @@ import (
 type DeleteProject struct {
 	projects IProjectRepository
 	sessions ISessionRepository
+	agents   IAgentRepository
 	gateway  SessionGateway
 	lock     StateLock
 }
 
-func NewDeleteProject(p IProjectRepository, s ISessionRepository, g SessionGateway, l StateLock) *DeleteProject {
-	return &DeleteProject{projects: p, sessions: s, gateway: g, lock: l}
+func NewDeleteProject(p IProjectRepository, s ISessionRepository, a IAgentRepository, g SessionGateway, l StateLock) *DeleteProject {
+	return &DeleteProject{projects: p, sessions: s, agents: a, gateway: g, lock: l}
 }
 
 // Execute removes a Project and its Sessions. It returns ErrProjectNotFound
@@ -49,6 +50,9 @@ func (uc *DeleteProject) Execute(ctx context.Context, id int) error {
 	}
 
 	return uc.lock.WithWrite(func() error {
+		if err := uc.agents.DeleteByProjectID(ctx, id); err != nil {
+			return err
+		}
 		for _, s := range sessions {
 			if err := uc.sessions.Delete(ctx, s.ID()); err != nil {
 				return err

@@ -12,22 +12,23 @@ import (
 
 // deleteFixture seeds one project and returns a DeleteProject wired to the same
 // repos, gateway and lock, plus the created project's id and tmux session name.
-func deleteFixture(ctx context.Context) (*usecase.DeleteProject, *memory.MemoryProjectRepository, *fakeGateway, int, string) {
+func deleteFixture(ctx context.Context) (*usecase.DeleteProject, *memory.MemoryProjectRepository, *memory.MemoryAgentRepository, *fakeGateway, int, string) {
 	projects := memory.NewMemoryProjectRepository()
 	sessions := memory.NewMemorySessionRepository()
+	agents := memory.NewMemoryAgentRepository()
 	lock := &spyLock{}
 	gw := newFakeGateway(lock)
 
 	create := usecase.NewCreateProject(projects, sessions, gw, lock, domain.DefaultDaemonConfig())
 	res, _ := create.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api"})
 
-	del := usecase.NewDeleteProject(projects, sessions, gw, lock)
-	return del, projects, gw, res.Project.ID(), res.MainTmuxSessionName
+	del := usecase.NewDeleteProject(projects, sessions, agents, gw, lock)
+	return del, projects, agents, gw, res.Project.ID(), res.MainTmuxSessionName
 }
 
 func TestDeleteProject_KillsSessionsAndRemovesRecords(t *testing.T) {
 	ctx := context.Background()
-	del, projects, gw, id, mainName := deleteFixture(ctx)
+	del, projects, _, gw, id, mainName := deleteFixture(ctx)
 
 	if err := del.Execute(ctx, id); err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -42,7 +43,7 @@ func TestDeleteProject_KillsSessionsAndRemovesRecords(t *testing.T) {
 
 func TestDeleteProject_UnknownIDReturnsNotFound(t *testing.T) {
 	ctx := context.Background()
-	del, _, _, _, _ := deleteFixture(ctx)
+	del, _, _, _, _, _ := deleteFixture(ctx)
 
 	if err := del.Execute(ctx, 9999); !errors.Is(err, usecase.ErrProjectNotFound) {
 		t.Fatalf("want ErrProjectNotFound, got %v", err)
@@ -51,7 +52,7 @@ func TestDeleteProject_UnknownIDReturnsNotFound(t *testing.T) {
 
 func TestDeleteProject_GatewayKillFailureKeepsRecords(t *testing.T) {
 	ctx := context.Background()
-	del, projects, gw, id, _ := deleteFixture(ctx)
+	del, projects, _, gw, id, _ := deleteFixture(ctx)
 	gw.killErr = errors.New("tmux refused")
 
 	if err := del.Execute(ctx, id); !errors.Is(err, usecase.ErrGateway) {
@@ -59,5 +60,19 @@ func TestDeleteProject_GatewayKillFailureKeepsRecords(t *testing.T) {
 	}
 	if _, err := projects.GetByID(ctx, id); err != nil {
 		t.Errorf("records should be kept on kill failure, got %v", err)
+	}
+}
+
+func TestDeleteProject_RemovesAgentRecords(t *testing.T) {
+	ctx := context.Background()
+	del, _, agents, _, id, _ := deleteFixture(ctx)
+	_, _ = agents.Create(ctx, domain.NewAgent(0, id, 1, "opencode", "", "%1", true, domain.AgentStarting))
+
+	if err := del.Execute(ctx, id); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	all, _ := agents.GetAll(ctx)
+	if len(all) != 0 {
+		t.Fatalf("agents should be gone after project delete: %+v", all)
 	}
 }
