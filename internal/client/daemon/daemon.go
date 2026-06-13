@@ -6,8 +6,9 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"time"
+
+	"github.com/pilot322/tmux-coder/internal/binresolve"
 )
 
 const DefaultPort = "64357"
@@ -28,20 +29,7 @@ func Address(getenv func(string) string) string {
 }
 
 func ResolveBinary(executable string, lookPath func(string) (string, error)) (string, error) {
-	if executable != "" {
-		sibling := filepath.Join(filepath.Dir(executable), "tmux-coderd")
-		if info, err := os.Stat(sibling); err == nil && !info.IsDir() {
-			return sibling, nil
-		}
-	}
-	if lookPath == nil {
-		lookPath = exec.LookPath
-	}
-	path, err := lookPath("tmux-coderd")
-	if err != nil {
-		return "", fmt.Errorf("find tmux-coderd: %w", err)
-	}
-	return path, nil
+	return binresolve.ResolveSiblingThenPath(executable, "tmux-coderd", lookPath)
 }
 
 func Ensure(ctx context.Context, addr string, starter Starter) (string, error) {
