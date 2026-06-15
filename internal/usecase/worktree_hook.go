@@ -70,7 +70,7 @@ type worktreeHookConfig struct {
 }
 
 func loadWorktreeHookConfig(projectRoot string) (worktreeHookConfig, error) {
-	path := filepath.Join(projectRoot, ".tmux-coder.toml")
+	path := filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml")
 	file, err := os.Open(path)
 	if err != nil {
 		if os.IsNotExist(err) {

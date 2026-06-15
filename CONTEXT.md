@@ -5,7 +5,7 @@ A CLI tool that wraps a dedicated tmux server to manage projects with multiple w
 ## Language
 
 **Project**:
-A base directory managed by tmux-coder, with all **Sessions** attributed to it. A **Project** has a mutable title used only as its display label; it may contain a `.tmux-coder.toml` **Config File** for declarative behavior.
+A base directory managed by tmux-coder, with all **Sessions** attributed to it. A **Project** has a mutable title used only as its display label; it may contain a `.tmux-coder/.tmux-coder.toml` **Config File** for declarative behavior.
 _Avoid_: Workspace, repository
 
 **Session**:
@@ -72,8 +72,8 @@ _Avoid_: Lock, allocation
 A **Resource Lease** for a TCP port value used by a **Project**'s runnable local environment.
 _Avoid_: Port setting, env var
 
-**Config File** (`.tmux-coder.toml`):
-A TOML file at a **Project**'s root that declares **Secondary Sessions**, environment variables, and hooks. Checked into version control. Most runtime state (**Sessions**, **Agent Registry**) lives only in the **Daemon**'s memory and is rebuilt on start; durable persistence (eventually SQLite) is limited to **Projects**.
+**Config File** (`.tmux-coder/.tmux-coder.toml`):
+A TOML file inside a **Project** at `.tmux-coder/.tmux-coder.toml` that declares **Secondary Sessions**, environment variables, and hooks. Checked into version control. Most runtime state (**Sessions**, **Agent Registry**) lives only in the **Daemon**'s memory and is rebuilt on start; durable persistence (eventually SQLite) is limited to **Projects**.
 _Avoid_: Settings, project file, manifest
 
 ## Example dialogue

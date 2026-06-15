@@ -25,7 +25,10 @@ func TestCreateSessionRunsConfiguredHookBeforeTmuxCreate(t *testing.T) {
 	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder.toml"), []byte("[worktree]\non_create_script = \".tmux-coder-on-create-worktree.sh\"\non_create_timeout = \"30s\"\n"), 0o644); err != nil {
+	if err := os.Mkdir(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non_create_script = \".tmux-coder-on-create-worktree.sh\"\non_create_timeout = \"30s\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -106,7 +109,10 @@ func TestCreateSessionHookFailureRollsBackWorktreeAndBranch(t *testing.T) {
 	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder.toml"), []byte("[worktree]\non_create_script = \".tmux-coder-on-create-worktree.sh\"\n"), 0o644); err != nil {
+	if err := os.Mkdir(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non_create_script = \".tmux-coder-on-create-worktree.sh\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -163,7 +169,10 @@ func TestCreateSessionRejectsHookScriptSymlinkEscapingProjectRoot(t *testing.T) 
 	if err := os.Symlink(outsideScript, filepath.Join(projectRoot, "hook.sh")); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder.toml"), []byte("[worktree]\non_create_script = \"hook.sh\"\n"), 0o644); err != nil {
+	if err := os.Mkdir(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non_create_script = \"hook.sh\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -254,8 +263,11 @@ func TestCreateSessionRejectsInvalidConfiguredHookScript(t *testing.T) {
 			if tt.setup != nil {
 				tt.setup(t, parent, projectRoot)
 			}
+			if err := os.Mkdir(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
+				t.Fatal(err)
+			}
 			config := "[worktree]\non_create_script = \"" + tt.configured(parent, projectRoot) + "\"\n"
-			if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder.toml"), []byte(config), 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte(config), 0o644); err != nil {
 				t.Fatal(err)
 			}
 
@@ -298,7 +310,10 @@ func TestCreateSessionTmuxFailureAfterHookReleasesProvisionalLeases(t *testing.T
 	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder.toml"), []byte("[worktree]\non_create_script = \".tmux-coder-on-create-worktree.sh\"\n"), 0o644); err != nil {
+	if err := os.Mkdir(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non_create_script = \".tmux-coder-on-create-worktree.sh\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -347,7 +362,10 @@ func TestCreateSessionPromotesHookLeasesToCreatedSession(t *testing.T) {
 	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder.toml"), []byte("[worktree]\non_create_script = \".tmux-coder-on-create-worktree.sh\"\n"), 0o644); err != nil {
+	if err := os.Mkdir(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non_create_script = \".tmux-coder-on-create-worktree.sh\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
