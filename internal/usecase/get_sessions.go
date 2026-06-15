@@ -69,6 +69,20 @@ func (uc *GetSessions) Execute(ctx context.Context, in GetSessionsInput) ([]Sess
 			if in.Type != AnySessionType && !matchesSessionType(s.Type(), in.Type) {
 				continue
 			}
+			// A worktree session whose directory is gone (e.g. a delete that
+			// did not finish pruning the record) is not attachable, so it must
+			// not be listed. This filters the view only; it is not
+			// reconciliation (no record is removed) — the stale record is
+			// reaped by reconcileWorktreeSessions on the next create/delete.
+			if s.Type() == domain.WorktreeSession {
+				exists, err := uc.git.WorktreePathExists(ctx, s.WorktreePath())
+				if err != nil {
+					return err
+				}
+				if !exists {
+					continue
+				}
+			}
 			p := projectsByID[s.ProjectID()]
 			if p == nil {
 				continue

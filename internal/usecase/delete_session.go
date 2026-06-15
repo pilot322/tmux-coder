@@ -64,15 +64,10 @@ func (uc *DeleteSession) Execute(ctx context.Context, in DeleteSessionInput) err
 		}
 		return fmt.Errorf("%w: %v", ErrGateway, err)
 	}
-	exists, err := uc.tmux.Exists(ctx, session.TmuxName())
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrGateway, err)
-	}
-	if exists {
-		if err := uc.tmux.Kill(ctx, session.TmuxName()); err != nil {
-			return fmt.Errorf("%w: %v", ErrGateway, err)
-		}
-	}
+	// The worktree is already gone, so the session record must be removed to
+	// stay consistent — a listed-but-unattachable session is worse than a
+	// stray tmux session.
+	uc.releaseAndKill(ctx, session)
 
 	return uc.lock.WithWrite(func() error {
 		if err := uc.agents.DeleteBySessionID(ctx, session.ID()); err != nil {
@@ -100,15 +95,7 @@ func (uc *DeleteSession) deleteSecondary(ctx context.Context, session *domain.Se
 		toDelete = append(toDelete, secondaryDescendants(sessions, session.ID())...)
 	}
 	for _, s := range toDelete {
-		exists, err := uc.tmux.Exists(ctx, s.TmuxName())
-		if err != nil {
-			return fmt.Errorf("%w: %v", ErrGateway, err)
-		}
-		if exists {
-			if err := uc.tmux.Kill(ctx, s.TmuxName()); err != nil {
-				return fmt.Errorf("%w: %v", ErrGateway, err)
-			}
-		}
+		uc.releaseAndKill(ctx, s)
 	}
 
 	return uc.lock.WithWrite(func() error {
@@ -133,6 +120,42 @@ func (uc *DeleteSession) deleteSecondary(ctx context.Context, session *domain.Se
 		}
 		return nil
 	})
+}
+
+// releaseAndKill detaches the doomed session from any attached clients and then
+// kills it. Both steps are best-effort: the caller has already committed to
+// deletion (the worktree is gone or the session is a Secondary being pruned),
+// so a tmux failure must never abort the record removal that follows. Killing
+// the session the user is attached to can itself tear the server down and make
+// kill-session exit non-zero, which is exactly why the kill is not surfaced.
+func (uc *DeleteSession) releaseAndKill(ctx context.Context, session *domain.Session) {
+	uc.switchClientsToMain(ctx, session)
+	_ = uc.tmux.Kill(ctx, session.TmuxName())
+}
+
+// switchClientsToMain moves any tmux clients attached to the doomed session
+// over to its project's Main Session before it is killed, so a user sitting
+// inside the session they delete is reattached rather than detached. It is
+// best-effort: a missing Main Session or a tmux error must not abort deletion.
+func (uc *DeleteSession) switchClientsToMain(ctx context.Context, session *domain.Session) {
+	var mainTmuxName string
+	_ = uc.lock.WithRead(func() error {
+		all, err := uc.sessions.GetAll(ctx)
+		if err != nil {
+			return err
+		}
+		for _, s := range all {
+			if s.Type() == domain.MainSession && s.ProjectID() == session.ProjectID() {
+				mainTmuxName = s.TmuxName()
+				break
+			}
+		}
+		return nil
+	})
+	if mainTmuxName == "" || mainTmuxName == session.TmuxName() {
+		return
+	}
+	_ = uc.tmux.SwitchClients(ctx, session.TmuxName(), mainTmuxName)
 }
 
 func secondaryDescendants(sessions []*domain.Session, parentID int) []*domain.Session {

@@ -593,10 +593,17 @@ func (r *fakeWorktreeHookRunner) Run(ctx context.Context, req usecase.WorktreeHo
 	return usecase.WorktreeHookResult{Output: "hook ok"}, nil
 }
 
+type switchCall struct {
+	from string
+	to   string
+}
+
 type eventTmuxGateway struct {
 	events    *[]string
 	exists    map[string]bool
 	createErr error
+	killErr   error
+	switched  []switchCall
 }
 
 func (g *eventTmuxGateway) Create(ctx context.Context, name, workingDir string) error {
@@ -609,12 +616,22 @@ func (g *eventTmuxGateway) Create(ctx context.Context, name, workingDir string) 
 }
 
 func (g *eventTmuxGateway) Kill(ctx context.Context, name string) error {
+	*g.events = append(*g.events, "tmux:kill:"+name)
+	if g.killErr != nil {
+		return g.killErr
+	}
 	g.exists[name] = false
 	return nil
 }
 
 func (g *eventTmuxGateway) Exists(ctx context.Context, name string) (bool, error) {
 	return g.exists[name], nil
+}
+
+func (g *eventTmuxGateway) SwitchClients(ctx context.Context, from, to string) error {
+	*g.events = append(*g.events, "tmux:switch:"+from+"->"+to)
+	g.switched = append(g.switched, switchCall{from: from, to: to})
+	return nil
 }
 
 type fakeWorktreeGit struct {
