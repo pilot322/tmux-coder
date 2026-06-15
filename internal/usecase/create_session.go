@@ -220,7 +220,7 @@ func (uc *CreateSession) createSecondary(ctx context.Context, in CreateSessionIn
 	var tmuxName string
 	var workingDir string
 	if err := uc.lock.WithRead(func() error {
-		p, parentSession, root, err := uc.secondaryParentRoot(ctx, in.ParentSessionID)
+		p, parentSession, root, err := secondaryParentRoot(ctx, uc.sessions, uc.projects, in.ParentSessionID)
 		if err != nil {
 			return err
 		}
@@ -299,12 +299,19 @@ func normalizeRelativeWorkingDirectory(raw string) (string, error) {
 	return clean, nil
 }
 
-func (uc *CreateSession) secondaryParentRoot(ctx context.Context, parentID int) (*domain.Project, *domain.Session, string, error) {
-	parent, err := uc.sessions.GetByID(ctx, parentID)
+// secondaryParentRoot resolves the filesystem root a Secondary Session is
+// anchored to by walking the parent chain up to the Main or Worktree session
+// that ultimately roots it. A Main-rooted secondary roots at the project path; a
+// Worktree-rooted secondary roots at the worktree checkout. Its working
+// directory is this root joined with the secondary's relative working directory.
+// Both creation (create_session.go) and healing (create_project.go reconcile)
+// resolve the root through here so they agree on where a secondary lives.
+func secondaryParentRoot(ctx context.Context, sessions ISessionRepository, projects IProjectRepository, parentID int) (*domain.Project, *domain.Session, string, error) {
+	parent, err := sessions.GetByID(ctx, parentID)
 	if err != nil {
 		return nil, nil, "", err
 	}
-	project, err := uc.projects.GetByID(ctx, parent.ProjectID())
+	project, err := projects.GetByID(ctx, parent.ProjectID())
 	if err != nil {
 		return nil, nil, "", err
 	}
@@ -319,7 +326,7 @@ func (uc *CreateSession) secondaryParentRoot(ctx context.Context, parentID int) 
 			if s.Parent() <= 0 {
 				return nil, nil, "", fmt.Errorf("%w: secondary parent chain is invalid", ErrValidation)
 			}
-			s, err = uc.sessions.GetByID(ctx, s.Parent())
+			s, err = sessions.GetByID(ctx, s.Parent())
 			if err != nil {
 				return nil, nil, "", err
 			}

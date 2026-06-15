@@ -72,7 +72,9 @@ records that exist — and must recompute a secondary's working directory from i
 
 - First non-TUI runtime dependency enters the module.
 - A typo or unknown key in `.tmux-coder.toml` blocks worktree/project creation until fixed.
-- `CreateProject.reconcile` currently recreates every non-worktree session's tmux at the
-  Project root (`create_project.go`), which is wrong for a Worktree-rooted secondary's
-  working directory. Closing that gap is part of this feature.
+- `CreateProject.reconcile` now heals a Secondary Session's tmux at its
+  `relativeWorkingDirectory` joined to the root it is anchored to, resolved through the
+  shared `secondaryParentRoot` helper (`create_session.go`). Previously it recreated every
+  non-worktree session at the Project root, which was wrong for a Worktree-rooted
+  secondary's working directory.
 - Secondary naming changes per the ADR-0006 amendment below.

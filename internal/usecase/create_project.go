@@ -118,31 +118,56 @@ func (uc *CreateProject) reserveMainSessionName(ctx context.Context, fullPath st
 	return domain.DeriveMainSessionName(fullPath, func(n string) bool { return used[n] }), nil
 }
 
+// healTarget is a tmux session reconcile may need to recreate, paired with the
+// working directory it must be recreated in.
+type healTarget struct {
+	tmuxName   string
+	workingDir string
+}
+
 // reconcile recreates any of the project's tmux sessions that have gone
-// missing (presence/absence only). Records are read under the lock; the tmux
-// execs run outside it.
+// missing (presence/absence only). Records are read and each session's working
+// directory resolved under the lock; the tmux execs run outside it (ADR-0003).
+//
+// A Main Session heals at the project root. A Secondary Session heals at its
+// stored relative working directory joined to the root it is anchored to (the
+// project for a Main-rooted secondary, the worktree checkout for a
+// Worktree-rooted one) — resolving the root needs id lookups along the parent
+// chain, which is why the working dirs are computed while the lock is held.
+// Worktree Sessions are reconciled separately and are skipped here.
 func (uc *CreateProject) reconcile(ctx context.Context, project *domain.Project) error {
-	var sessions []*domain.Session
+	var targets []healTarget
 	if err := uc.lock.WithRead(func() error {
-		s, err := uc.sessions.GetByProjectID(ctx, project.ID())
-		sessions = s
-		return err
+		sessions, err := uc.sessions.GetByProjectID(ctx, project.ID())
+		if err != nil {
+			return err
+		}
+		for _, s := range sessions {
+			switch s.Type() {
+			case domain.MainSession:
+				targets = append(targets, healTarget{s.TmuxName(), project.FullPath()})
+			case domain.SecondarySession:
+				_, _, root, err := secondaryParentRoot(ctx, uc.sessions, uc.projects, s.Parent())
+				if err != nil {
+					return err
+				}
+				targets = append(targets, healTarget{s.TmuxName(), filepath.Join(root, s.RelativeWorkingDirectory())})
+			}
+		}
+		return nil
 	}); err != nil {
 		return err
 	}
 
-	for _, s := range sessions {
-		if s.Type() == domain.WorktreeSession {
-			continue
-		}
-		exists, err := uc.gateway.Exists(ctx, s.TmuxName())
+	for _, t := range targets {
+		exists, err := uc.gateway.Exists(ctx, t.tmuxName)
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrGateway, err)
 		}
 		if exists {
 			continue
 		}
-		if err := uc.gateway.Create(ctx, s.TmuxName(), project.FullPath()); err != nil {
+		if err := uc.gateway.Create(ctx, t.tmuxName, t.workingDir); err != nil {
 			return fmt.Errorf("%w: %v", ErrGateway, err)
 		}
 	}
