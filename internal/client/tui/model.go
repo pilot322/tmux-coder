@@ -147,7 +147,7 @@ var (
 
 const noProjectsMsg = "No projects yet. Run `tmux-coder open` or `tmux-coder o` in a directory to create and attach it."
 
-const helpText = "Keys: j/k or ctrl+n/ctrl+p or arrows move, g/G jump, 0-3 switch tab, enter attach, X delete, w worktree (Projects), S secondary (Sessions), r refresh, ? help, q quit"
+const helpText = "Keys: j/k or ctrl+n/ctrl+p or arrows move, g/G jump, 0-3 switch tab, enter attach, X delete, w worktree, S secondary (Sessions), r refresh, ? help, q quit"
 
 var keys = struct {
 	up, down, top, bottom, enter, del, refresh, worktree, secondary, help, quit, tab key.Binding
@@ -376,10 +376,10 @@ func (m Model) tabStrip() string {
 func (m Model) footer() string {
 	parts := []string{"j/k move", "enter attach"}
 	switch m.tab {
-	case tabProjects:
+	case tabOverview, tabProjects:
 		parts = append(parts, "w worktree", "X delete")
 	case tabSessions:
-		parts = append(parts, "S secondary", "X delete")
+		parts = append(parts, "w worktree", "S secondary", "X delete")
 	default:
 		parts = append(parts, "X delete")
 	}
@@ -853,11 +853,13 @@ func (m *Model) selectInitialSession() {
 }
 
 func (m *Model) startWorktree() {
-	if m.tab != tabProjects {
+	switch m.tab {
+	case tabOverview, tabProjects, tabSessions:
+	default:
 		return
 	}
 	row, ok := m.cursor()
-	if !ok || row.kind != rowProject {
+	if !ok || row.project.ID == 0 {
 		m.status = "no project selected"
 		return
 	}

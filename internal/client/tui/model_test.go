@@ -471,9 +471,9 @@ func TestModelFooterShowsPerViewKeys(t *testing.T) {
 		want    []string
 		notWant []string
 	}{
-		{"0", []string{"X delete"}, []string{"w worktree", "S secondary"}},
+		{"0", []string{"w worktree", "X delete"}, []string{"S secondary"}},
 		{"1", []string{"w worktree", "X delete"}, []string{"S secondary"}},
-		{"2", []string{"S secondary", "X delete"}, []string{"w worktree"}},
+		{"2", []string{"w worktree", "S secondary", "X delete"}, nil},
 		{"3", []string{"X delete"}, []string{"w worktree", "S secondary"}},
 	}
 	for _, tc := range cases {
@@ -497,7 +497,7 @@ func TestModelFooterShowsPerViewKeys(t *testing.T) {
 	}
 }
 
-// --- worktree creation (Projects tab) -----------------------------------
+// --- worktree creation (Overview, Projects, Sessions tabs) --------------
 
 func TestModelWorktreePromptCreatesSessionForSelectedProject(t *testing.T) {
 	api := &fakeAPI{createdSession: httpclient.Session{ID: 2, ProjectID: 7, SessionName: "api-feature-login", Type: "worktree", Branch: "feature/login"}}
@@ -624,15 +624,40 @@ func TestModelEnterAttachesAgentPaneFromAgentsTab(t *testing.T) {
 	}
 }
 
-func TestModelWorktreeIgnoredOutsideProjectsTab(t *testing.T) {
+func TestModelWorktreeFromOverviewUsesSelectedProject(t *testing.T) {
 	m := loaded(t, listMsg{
 		projects: []httpclient.Project{{ID: 7, MainSessionName: "api-main"}},
 		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api-main", Type: "main"}},
 	})
-	// Overview tab: w is not a valid action.
+	// Overview tab (default): w targets the selected session's project.
+	m = press(m, runes("w"))
+	if !m.creatingWorktree || m.worktreeProjectID != 7 {
+		t.Fatalf("creatingWorktree=%v worktreeProjectID=%d", m.creatingWorktree, m.worktreeProjectID)
+	}
+}
+
+func TestModelWorktreeFromSessionsUsesSelectedProject(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api-main", Type: "main"}},
+	})
+	m = press(m, runes("2")) // sessions tab
+	m = press(m, runes("w"))
+	if !m.creatingWorktree || m.worktreeProjectID != 7 {
+		t.Fatalf("creatingWorktree=%v worktreeProjectID=%d", m.creatingWorktree, m.worktreeProjectID)
+	}
+}
+
+func TestModelWorktreeIgnoredOnAgentsTab(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api-main", Type: "main"}},
+		agents:   []httpclient.Agent{{ID: 20, ProjectID: 7, SessionID: 1, Kind: "claude"}},
+	})
+	m = press(m, runes("3")) // agents tab
 	m = press(m, runes("w"))
 	if m.creatingWorktree {
-		t.Fatalf("w should be ignored outside the projects tab")
+		t.Fatalf("w should be ignored on the agents tab")
 	}
 }
 

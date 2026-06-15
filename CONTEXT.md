@@ -17,8 +17,12 @@ The single **Session** per **Project** that always exists — the home base for 
 _Avoid_: Root session, default session
 
 **Worktree Session**:
-A **Session** tied 1:1 to a git worktree for the same **Project**. Created with its git worktree; deleting the Worktree Session removes that worktree, while deleting the Project only removes tmux-coder's ownership of the Session.
+A **Session** tied 1:1 to a git worktree for the same **Project**. Created with its git worktree; deleting the Worktree Session removes that worktree, while deleting the Project only removes tmux-coder's ownership of the Session. A Worktree Session records its **Provenance**: the **Session** it was created from becomes its `parent` (a **Main Session** or another **Worktree Session**), or it is parentless when created directly from a bare base branch. Provenance is fixed at creation and is independent of where Git later moves branches.
 _Avoid_: Branch session
+
+**Provenance**:
+The creation-time origin of a **Worktree Session**, recorded as its `parent`. When a Worktree Session is created *from* another **Session** (its source), that source becomes the parent and the new Session renders nested beneath it. When created from a bare base branch that no Session represents, the Worktree Session is parentless and renders at the **Project** level. Provenance is a frozen structural fact, not a live Git merge-base.
+_Avoid_: Lineage, ancestry, base
 
 **Secondary Session**:
 A child **Session** that stems from a **Main Session**, **Worktree Session**, or another **Secondary Session**. Represents a sub-context within the same worktree (e.g. `packages/frontend`) and may be declared in a **Config File**.
