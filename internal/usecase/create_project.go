@@ -88,8 +88,16 @@ func (uc *CreateProject) Execute(ctx context.Context, in CreateProjectInput) (Cr
 	}
 
 	if err := uc.gateway.Create(ctx, session.TmuxName(), project.FullPath()); err != nil {
-		uc.rollback(ctx, project.ID(), session.ID())
+		uc.rollback(ctx, project.ID(), session.ID(), session.TmuxName())
 		return CreateProjectResult{}, fmt.Errorf("%w: %v", ErrGateway, err)
+	}
+
+	// Apply the Config File's declared Secondary Sessions under the Main
+	// Session. Materialization is the final in-flow step so it sits inside the
+	// create's rollback scope (ADR-0007).
+	if err := materializeSecondarySessions(ctx, uc.sessions, uc.gateway, uc.lock, project.FullPath(), session, project.FullPath()); err != nil {
+		uc.rollback(ctx, project.ID(), session.ID(), session.TmuxName())
+		return CreateProjectResult{}, err
 	}
 
 	return CreateProjectResult{Project: project, MainSessionName: session.Name(), MainTmuxSessionName: session.TmuxName(), Created: true}, nil
@@ -192,7 +200,12 @@ func (uc *CreateProject) mainSession(ctx context.Context, projectID int) (*domai
 	return main, err
 }
 
-func (uc *CreateProject) rollback(ctx context.Context, projectID, sessionID int) {
+// rollback undoes a failed create. The Main Session's tmux target is killed
+// outside the lock (ADR-0003); a kill of a never-created session is a harmless
+// no-op. materializeSecondarySessions has already unwound any Secondary
+// Sessions, so only the Main Session and Project records remain to delete.
+func (uc *CreateProject) rollback(ctx context.Context, projectID, sessionID int, tmuxName string) {
+	_ = uc.gateway.Kill(ctx, tmuxName)
 	_ = uc.lock.WithWrite(func() error {
 		_ = uc.sessions.Delete(ctx, sessionID)
 		_ = uc.projects.Delete(ctx, projectID)

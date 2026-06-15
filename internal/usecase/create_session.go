@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/pilot322/tmux-coder/internal/config"
 	"github.com/pilot322/tmux-coder/internal/domain"
 )
 
@@ -191,6 +192,18 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 		hookPromoted = true
 	}
 
+	// Apply the Config File's declared Secondary Sessions under this Worktree
+	// Session. This runs after the on-create hook (so hook-scaffolded subdirs
+	// exist) and after the Worktree Session record, so it sits inside the
+	// create's rollback scope (ADR-0007). subdir resolves against the worktree
+	// path, while the Config File is read from the Project path.
+	if err := materializeSecondarySessions(ctx, uc.sessions, uc.tmux, uc.lock, project.FullPath(), session, worktreePath); err != nil {
+		_ = uc.tmux.Kill(ctx, tmuxName)
+		uc.rollbackCreatedSessionRecord(ctx, session.ID())
+		uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
+		return nil, err
+	}
+
 	return session, nil
 }
 
@@ -239,16 +252,18 @@ func (uc *CreateSession) createSecondary(ctx context.Context, in CreateSessionIn
 		if err != nil {
 			return err
 		}
-		used := make(map[string]bool, len(sessions))
+		used := make(map[string]bool)
 		for _, s := range sessions {
-			used[s.Name()] = true
+			if s.Parent() == parentSession.ID() {
+				used[s.Name()] = true
+			}
 		}
 		base := preferredName
 		if base == "" {
 			base = filepath.Base(relwd)
 		}
 		name = domain.DeriveSecondarySessionName(base, func(n string) bool { return used[n] })
-		tmuxName = domain.DeriveSecondaryTmuxSessionName(project.FullPath(), name)
+		tmuxName = domain.DeriveSecondaryTmuxSessionName(parentSession.TmuxName(), name)
 		return nil
 	}); err != nil {
 		return nil, err
@@ -358,11 +373,11 @@ func (uc *CreateSession) rollbackCreatedSessionRecord(ctx context.Context, sessi
 }
 
 func (uc *CreateSession) runConfiguredWorktreeHook(ctx context.Context, project *domain.Project, worktreePath, sessionName, tmuxName, branch string) (string, error) {
-	cfg, err := loadWorktreeHookConfig(project.FullPath())
+	cfg, err := config.Load(project.FullPath())
 	if err != nil {
-		return "", err
+		return "", translateConfigErr(err)
 	}
-	scriptPath, err := resolveWorktreeHookScript(project.FullPath(), cfg.Script)
+	scriptPath, err := resolveWorktreeHookScript(project.FullPath(), cfg.Worktree.OnCreateScript)
 	if err != nil {
 		return "", err
 	}
@@ -385,7 +400,7 @@ func (uc *CreateSession) runConfiguredWorktreeHook(ctx context.Context, project 
 	result, err := uc.hooks.Run(ctx, WorktreeHookRequest{
 		ScriptPath: scriptPath,
 		WorkingDir: worktreePath,
-		Timeout:    cfg.Timeout,
+		Timeout:    cfg.Worktree.OnCreateTimeout,
 		Env:        worktreeHookEnv(project.FullPath(), worktreePath, project.ID(), sessionName, tmuxName, branch, token),
 	})
 	if err != nil {

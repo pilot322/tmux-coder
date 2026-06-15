@@ -416,7 +416,7 @@ func TestPostSessions_CreatesSecondarySession(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &created); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if created.ID == 0 || created.Parent != parentID || created.ParentSessionID != parentID || created.ProjectID != project.ID || created.SessionName != "pkg" || created.TmuxName != filepath.Base(projectPath)+"_pkg" || created.Type != "secondary" || created.RelativeWorkingDirectory != "pkg" || created.OnDelete != "cascade" {
+	if created.ID == 0 || created.Parent != parentID || created.ParentSessionID != parentID || created.ProjectID != project.ID || created.SessionName != "pkg" || created.TmuxName != filepath.Base(projectPath)+"_main_pkg" || created.Type != "secondary" || created.RelativeWorkingDirectory != "pkg" || created.OnDelete != "cascade" {
 		t.Fatalf("unexpected secondary: %+v", created)
 	}
 

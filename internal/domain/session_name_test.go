@@ -64,6 +64,51 @@ func TestDeriveWorktreeSessionName(t *testing.T) {
 	}
 }
 
+func TestDeriveSecondaryTmuxSessionName(t *testing.T) {
+	tests := []struct {
+		name           string
+		parentTmuxName string
+		sessionName    string
+		want           string
+	}{
+		{"secondary under main root", "api_main", "backend", "api_main_backend"},
+		{"secondary under worktree root", "api_auth", "backend", "api_auth_backend"},
+		{"secondary nested under another secondary", "api_auth_backend", "tools", "api_auth_backend_tools"},
+		{"replaces dot separators in the session name", "api_main", "web.app", "api_main_web_app"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := domain.DeriveSecondaryTmuxSessionName(tt.parentTmuxName, tt.sessionName)
+			if got != tt.want {
+				t.Errorf("DeriveSecondaryTmuxSessionName(%q, %q) = %q, want %q", tt.parentTmuxName, tt.sessionName, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDeriveSecondarySessionName(t *testing.T) {
+	tests := []struct {
+		name          string
+		preferredName string
+		isTaken       func(string) bool
+		want          string
+	}{
+		{"unprefixed preferred name", "backend", taken(), "backend"},
+		{"sibling collision bumps suffix", "backend", taken("backend"), "backend-2"},
+		{"sanitizes separators", "web.app", taken(), "web-app"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := domain.DeriveSecondarySessionName(tt.preferredName, tt.isTaken)
+			if got != tt.want {
+				t.Errorf("DeriveSecondarySessionName(%q) = %q, want %q", tt.preferredName, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestDeriveTmuxSessionNameReplacesDotSeparators(t *testing.T) {
 	got := domain.DeriveTmuxSessionName("api.feature-login")
 	if got != "api_feature-login" {

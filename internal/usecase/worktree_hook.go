@@ -1,19 +1,29 @@
 package usecase
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/pilot322/tmux-coder/internal/config"
 )
 
-const defaultWorktreeHookTimeout = 2 * time.Minute
+// translateConfigErr maps a config.Load failure onto the usecase error taxonomy:
+// a malformed or invalid Config File is a validation error; anything else (a
+// read failure) is a gateway error.
+func translateConfigErr(err error) error {
+	if errors.Is(err, config.ErrValidation) {
+		return fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	return fmt.Errorf("%w: %v", ErrGateway, err)
+}
 
 type WorktreeHookRequest struct {
 	ScriptPath string
@@ -62,66 +72,6 @@ type ResourceLeaseRepository interface {
 	PromoteHookLeases(ctx context.Context, token string, sessionID int) error
 	ReleaseHookLeases(ctx context.Context, token string) error
 	ReleaseSessionLeases(ctx context.Context, sessionID int) error
-}
-
-type worktreeHookConfig struct {
-	Script  string
-	Timeout time.Duration
-}
-
-func loadWorktreeHookConfig(projectRoot string) (worktreeHookConfig, error) {
-	path := filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml")
-	file, err := os.Open(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			return worktreeHookConfig{Timeout: defaultWorktreeHookTimeout}, nil
-		}
-		return worktreeHookConfig{}, fmt.Errorf("%w: read config file: %v", ErrGateway, err)
-	}
-	defer file.Close()
-
-	cfg := worktreeHookConfig{Timeout: defaultWorktreeHookTimeout}
-	section := ""
-	scanner := bufio.NewScanner(file)
-	lineNo := 0
-	for scanner.Scan() {
-		lineNo++
-		line := strings.TrimSpace(stripTomlComment(scanner.Text()))
-		if line == "" {
-			continue
-		}
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			section = strings.TrimSpace(strings.TrimSuffix(strings.TrimPrefix(line, "["), "]"))
-			continue
-		}
-		if section != "worktree" {
-			continue
-		}
-		key, value, ok := strings.Cut(line, "=")
-		if !ok {
-			return worktreeHookConfig{}, fmt.Errorf("%w: invalid config line %d", ErrValidation, lineNo)
-		}
-		key = strings.TrimSpace(key)
-		value = strings.TrimSpace(value)
-		unquoted, err := strconv.Unquote(value)
-		if err != nil {
-			return worktreeHookConfig{}, fmt.Errorf("%w: invalid config value for %s", ErrValidation, key)
-		}
-		switch key {
-		case "on_create_script":
-			cfg.Script = unquoted
-		case "on_create_timeout":
-			timeout, err := time.ParseDuration(unquoted)
-			if err != nil || timeout <= 0 {
-				return worktreeHookConfig{}, fmt.Errorf("%w: invalid on_create_timeout", ErrValidation)
-			}
-			cfg.Timeout = timeout
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return worktreeHookConfig{}, fmt.Errorf("%w: read config file: %v", ErrGateway, err)
-	}
-	return cfg, nil
 }
 
 func resolveWorktreeHookScript(projectRoot, configured string) (string, error) {
@@ -186,29 +136,6 @@ func worktreeHookEnv(projectRoot, worktreeRoot string, projectID int, sessionNam
 		"TMUX_CODER_BRANCH":            branch,
 		"TMUX_CODER_HOOK_TOKEN":        hookToken,
 	}
-}
-
-func stripTomlComment(line string) string {
-	inString := false
-	escaped := false
-	for i, r := range line {
-		if escaped {
-			escaped = false
-			continue
-		}
-		if r == '\\' && inString {
-			escaped = true
-			continue
-		}
-		if r == '"' {
-			inString = !inString
-			continue
-		}
-		if r == '#' && !inString {
-			return line[:i]
-		}
-	}
-	return line
 }
 
 type missingWorktreeHookRunner struct{}

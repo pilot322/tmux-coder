@@ -2,12 +2,59 @@ package usecase_test
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"sync"
+	"testing"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
+
+// writeProjectConfig writes a Config File body under projectRoot/.tmux-coder.
+func writeProjectConfig(t *testing.T, projectRoot, body string) {
+	t.Helper()
+	dir := filepath.Join(projectRoot, ".tmux-coder")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, ".tmux-coder.toml"), []byte(body), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// mainSessionOf returns the project's Main Session.
+func mainSessionOf(t *testing.T, sessions *memory.MemorySessionRepository, projectID int) *domain.Session {
+	t.Helper()
+	all, err := sessions.GetByProjectID(context.Background(), projectID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, s := range all {
+		if s.Type() == domain.MainSession {
+			return s
+		}
+	}
+	t.Fatalf("no main session for project %d", projectID)
+	return nil
+}
+
+// secondariesOf returns the project's Secondary Sessions, ordered by id.
+func secondariesOf(t *testing.T, sessions *memory.MemorySessionRepository) []*domain.Session {
+	t.Helper()
+	all, err := sessions.GetAll(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out []*domain.Session
+	for _, s := range all {
+		if s.Type() == domain.SecondarySession {
+			out = append(out, s)
+		}
+	}
+	return out
+}
 
 // spyLock is a real RWMutex-backed StateLock that also records whether control
 // is currently inside a write critical section, so tests can assert that the

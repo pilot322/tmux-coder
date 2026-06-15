@@ -28,7 +28,7 @@ func TestCreateSessionRunsConfiguredHookBeforeTmuxCreate(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non_create_script = \".tmux-coder-on-create-worktree.sh\"\non_create_timeout = \"30s\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non-create-script = \".tmux-coder-on-create-worktree.sh\"\non-create-timeout = \"30s\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -98,6 +98,128 @@ func TestCreateSessionRunsConfiguredHookBeforeTmuxCreate(t *testing.T) {
 	}
 }
 
+func TestCreateSessionMaterializesSecondariesUnderWorktreeAfterHook(t *testing.T) {
+	ctx := context.Background()
+	parent := t.TempDir()
+	projectRoot := filepath.Join(parent, "api")
+	if err := os.Mkdir(projectRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(projectRoot, ".tmux-coder-on-create-worktree.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non-create-script = \".tmux-coder-on-create-worktree.sh\"\n\n[[secondary-sessions]]\nsubdir = \"backend\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// The worktree dir and its subdir must exist when materialization stats it;
+	// the on-create hook would normally scaffold these, so the secondary is
+	// applied after the hook (ADR-0007).
+	worktreePath := filepath.Join(parent, "api.feature-login")
+	if err := os.MkdirAll(filepath.Join(worktreePath, "backend"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	projects := memory.NewMemoryProjectRepository()
+	sessions := memory.NewMemorySessionRepository()
+	lock := &spyLock{}
+	var events []string
+	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
+	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
+	hooks := &fakeWorktreeHookRunner{events: &events}
+	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository())
+	var project *domain.Project
+	if err := lock.WithWrite(func() error {
+		var err error
+		project, err = projects.Create(ctx, domain.NewProject(0, projectRoot, "api"))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	wt, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", Create: true, BaseBranch: "main"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	// The hook runs before the secondary's tmux is created.
+	if !reflect.DeepEqual(events, []string{"git:add", "hook:run", "tmux:create", "tmux:create"}) {
+		t.Fatalf("events = %v, want git add, hook, worktree tmux, secondary tmux", events)
+	}
+
+	secs := secondariesOf(t, sessions)
+	if len(secs) != 1 {
+		t.Fatalf("secondary sessions = %d, want 1", len(secs))
+	}
+	sec := secs[0]
+	if sec.Parent() != wt.ID() {
+		t.Errorf("secondary parent = %d, want worktree session %d", sec.Parent(), wt.ID())
+	}
+	if sec.TmuxName() != wt.TmuxName()+"_backend" {
+		t.Errorf("secondary tmux = %q, want %q", sec.TmuxName(), wt.TmuxName()+"_backend")
+	}
+	if sec.RelativeWorkingDirectory() != "backend" {
+		t.Errorf("relwd = %q, want backend", sec.RelativeWorkingDirectory())
+	}
+}
+
+func TestCreateSessionSecondaryFailureRollsBackWorktreeBranchAndSession(t *testing.T) {
+	ctx := context.Background()
+	parent := t.TempDir()
+	projectRoot := filepath.Join(parent, "api")
+	if err := os.Mkdir(projectRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// The declared subdir is never scaffolded, so materialization fails.
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[[secondary-sessions]]\nsubdir = \"backend\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	projects := memory.NewMemoryProjectRepository()
+	sessions := memory.NewMemorySessionRepository()
+	lock := &spyLock{}
+	var events []string
+	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
+	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
+	hooks := &fakeWorktreeHookRunner{events: &events}
+	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository())
+	var project *domain.Project
+	if err := lock.WithWrite(func() error {
+		var err error
+		project, err = projects.Create(ctx, domain.NewProject(0, projectRoot, "api"))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", Create: true, BaseBranch: "main"})
+	if !errors.Is(err, usecase.ErrValidation) {
+		t.Fatalf("Execute error = %v, want ErrValidation", err)
+	}
+	worktreePath := filepath.Join(parent, "api.feature-login")
+	if git.paths[worktreePath] {
+		t.Errorf("worktree path still exists after rollback")
+	}
+	if !reflect.DeepEqual(git.removed, []string{worktreePath}) {
+		t.Errorf("removed worktrees = %v, want %v", git.removed, []string{worktreePath})
+	}
+	if !reflect.DeepEqual(git.deletedBranches, []string{"feature/login"}) {
+		t.Errorf("deleted branches = %v, want feature/login", git.deletedBranches)
+	}
+	if all, _ := sessions.GetAll(ctx); len(all) != 0 {
+		t.Errorf("sessions stored after failed materialize = %d, want 0", len(all))
+	}
+	// The worktree tmux session was killed during rollback.
+	if tmux.exists["api_feature-login"] {
+		t.Errorf("worktree tmux survived rollback")
+	}
+}
+
 func TestCreateSessionHookFailureRollsBackWorktreeAndBranch(t *testing.T) {
 	ctx := context.Background()
 	parent := t.TempDir()
@@ -112,7 +234,7 @@ func TestCreateSessionHookFailureRollsBackWorktreeAndBranch(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non_create_script = \".tmux-coder-on-create-worktree.sh\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non-create-script = \".tmux-coder-on-create-worktree.sh\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -172,7 +294,7 @@ func TestCreateSessionRejectsHookScriptSymlinkEscapingProjectRoot(t *testing.T) 
 	if err := os.Mkdir(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non_create_script = \"hook.sh\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non-create-script = \"hook.sh\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -266,7 +388,7 @@ func TestCreateSessionRejectsInvalidConfiguredHookScript(t *testing.T) {
 			if err := os.Mkdir(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
 				t.Fatal(err)
 			}
-			config := "[worktree]\non_create_script = \"" + tt.configured(parent, projectRoot) + "\"\n"
+			config := "[worktree]\non-create-script = \"" + tt.configured(parent, projectRoot) + "\"\n"
 			if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte(config), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -313,7 +435,7 @@ func TestCreateSessionTmuxFailureAfterHookReleasesProvisionalLeases(t *testing.T
 	if err := os.Mkdir(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non_create_script = \".tmux-coder-on-create-worktree.sh\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non-create-script = \".tmux-coder-on-create-worktree.sh\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -365,7 +487,7 @@ func TestCreateSessionPromotesHookLeasesToCreatedSession(t *testing.T) {
 	if err := os.Mkdir(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non_create_script = \".tmux-coder-on-create-worktree.sh\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non-create-script = \".tmux-coder-on-create-worktree.sh\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 

@@ -32,7 +32,9 @@ func DeriveWorktreeSessionName(projectPath, branch string, isTaken func(name str
 	return candidate
 }
 
-// DeriveSecondarySessionName returns a globally unique Secondary Session name.
+// DeriveSecondarySessionName returns a Secondary Session name unique among its
+// siblings (ADR-0006 as amended by ADR-0007). The caller scopes isTaken to the
+// sibling set, so the same display name may repeat across subtrees.
 func DeriveSecondarySessionName(preferredName string, isTaken func(name string) bool) string {
 	base := sanitize(preferredName)
 	candidate := base
@@ -42,10 +44,14 @@ func DeriveSecondarySessionName(preferredName string, isTaken func(name string) 
 	return candidate
 }
 
-// DeriveSecondaryTmuxSessionName returns the tmux target for a Secondary Session.
-// The CLI-facing Secondary Session name remains unprefixed.
-func DeriveSecondaryTmuxSessionName(projectPath, sessionName string) string {
-	return sanitize(filepath.Base(projectPath)) + "_" + DeriveTmuxSessionName(sessionName)
+// DeriveSecondaryTmuxSessionName returns the globally-unique tmux target for a
+// Secondary Session: its parent Session's tmux name plus the derived Secondary
+// Session name (ADR-0007). Because the parent tmux name already encodes the
+// chain up to the globally-unique root, sibling-unique CLI names suffice — e.g.
+// `api_main_backend`, `api_auth_backend`, `api_auth_backend_tools`. The
+// CLI-facing Secondary Session name remains unprefixed.
+func DeriveSecondaryTmuxSessionName(parentTmuxName, sessionName string) string {
+	return parentTmuxName + "_" + DeriveTmuxSessionName(sessionName)
 }
 
 // sanitize replaces reserved separator characters (".", ":") and any
