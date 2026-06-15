@@ -9,15 +9,6 @@ import (
 	"github.com/pilot322/tmux-coder/internal/client/daemon"
 )
 
-func TestAddressUsesEnvPortOrDefault(t *testing.T) {
-	if got := daemon.Address(func(string) string { return "" }); got != "http://127.0.0.1:64357" {
-		t.Fatalf("default address = %q", got)
-	}
-	if got := daemon.Address(func(string) string { return "7000" }); got != "http://127.0.0.1:7000" {
-		t.Fatalf("env address = %q", got)
-	}
-}
-
 func TestResolveBinaryPrefersSibling(t *testing.T) {
 	dir := t.TempDir()
 	sibling := filepath.Join(dir, "tmux-coderd")

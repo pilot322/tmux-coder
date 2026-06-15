@@ -11,6 +11,7 @@ import (
 	"strings"
 
 	"github.com/pilot322/tmux-coder/internal/adapter/httpapi"
+	"github.com/pilot322/tmux-coder/internal/daemonaddr"
 	gitinfra "github.com/pilot322/tmux-coder/internal/infra/git"
 	"github.com/pilot322/tmux-coder/internal/infra/hookexec"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
@@ -25,7 +26,7 @@ func main() {
 		log.Printf("failed to load .env: %v", err)
 	}
 
-	addr := "127.0.0.1:" + daemonPort()
+	addr := "127.0.0.1:" + daemonaddr.Port(os.Getenv)
 
 	state := memory.NewDaemonState()
 	gateway := tmux.NewTmuxGateway()
@@ -56,14 +57,6 @@ func main() {
 	if err := http.ListenAndServe(addr, router); err != nil {
 		log.Fatal(err)
 	}
-}
-
-func daemonPort() string {
-	port := os.Getenv("TMUX_CODERD_PORT")
-	if port == "" {
-		return "64357"
-	}
-	return port
 }
 
 func loadEnvFile(path string) error {

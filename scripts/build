@@ -2,6 +2,7 @@
 set -euo pipefail
 
 root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+module="github.com/pilot322/tmux-coder"
 
 usage() {
   echo "usage: ./dev build client|daemon" >&2
@@ -12,14 +13,31 @@ if [[ $# -ne 1 ]]; then
   exit 2
 fi
 
+# Isolate this worktree's dev build from the installed (prod) tmux-coder by
+# baking a per-worktree daemon port and tmux server label into the binary via
+# -ldflags -X. Both are derived deterministically from the worktree path so the
+# client and daemon built here always agree, and so any worktree is isolated the
+# moment it is built — no config file required. `go install` (scripts/install)
+# does not pass these flags, so the shipped binary keeps the "64357"/"tmux-coder"
+# defaults. Set TMUX_CODERD_PORT / TMUX_CODER_TMUX_SERVER at runtime to override.
+worktree_name="$(basename "$root_dir")"
+path_hash="$(printf '%s' "$root_dir" | cksum | cut -d' ' -f1)"
+dev_port=$(( 64357 + (path_hash % 200) + 1 ))
+dev_label="tmux-coder-${worktree_name}"
+
+ldflags="-X ${module}/internal/daemonaddr.DefaultPort=${dev_port}"
+ldflags+=" -X ${module}/internal/tmuxserver.DefaultLabel=${dev_label}"
+
+echo "dev build: port=${dev_port} tmux-server=${dev_label}" >&2
+
 mkdir -p "$root_dir/bin"
 
 case "$1" in
   client)
-    go build -o "$root_dir/bin/tmux-coder" "$root_dir/cmd/tmux-coder"
+    go build -ldflags "$ldflags" -o "$root_dir/bin/tmux-coder" "$root_dir/cmd/tmux-coder"
     ;;
   daemon)
-    go build -o "$root_dir/bin/tmux-coderd" "$root_dir/cmd/tmux-coderd"
+    go build -ldflags "$ldflags" -o "$root_dir/bin/tmux-coderd" "$root_dir/cmd/tmux-coderd"
     ;;
   *)
     usage

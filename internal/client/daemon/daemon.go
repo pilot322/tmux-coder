@@ -11,21 +11,11 @@ import (
 	"github.com/pilot322/tmux-coder/internal/binresolve"
 )
 
-const DefaultPort = "64357"
-
 type Starter struct {
 	Executable func() (string, error)
 	LookPath   func(string) (string, error)
 	Start      func(binary, logPath string) error
 	HTTP       *http.Client
-}
-
-func Address(getenv func(string) string) string {
-	port := getenv("TMUX_CODERD_PORT")
-	if port == "" {
-		port = DefaultPort
-	}
-	return "http://127.0.0.1:" + port
 }
 
 func ResolveBinary(executable string, lookPath func(string) (string, error)) (string, error) {

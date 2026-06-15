@@ -17,6 +17,8 @@ import (
 	"syscall"
 	"time"
 	"unsafe"
+
+	"github.com/pilot322/tmux-coder/internal/daemonaddr"
 )
 
 // AgentEventClient is the small subset of the daemon HTTP client needed by the
@@ -131,7 +133,7 @@ func Run(cfg RunConfig) int {
 // DaemonBaseURL normalises a daemon address into a full URL.
 func DaemonBaseURL(raw string) string {
 	if raw == "" {
-		return "http://127.0.0.1:64357"
+		return daemonaddr.DefaultAddress()
 	}
 	if strings.Contains(raw, "://") {
 		return raw

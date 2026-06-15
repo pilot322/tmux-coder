@@ -4,6 +4,8 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+
+	"github.com/pilot322/tmux-coder/internal/daemonaddr"
 )
 
 func TestLoadEnvFileSetsDaemonPort(t *testing.T) {
@@ -17,8 +19,8 @@ func TestLoadEnvFileSetsDaemonPort(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := daemonPort(); got != "7777" {
-		t.Fatalf("daemonPort() = %q, want %q", got, "7777")
+	if got := daemonaddr.Port(os.Getenv); got != "7777" {
+		t.Fatalf("daemonaddr.Port(os.Getenv) = %q, want %q", got, "7777")
 	}
 }
 
@@ -33,16 +35,16 @@ func TestLoadEnvFileDoesNotOverrideExistingEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if got := daemonPort(); got != "8888" {
-		t.Fatalf("daemonPort() = %q, want %q", got, "8888")
+	if got := daemonaddr.Port(os.Getenv); got != "8888" {
+		t.Fatalf("daemonaddr.Port(os.Getenv) = %q, want %q", got, "8888")
 	}
 }
 
 func TestDaemonPortDefaultsWhenUnset(t *testing.T) {
 	unsetEnv(t, "TMUX_CODERD_PORT")
 
-	if got := daemonPort(); got != "64357" {
-		t.Fatalf("daemonPort() = %q, want %q", got, "64357")
+	if got := daemonaddr.Port(os.Getenv); got != "64357" {
+		t.Fatalf("daemonaddr.Port(os.Getenv) = %q, want %q", got, "64357")
 	}
 }
 

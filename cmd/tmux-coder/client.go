@@ -12,6 +12,7 @@ import (
 	"github.com/pilot322/tmux-coder/internal/client/httpclient"
 	"github.com/pilot322/tmux-coder/internal/client/tmuxattach"
 	"github.com/pilot322/tmux-coder/internal/client/tui"
+	"github.com/pilot322/tmux-coder/internal/daemonaddr"
 )
 
 type agentAPI interface {
@@ -33,7 +34,7 @@ func (e agentWrapperExitError) Error() string {
 }
 
 func runClient(ctx context.Context, args []string, getenv func(string) string, getwd func() (string, error)) error {
-	addr := daemon.Address(getenv)
+	addr := daemonaddr.Address(getenv)
 	logPath, err := daemon.Ensure(ctx, addr, daemon.Starter{HTTP: http.DefaultClient})
 	if err != nil {
 		if logPath != "" {
