@@ -26,6 +26,12 @@ func (uc *AgentEvent) Execute(ctx context.Context, in AgentEventInput) error {
 	switch in.Event {
 	case "started":
 		return uc.handleStarted(ctx, in.AgentID, in.ChildProcessGroupID)
+	case "busy":
+		return uc.handleActivity(ctx, in.AgentID, domain.AgentBusy)
+	case "idle":
+		return uc.handleActivity(ctx, in.AgentID, domain.AgentIdle)
+	case "waiting":
+		return uc.handleActivity(ctx, in.AgentID, domain.AgentWaiting)
 	case "exited":
 		return uc.handleExited(ctx, in.AgentID)
 	default:
@@ -33,27 +39,53 @@ func (uc *AgentEvent) Execute(ctx context.Context, in AgentEventInput) error {
 	}
 }
 
+// handleStarted records the agent's process-group id, and promotes status to
+// running only from starting. It never downgrades a richer status the agent's
+// integration has already reported (see ADR 0008).
 func (uc *AgentEvent) handleStarted(ctx context.Context, agentID int, childProcessGroupID *int) error {
-	var agent *domain.Agent
-	if err := uc.lock.WithRead(func() error {
-		a, err := uc.agents.GetByID(ctx, agentID)
-		if err != nil {
-			return err
-		}
-		agent = a
-		return nil
-	}); err != nil {
+	agent, err := uc.readAgent(ctx, agentID)
+	if err != nil {
 		return err
 	}
 
 	return uc.lock.WithWrite(func() error {
-		updated := agent.WithStatus(domain.AgentRunning)
+		updated := agent
+		if updated.Status() == domain.AgentStarting {
+			updated = updated.WithStatus(domain.AgentRunning)
+		}
 		if childProcessGroupID != nil {
 			updated = updated.WithChildProcessGroupID(*childProcessGroupID)
 		}
 		_, err := uc.agents.Update(ctx, updated)
 		return err
 	})
+}
+
+// handleActivity applies an agent-reported activity status (busy/idle/waiting)
+// last-write-wins.
+func (uc *AgentEvent) handleActivity(ctx context.Context, agentID int, status domain.AgentStatus) error {
+	agent, err := uc.readAgent(ctx, agentID)
+	if err != nil {
+		return err
+	}
+
+	return uc.lock.WithWrite(func() error {
+		_, err := uc.agents.Update(ctx, agent.WithStatus(status))
+		return err
+	})
+}
+
+func (uc *AgentEvent) readAgent(ctx context.Context, agentID int) (*domain.Agent, error) {
+	var agent *domain.Agent
+	err := uc.lock.WithRead(func() error {
+		a, err := uc.agents.GetByID(ctx, agentID)
+		if err != nil {
+			return err
+		}
+		agent = a
+		return nil
+	})
+	return agent, err
 }
 
 func (uc *AgentEvent) handleExited(ctx context.Context, agentID int) error {

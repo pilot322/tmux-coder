@@ -7,6 +7,9 @@ type AgentStatus string
 const (
 	AgentStarting AgentStatus = "starting"
 	AgentRunning  AgentStatus = "running"
+	AgentBusy     AgentStatus = "busy"
+	AgentIdle     AgentStatus = "idle"
+	AgentWaiting  AgentStatus = "waiting"
 )
 
 type Agent struct {

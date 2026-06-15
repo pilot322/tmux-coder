@@ -65,6 +65,28 @@ func TestRunInjectsPaneEnvAndDispatchesEvents(t *testing.T) {
 	}
 }
 
+func TestRunInjectsAgentIDEnv(t *testing.T) {
+	script := writeExecutable(t, "agent", "#!/bin/sh\nprintf '%s' \"$TMUX_CODER_AGENT_ID\"\n")
+	client := &fakeClient{started: make(chan int, 1)}
+	var stdout bytes.Buffer
+
+	code := agentwrapper.Run(agentwrapper.RunConfig{
+		Args:           []string{"7", script},
+		Getenv:         func(string) string { return "" },
+		Stdin:          nil,
+		Stdout:         &stdout,
+		Stderr:         &bytes.Buffer{},
+		CommandContext: exec.CommandContext,
+		NewClient:      func(string, *http.Client) agentwrapper.AgentEventClient { return client },
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if stdout.String() != "7" {
+		t.Fatalf("stdout = %q, want agent id 7 in child env", stdout.String())
+	}
+}
+
 func TestRunReturnsChildExitCode(t *testing.T) {
 	script := writeExecutable(t, "agent", "#!/bin/sh\nexit 23\n")
 	client := &fakeClient{started: make(chan int, 1)}

@@ -634,6 +634,28 @@ func TestPostAgents_EventStarted(t *testing.T) {
 	}
 }
 
+func TestPostAgents_EventBusy(t *testing.T) {
+	mux := newServer()
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	agentID := createAgent(t, mux, projectID, sessionID)
+
+	rec := do(t, mux, "POST", "/agents/"+strconv.Itoa(agentID)+"/event", `{"event":"busy"}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("POST event status = %d, want 204", rec.Code)
+	}
+
+	rec = do(t, mux, "GET", "/agents", "")
+	var resp struct {
+		Agents []struct {
+			Status string `json:"status"`
+		} `json:"agents"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+	if len(resp.Agents) != 1 || resp.Agents[0].Status != "busy" {
+		t.Fatalf("want busy status, got %+v", resp.Agents)
+	}
+}
+
 func TestPostAgents_EventExitedRemovesAgent(t *testing.T) {
 	mux := newServer()
 	projectID, sessionID := createProjectAndGetSession(t, mux)

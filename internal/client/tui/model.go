@@ -4,12 +4,17 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/key"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/pilot322/tmux-coder/internal/client/httpclient"
 )
+
+// pollInterval is how often the TUI refreshes its data from the daemon so that
+// agent status changes appear without a manual refresh.
+const pollInterval = time.Second
 
 type API interface {
 	ListProjects(context.Context) ([]httpclient.Project, error)
@@ -123,6 +128,8 @@ type deleteMsg struct {
 	err error
 }
 
+type tickMsg struct{}
+
 type createSessionMsg struct {
 	session httpclient.Session
 	err     error
@@ -188,7 +195,17 @@ func NewModel(ctx context.Context, api API, initialSession ...string) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return m.listCmd()
+	return tea.Batch(m.listCmd(), m.tickCmd())
+}
+
+func (m Model) tickCmd() tea.Cmd {
+	return tea.Tick(pollInterval, func(time.Time) tea.Msg { return tickMsg{} })
+}
+
+// modalActive reports whether a confirm or text-entry prompt is open. Background
+// refreshes must leave that interaction state untouched.
+func (m Model) modalActive() bool {
+	return m.confirm || m.creatingWorktree || m.creatingSecondary
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -196,24 +213,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case listMsg:
 		m.loading = false
 		if msg.err != nil {
-			m.status = msg.err.Error()
+			if !m.modalActive() {
+				m.status = msg.err.Error()
+			}
 			return m, nil
 		}
 		m.projects = msg.projects
 		m.sessions = msg.sessions
 		m.agents = msg.agents
-		m.status = ""
-		m.confirm = false
-		m.confirmDelete = deleteNothing
-		m.confirmDeleteID = 0
+		// A refresh may arrive from background polling while a confirm or
+		// text-entry prompt is open; it must not clear that interaction state.
+		if !m.modalActive() {
+			m.status = ""
+			m.confirm = false
+			m.confirmDelete = deleteNothing
+			m.confirmDeleteID = 0
+		}
 		m.selectInitialSession()
 		m.selectPendingSession()
 		m.normalizeSelection()
+	case tickMsg:
+		return m, tea.Batch(m.listCmd(), m.tickCmd())
 	case deleteMsg:
 		m.loading = false
+		m.confirm = false
+		m.confirmDelete = deleteNothing
+		m.confirmDeleteID = 0
 		if msg.err != nil {
 			m.status = msg.err.Error()
-			m.confirm = false
 			return m, nil
 		}
 		return m, m.listCmd()
@@ -499,7 +526,7 @@ func (m Model) agentRowLabel(a httpclient.Agent) string {
 	}
 	label := a.Kind + " · " + name
 	if a.Status != "" {
-		label += " [" + a.Status + "]"
+		label += " " + agentStatusStyle(a.Status).Render("["+a.Status+"]")
 	}
 	return label + "  " + mutedStyle.Render(m.agentContext(a))
 }
@@ -1085,10 +1112,26 @@ func agentLabel(a httpclient.Agent) string {
 	if name == "" {
 		name = fmt.Sprintf("agent-%d-%s", a.ID, a.Kind)
 	}
-	if a.Status != "" {
-		return fmt.Sprintf("%s [%s]", name, a.Status)
+	if a.Status == "" {
+		return name
 	}
-	return name
+	return agentStatusStyle(a.Status).Render(fmt.Sprintf("%s [%s]", name, a.Status))
+}
+
+// agentStatusStyle colors an agent label by status. Activity that wants the
+// user's attention stands out; background activity is dimmed; lifecycle states
+// stay neutral. Colors are intentionally provisional.
+func agentStatusStyle(status string) lipgloss.Style {
+	switch status {
+	case "waiting":
+		return lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("196"))
+	case "idle":
+		return lipgloss.NewStyle().Foreground(lipgloss.Color("10"))
+	case "busy":
+		return lipgloss.NewStyle().Faint(true)
+	default:
+		return lipgloss.NewStyle()
+	}
 }
 
 func parentID(s httpclient.Session) int {

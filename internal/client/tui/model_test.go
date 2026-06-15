@@ -849,6 +849,95 @@ func TestModelListCommandFetchesProjectsAndSessions(t *testing.T) {
 	}
 }
 
+func TestModelRefreshDuringConfirmKeepsPrompt(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+		agents:   []httpclient.Agent{{ID: 12, ProjectID: 7, SessionID: 1, DisplayName: "reviewer", TmuxPaneID: "%12", Status: "running"}},
+	})
+	m = press(m, runes("j"))
+	m = press(m, runes("X"))
+	if !m.confirm || m.confirmDelete != deleteAgent || m.confirmDeleteID != 12 {
+		t.Fatalf("setup confirm=%v target=%d id=%d", m.confirm, m.confirmDelete, m.confirmDeleteID)
+	}
+
+	// A poll-driven refresh arrives while the confirm prompt is open; it must
+	// not stomp the prompt.
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+		agents:   []httpclient.Agent{{ID: 12, ProjectID: 7, SessionID: 1, DisplayName: "reviewer", TmuxPaneID: "%12", Status: "busy"}},
+	})
+	m = updated.(Model)
+
+	if !m.confirm || m.confirmDelete != deleteAgent || m.confirmDeleteID != 12 {
+		t.Fatalf("refresh stomped confirm: confirm=%v target=%d id=%d", m.confirm, m.confirmDelete, m.confirmDeleteID)
+	}
+	if !strings.Contains(m.View(), "Delete agent? y/n") {
+		t.Fatalf("confirm prompt missing after refresh: %q", m.View())
+	}
+}
+
+func TestModelRefreshDuringWorktreePromptKeepsInput(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+	})
+	m = press(m, runes("1"))
+	m = press(m, runes("w"))
+	m = press(m, runes("feature/login"))
+	if !m.creatingWorktree || m.worktreeBranch != "feature/login" {
+		t.Fatalf("setup creating=%v branch=%q", m.creatingWorktree, m.worktreeBranch)
+	}
+	m.status = "branch is required"
+
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+	})
+	m = updated.(Model)
+
+	if !m.creatingWorktree || m.worktreeBranch != "feature/login" || m.status != "branch is required" {
+		t.Fatalf("refresh stomped worktree prompt: creating=%v branch=%q status=%q", m.creatingWorktree, m.worktreeBranch, m.status)
+	}
+}
+
+func TestModelTickSchedulesSilentRefresh(t *testing.T) {
+	m := loaded(t, listMsg{projects: []httpclient.Project{{ID: 1, MainSessionName: "api-main"}}})
+	if m.loading {
+		t.Fatal("precondition: loading should be false after initial load")
+	}
+
+	updated, cmd := m.Update(tickMsg{})
+	m = updated.(Model)
+	if m.loading {
+		t.Fatal("tick refresh must not flip into the loading state")
+	}
+	if cmd == nil {
+		t.Fatal("tick should schedule work")
+	}
+	batch, ok := cmd().(tea.BatchMsg)
+	if !ok || len(batch) != 2 {
+		t.Fatalf("tick should batch a refresh and a re-arm, got %T len=%d", cmd(), len(batch))
+	}
+}
+
+func TestAgentStatusStyleHighlightsAttention(t *testing.T) {
+	if !agentStatusStyle("waiting").GetBold() {
+		t.Error("waiting should be bold to signal it needs attention")
+	}
+	if !agentStatusStyle("busy").GetFaint() {
+		t.Error("busy should be dimmed")
+	}
+	running := agentStatusStyle("running")
+	if running.GetBold() || running.GetFaint() {
+		t.Error("running should be neutral (not bold or faint)")
+	}
+	if agentStatusStyle("idle").GetForeground() == running.GetForeground() {
+		t.Error("idle should be visually distinct from neutral running")
+	}
+}
+
 func TestModelKeepsErrorStatusOnListFailure(t *testing.T) {
 	m := NewModel(context.Background(), &fakeAPI{})
 	updated, _ := m.Update(listMsg{err: errors.New("daemon unavailable")})

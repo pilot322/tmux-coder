@@ -81,7 +81,10 @@ func Run(cfg RunConfig) int {
 	cmd.Stdin = cfg.Stdin
 	cmd.Stdout = cfg.Stdout
 	cmd.Stderr = cfg.Stderr
-	cmd.Env = WithEnv(env, "TMUX_CODER_PANE_ID="+paneID)
+	cmd.Env = WithEnv(env,
+		"TMUX_CODER_PANE_ID="+paneID,
+		"TMUX_CODER_AGENT_ID="+strconv.Itoa(agentID),
+	)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 
 	if err := cmd.Start(); err != nil {

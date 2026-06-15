@@ -49,11 +49,15 @@ A human-facing label for a **TC Agent**, used for presentation and tmux window l
 _Avoid_: Agent ID, Agent Kind
 
 **Agent Registry**:
-The in-memory data structure in the **Daemon** that tracks active **TC Agents** — their IDs, associated **Sessions**, **Projects**, pane identity, and current non-terminal state. It is an active set, not a durable history.
+The in-memory data structure in the **Daemon** that tracks active **TC Agents** — their IDs, associated **Sessions**, **Projects**, pane identity, and current **Agent Status**. It is an active set, not a durable history.
 _Avoid_: Agent store, agent list
 
+**Agent Status**:
+The single canonical, agent-agnostic state of a **TC Agent** in the **Agent Registry**: `starting`, `running`, `busy`, `idle`, `waiting`, or `exited` (terminal — removes the agent). `starting`/`exited` are the only values implying the process is not confirmed alive; every other value implies a live process. The lifecycle values (`starting`, `running`, `exited`) are owned by the wrapper; the activity values (`busy`, `idle`, `waiting`) are reported by the agent itself. An **Agent Kind** that does not report activity rests at `running`. Each kind's integration translates its native signals into this shared vocabulary; the Daemon never learns kind-specific terms.
+_Avoid_: Agent state, activity, mode
+
 **Event**:
-A notification sent by the **TC Agent** `tmux-coder agent-wrapper` subcommand or hook system to the **Daemon**. Carries a type, agent ID, and optional payload; lifecycle events change active registry state, while richer semantic events can be added later.
+A notification sent to the **Daemon** about a **TC Agent**, carrying an event type, agent ID, and optional payload. Two sources emit them: the `tmux-coder agent-wrapper` subcommand reports lifecycle events (`started`, `exited`) derived from the OS process, and an **Agent Kind**'s own integration (e.g. the OpenCode plugin) reports activity events (`busy`, `idle`, `waiting`) translated from that kind's native signals. Every event type names a target **Agent Status**; the Daemon applies it under a fixed conflict policy (terminal `exited` wins; `started` records process identity but never downgrades a richer status).
 _Avoid_: Message, signal, notification
 
 **Reconciliation**:

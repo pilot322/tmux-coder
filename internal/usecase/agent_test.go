@@ -278,6 +278,130 @@ func TestAgentEvent_StartedAndExited(t *testing.T) {
 	}
 }
 
+func TestAgentEvent_BusySetsStatus(t *testing.T) {
+	uc, agents, projects, sessions, _, lock := agentFixture()
+	p, s := seedProjectAndSession(projects, sessions)
+	ctx := context.Background()
+
+	result, _ := uc.Execute(ctx, usecase.CreateAgentInput{
+		ProjectID:  p.ID(),
+		SessionID:  s.ID(),
+		Kind:       "opencode",
+		DaemonAddr: "127.0.0.1:64357",
+	})
+
+	eventUc := usecase.NewAgentEvent(agents, lock)
+	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "busy"}); err != nil {
+		t.Fatalf("busy event: %v", err)
+	}
+	agent, _ := agents.GetByID(ctx, result.Agent.ID())
+	if agent.Status() != domain.AgentBusy {
+		t.Fatalf("Status = %q, want busy", agent.Status())
+	}
+}
+
+func TestAgentEvent_IdleSetsStatus(t *testing.T) {
+	uc, agents, projects, sessions, _, lock := agentFixture()
+	p, s := seedProjectAndSession(projects, sessions)
+	ctx := context.Background()
+
+	result, _ := uc.Execute(ctx, usecase.CreateAgentInput{
+		ProjectID:  p.ID(),
+		SessionID:  s.ID(),
+		Kind:       "opencode",
+		DaemonAddr: "127.0.0.1:64357",
+	})
+
+	eventUc := usecase.NewAgentEvent(agents, lock)
+	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "idle"}); err != nil {
+		t.Fatalf("idle event: %v", err)
+	}
+	agent, _ := agents.GetByID(ctx, result.Agent.ID())
+	if agent.Status() != domain.AgentIdle {
+		t.Fatalf("Status = %q, want idle", agent.Status())
+	}
+}
+
+func TestAgentEvent_WaitingSetsStatus(t *testing.T) {
+	uc, agents, projects, sessions, _, lock := agentFixture()
+	p, s := seedProjectAndSession(projects, sessions)
+	ctx := context.Background()
+
+	result, _ := uc.Execute(ctx, usecase.CreateAgentInput{
+		ProjectID:  p.ID(),
+		SessionID:  s.ID(),
+		Kind:       "opencode",
+		DaemonAddr: "127.0.0.1:64357",
+	})
+
+	eventUc := usecase.NewAgentEvent(agents, lock)
+	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "waiting"}); err != nil {
+		t.Fatalf("waiting event: %v", err)
+	}
+	agent, _ := agents.GetByID(ctx, result.Agent.ID())
+	if agent.Status() != domain.AgentWaiting {
+		t.Fatalf("Status = %q, want waiting", agent.Status())
+	}
+}
+
+func TestAgentEvent_StartedDoesNotDowngradeActivityButRecordsPGID(t *testing.T) {
+	uc, agents, projects, sessions, _, lock := agentFixture()
+	p, s := seedProjectAndSession(projects, sessions)
+	ctx := context.Background()
+
+	result, _ := uc.Execute(ctx, usecase.CreateAgentInput{
+		ProjectID:  p.ID(),
+		SessionID:  s.ID(),
+		Kind:       "opencode",
+		DaemonAddr: "127.0.0.1:64357",
+	})
+
+	eventUc := usecase.NewAgentEvent(agents, lock)
+	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "busy"}); err != nil {
+		t.Fatalf("busy event: %v", err)
+	}
+
+	pgid := 4242
+	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "started", ChildProcessGroupID: &pgid}); err != nil {
+		t.Fatalf("started event: %v", err)
+	}
+
+	agent, _ := agents.GetByID(ctx, result.Agent.ID())
+	if agent.Status() != domain.AgentBusy {
+		t.Fatalf("Status = %q, want busy (started must not downgrade activity)", agent.Status())
+	}
+	if agent.ChildProcessGroupID() != pgid {
+		t.Fatalf("ChildProcessGroupID = %d, want %d (started must record pgid)", agent.ChildProcessGroupID(), pgid)
+	}
+}
+
+func TestAgentEvent_StartedFromStartingPromotesToRunningAndRecordsPGID(t *testing.T) {
+	uc, agents, projects, sessions, _, lock := agentFixture()
+	p, s := seedProjectAndSession(projects, sessions)
+	ctx := context.Background()
+
+	result, _ := uc.Execute(ctx, usecase.CreateAgentInput{
+		ProjectID:  p.ID(),
+		SessionID:  s.ID(),
+		Kind:       "opencode",
+		DaemonAddr: "127.0.0.1:64357",
+	})
+
+	eventUc := usecase.NewAgentEvent(agents, lock)
+	pgid := 9001
+	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "started", ChildProcessGroupID: &pgid}); err != nil {
+		t.Fatalf("started event: %v", err)
+	}
+
+	agent, _ := agents.GetByID(ctx, result.Agent.ID())
+	if agent.Status() != domain.AgentRunning {
+		t.Fatalf("Status = %q, want running", agent.Status())
+	}
+	if agent.ChildProcessGroupID() != pgid {
+		t.Fatalf("ChildProcessGroupID = %d, want %d", agent.ChildProcessGroupID(), pgid)
+	}
+}
+
 func TestAgentEvent_InvalidEvent(t *testing.T) {
 	uc, agents, projects, sessions, _, lock := agentFixture()
 	p, s := seedProjectAndSession(projects, sessions)
