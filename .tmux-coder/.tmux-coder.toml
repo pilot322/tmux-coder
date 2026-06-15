@@ -1,0 +1,3 @@
+[worktree]
+on-create-script = ".tmux-coder/tmux-coder-worktree-setup"
+on-create-timeout = "5m"
