@@ -3,6 +3,7 @@ package httpclient_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -86,7 +87,7 @@ func TestClientListCreateDeleteSessions(t *testing.T) {
 		case "POST /sessions":
 			var req httpclient.CreateSessionInput
 			_ = json.NewDecoder(r.Body).Decode(&req)
-			if req.ProjectID != 7 || req.Type != "worktree" || req.Branch != "feature" || !req.Create || req.BaseBranch != "main" {
+			if req.ProjectID != 7 || req.Type != "worktree" || req.Branch != "feature" || !req.CreateWorktree || !req.CreateBranch || req.BaseBranch != "main" {
 				t.Fatalf("request = %+v", req)
 			}
 			w.WriteHeader(http.StatusCreated)
@@ -112,7 +113,7 @@ func TestClientListCreateDeleteSessions(t *testing.T) {
 	if len(sessions) != 1 || sessions[0].SessionName != "api.feature" || sessions[0].TmuxName != "api_feature" || sessions[0].Project.Title != "API" {
 		t.Fatalf("unexpected sessions: %+v", sessions)
 	}
-	created, err := c.CreateSession(context.Background(), httpclient.CreateSessionInput{ProjectID: 7, Type: "worktree", Branch: "feature", Create: true, BaseBranch: "main"})
+	created, err := c.CreateSession(context.Background(), httpclient.CreateSessionInput{ProjectID: 7, Type: "worktree", Branch: "feature", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
 	if err != nil {
 		t.Fatalf("create session: %v", err)
 	}
@@ -124,6 +125,30 @@ func TestClientListCreateDeleteSessions(t *testing.T) {
 	}
 	if !deleted {
 		t.Fatal("delete endpoint was not called")
+	}
+}
+
+func TestClientCreateSessionReturnsAPIErrorWithCode(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":"branch already exists","code":"branch_exists"}`))
+	}))
+	defer server.Close()
+
+	c := httpclient.New(server.URL, server.Client())
+	_, err := c.CreateSession(context.Background(), httpclient.CreateSessionInput{ProjectID: 1, Type: "worktree", Branch: "feature/login", CreateWorktree: true, CreateBranch: true})
+	var apiErr *httpclient.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error = %v, want *httpclient.APIError", err)
+	}
+	if apiErr.Status != http.StatusConflict {
+		t.Fatalf("status = %d, want 409", apiErr.Status)
+	}
+	if apiErr.Code != httpclient.CodeBranchExists {
+		t.Fatalf("code = %q, want %q", apiErr.Code, httpclient.CodeBranchExists)
+	}
+	if apiErr.Message == "" {
+		t.Fatalf("message empty, want the server error text")
 	}
 }
 

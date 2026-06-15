@@ -397,6 +397,46 @@ func TestModelSessionRowsRenderSecondaryTreeIndented(t *testing.T) {
 	}
 }
 
+func TestModelSessionRowsNestWorktreesByProvenance(t *testing.T) {
+	// standalone (id 2) is a base-ref 'W' worktree (parentless); feat (id 3) is
+	// branched off main and feat-backend (id 4) off feat. Despite its lower id,
+	// standalone must render at the Project level after main's whole subtree.
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 7, Title: "API", FullPath: "/work/api", MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{
+			{ID: 1, Parent: -1, ProjectID: 7, SessionName: "api.main", Type: "main"},
+			{ID: 2, ParentSessionID: -1, ProjectID: 7, SessionName: "api.standalone", Type: "worktree", Branch: "standalone"},
+			{ID: 3, ParentSessionID: 1, ProjectID: 7, SessionName: "api.feat", Type: "worktree", Branch: "feat"},
+			{ID: 4, ParentSessionID: 3, ProjectID: 7, SessionName: "api.feat-backend", Type: "worktree", Branch: "feat-backend"},
+		},
+	})
+	m = press(m, runes("2")) // sessions tab
+	view := m.View()
+
+	mainAt := strings.Index(view, "- api.main")
+	featAt := strings.Index(view, "- api.feat (feat)")
+	backendAt := strings.Index(view, "- api.feat-backend (feat-backend)")
+	standaloneAt := strings.Index(view, "- api.standalone (standalone)")
+	if mainAt < 0 || featAt < 0 || backendAt < 0 || standaloneAt < 0 {
+		t.Fatalf("missing session rows:\n%q", view)
+	}
+	if !(mainAt < featAt && featAt < backendAt && backendAt < standaloneAt) {
+		t.Fatalf("tree order = main:%d feat:%d backend:%d standalone:%d, want provenance subtree before base worktree\n%q", mainAt, featAt, backendAt, standaloneAt, view)
+	}
+
+	// Nesting is shown by indentation: feat one level under main, feat-backend
+	// under feat, while the base-ref worktree sits at the Project level.
+	if !strings.Contains(view, "      - api.feat (feat)") {
+		t.Fatalf("feat should be indented one level under main:\n%q", view)
+	}
+	if !strings.Contains(view, "        - api.feat-backend (feat-backend)") {
+		t.Fatalf("feat-backend should be indented under feat:\n%q", view)
+	}
+	if !strings.Contains(view, "    - api.standalone (standalone)") || strings.Contains(view, "      - api.standalone (standalone)") {
+		t.Fatalf("base-ref worktree should sit at the project level (same indent as main):\n%q", view)
+	}
+}
+
 func TestModelSessionsViewOmitsAgents(t *testing.T) {
 	m := loaded(t, listMsg{
 		projects: []httpclient.Project{{ID: 1, Title: "API", MainSessionName: "main"}},
@@ -471,10 +511,10 @@ func TestModelFooterShowsPerViewKeys(t *testing.T) {
 		want    []string
 		notWant []string
 	}{
-		{"0", []string{"X delete"}, []string{"w worktree", "S secondary"}},
-		{"1", []string{"w worktree", "X delete"}, []string{"S secondary"}},
-		{"2", []string{"S secondary", "X delete"}, []string{"w worktree"}},
-		{"3", []string{"X delete"}, []string{"w worktree", "S secondary"}},
+		{"0", []string{"w worktree", "W base worktree", "X delete"}, []string{"S secondary"}},
+		{"1", []string{"w worktree", "W base worktree", "X delete"}, []string{"S secondary"}},
+		{"2", []string{"w worktree", "W base worktree", "S secondary", "X delete"}, nil},
+		{"3", []string{"X delete"}, []string{"w worktree", "W base worktree", "S secondary"}},
 	}
 	for _, tc := range cases {
 		m := loaded(t, base)
@@ -497,7 +537,7 @@ func TestModelFooterShowsPerViewKeys(t *testing.T) {
 	}
 }
 
-// --- worktree creation (Projects tab) -----------------------------------
+// --- worktree creation (Overview, Projects, Sessions tabs) --------------
 
 func TestModelWorktreePromptCreatesSessionForSelectedProject(t *testing.T) {
 	api := &fakeAPI{createdSession: httpclient.Session{ID: 2, ProjectID: 7, SessionName: "api-feature-login", Type: "worktree", Branch: "feature/login"}}
@@ -527,8 +567,9 @@ func TestModelWorktreePromptCreatesSessionForSelectedProject(t *testing.T) {
 		t.Fatalf("created calls = %d", len(api.created))
 	}
 	in := api.created[0]
-	if in.ProjectID != 7 || in.Type != "worktree" || in.Branch != "feature/login" || !in.Create || in.BaseBranch != "" {
-		t.Fatalf("create input = %+v", in)
+	// From the Projects view, 'w' branches off the project's Main Session.
+	if in.ProjectID != 7 || in.Type != "worktree" || in.Branch != "feature/login" || !in.CreateWorktree || !in.CreateBranch || in.BaseBranch != "" || in.ParentSessionID != 1 {
+		t.Fatalf("create input = %+v, want worktree off main session 1", in)
 	}
 }
 
@@ -560,6 +601,104 @@ func TestModelWorktreeCreateRefetchesAndSelectsNewSession(t *testing.T) {
 	}
 	if m.pendingSelectSession != "" {
 		t.Fatalf("pendingSelectSession should be cleared, got %q", m.pendingSelectSession)
+	}
+}
+
+// worktreePromptModel returns a model that has just submitted the branch
+// "feature/login" for project 7's worktree create, with api primed to return
+// createErr on that attempt.
+func worktreePromptModel(t *testing.T, api *fakeAPI) Model {
+	t.Helper()
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api-main", Type: "main"}},
+	})
+	m = updated.(Model)
+	m = press(m, runes("1"))
+	m = press(m, runes("w"))
+	m = press(m, runes("feature/login"))
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	msg := cmd().(createSessionMsg)
+	updated, _ = m.Update(msg)
+	return updated.(Model)
+}
+
+func TestModelWorktreeBranchExistsPromptsThenCreatesWorktree(t *testing.T) {
+	api := &fakeAPI{createErr: &httpclient.APIError{Status: 409, Code: httpclient.CodeBranchExists, Message: "branch already exists"}}
+	m := worktreePromptModel(t, api)
+
+	if m.worktreeConflict != httpclient.CodeBranchExists {
+		t.Fatalf("worktreeConflict = %q, want %q", m.worktreeConflict, httpclient.CodeBranchExists)
+	}
+	if !strings.Contains(m.View(), "branch already exists. Create a worktree for it? y/n") {
+		t.Fatalf("missing branch-exists prompt: %q", m.View())
+	}
+
+	api.createErr = nil
+	updated, cmd := m.Update(runes("y"))
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("y should re-issue the create")
+	}
+	_ = cmd().(createSessionMsg)
+	last := api.created[len(api.created)-1]
+	if !last.CreateWorktree || last.CreateBranch {
+		t.Fatalf("re-issue = %+v, want createWorktree=true createBranch=false", last)
+	}
+}
+
+func TestModelWorktreeExistsPromptsThenAdopts(t *testing.T) {
+	api := &fakeAPI{createErr: &httpclient.APIError{Status: 409, Code: httpclient.CodeWorktreeExists, Message: "worktree already exists for branch"}}
+	m := worktreePromptModel(t, api)
+
+	if m.worktreeConflict != httpclient.CodeWorktreeExists {
+		t.Fatalf("worktreeConflict = %q, want %q", m.worktreeConflict, httpclient.CodeWorktreeExists)
+	}
+	if !strings.Contains(m.View(), "worktree already exists. Create a session? y/n") {
+		t.Fatalf("missing worktree-exists prompt: %q", m.View())
+	}
+
+	api.createErr = nil
+	updated, cmd := m.Update(runes("y"))
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("y should re-issue the create")
+	}
+	_ = cmd().(createSessionMsg)
+	last := api.created[len(api.created)-1]
+	if last.CreateWorktree || last.CreateBranch {
+		t.Fatalf("re-issue = %+v, want createWorktree=false createBranch=false (adopt)", last)
+	}
+}
+
+func TestModelWorktreeConflictPromptNCancels(t *testing.T) {
+	api := &fakeAPI{createErr: &httpclient.APIError{Status: 409, Code: httpclient.CodeBranchExists, Message: "branch already exists"}}
+	m := worktreePromptModel(t, api)
+	before := len(api.created)
+
+	updated, cmd := m.Update(runes("n"))
+	m = updated.(Model)
+	if m.worktreeConflict != "" || m.worktreeBranch != "" || m.worktreeProjectID != 0 {
+		t.Fatalf("n should clear conflict state: conflict=%q branch=%q project=%d", m.worktreeConflict, m.worktreeBranch, m.worktreeProjectID)
+	}
+	if cmd != nil {
+		t.Fatal("n should not re-issue a create")
+	}
+	if len(api.created) != before {
+		t.Fatalf("n issued an extra create: %d", len(api.created)-before)
+	}
+}
+
+func TestModelWorktreeNonConflictErrorShowsStatus(t *testing.T) {
+	api := &fakeAPI{createErr: &httpclient.APIError{Status: 502, Message: "session gateway failure"}}
+	m := worktreePromptModel(t, api)
+	if m.worktreeConflict != "" {
+		t.Fatalf("non-conflict error should not enter conflict state, got %q", m.worktreeConflict)
+	}
+	if !strings.Contains(m.status, "session gateway failure") {
+		t.Fatalf("status = %q, want the error message", m.status)
 	}
 }
 
@@ -624,15 +763,176 @@ func TestModelEnterAttachesAgentPaneFromAgentsTab(t *testing.T) {
 	}
 }
 
-func TestModelWorktreeIgnoredOutsideProjectsTab(t *testing.T) {
+func TestModelWorktreeFromSessionsParentsToSelectedSession(t *testing.T) {
+	api := &fakeAPI{createdSession: httpclient.Session{ID: 3, ProjectID: 7, SessionName: "api.feature-backend", Type: "worktree"}}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{
+			{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"},
+			{ID: 2, ProjectID: 7, SessionName: "api.feature", Type: "worktree", Branch: "feature"},
+		},
+	})
+	m = updated.(Model)
+	m = press(m, runes("2")) // sessions tab
+	m = press(m, runes("j")) // select the worktree session
+	m = press(m, runes("w"))
+	if !m.creatingWorktree || m.worktreeProjectID != 7 {
+		t.Fatalf("creatingWorktree=%v projectID=%d", m.creatingWorktree, m.worktreeProjectID)
+	}
+	m = press(m, runes("feature-backend"))
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected create command")
+	}
+	_ = cmd().(createSessionMsg)
+	if len(api.created) != 1 {
+		t.Fatalf("created calls = %d", len(api.created))
+	}
+	in := api.created[0]
+	if in.Type != "worktree" || in.Branch != "feature-backend" || !in.CreateWorktree || !in.CreateBranch || in.ParentSessionID != 2 {
+		t.Fatalf("create input = %+v, want worktree off parent session 2", in)
+	}
+}
+
+func TestModelWorktreeFromSecondaryIsRejected(t *testing.T) {
+	api := &fakeAPI{}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{
+			{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"},
+			{ID: 2, ParentSessionID: 1, ProjectID: 7, SessionName: "pkg", Type: "secondary"},
+		},
+	})
+	m = updated.(Model)
+	m = press(m, runes("2")) // sessions tab
+	m = press(m, runes("j")) // select the secondary session
+	m = press(m, runes("w"))
+	if m.creatingWorktree {
+		t.Fatalf("w on a secondary should be rejected, creatingWorktree=%v", m.creatingWorktree)
+	}
+	if m.status == "" {
+		t.Fatalf("expected a rejection status message")
+	}
+}
+
+func TestModelWorktreeFromOverviewUsesSelectedProject(t *testing.T) {
 	m := loaded(t, listMsg{
 		projects: []httpclient.Project{{ID: 7, MainSessionName: "api-main"}},
 		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api-main", Type: "main"}},
 	})
-	// Overview tab: w is not a valid action.
+	// Overview tab (default): w targets the selected session's project.
+	m = press(m, runes("w"))
+	if !m.creatingWorktree || m.worktreeProjectID != 7 {
+		t.Fatalf("creatingWorktree=%v worktreeProjectID=%d", m.creatingWorktree, m.worktreeProjectID)
+	}
+}
+
+func TestModelWorktreeFromSessionsUsesSelectedProject(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api-main", Type: "main"}},
+	})
+	m = press(m, runes("2")) // sessions tab
+	m = press(m, runes("w"))
+	if !m.creatingWorktree || m.worktreeProjectID != 7 {
+		t.Fatalf("creatingWorktree=%v worktreeProjectID=%d", m.creatingWorktree, m.worktreeProjectID)
+	}
+}
+
+func TestModelWorktreeIgnoredOnAgentsTab(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api-main", Type: "main"}},
+		agents:   []httpclient.Agent{{ID: 20, ProjectID: 7, SessionID: 1, Kind: "claude"}},
+	})
+	m = press(m, runes("3")) // agents tab
 	m = press(m, runes("w"))
 	if m.creatingWorktree {
-		t.Fatalf("w should be ignored outside the projects tab")
+		t.Fatalf("w should be ignored on the agents tab")
+	}
+}
+
+// --- worktree from a bare base ref (W) ----------------------------------
+
+func TestModelWorktreeFromBasePromptCreatesParentlessWorktree(t *testing.T) {
+	api := &fakeAPI{createdSession: httpclient.Session{ID: 2, ProjectID: 7, SessionName: "api.feature", Type: "worktree"}}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+	})
+	m = updated.(Model)
+	m = press(m, runes("1")) // projects tab
+	m = press(m, runes("W"))
+	if !m.creatingWorktreeFromBase || m.worktreeFromBaseProjectID != 7 {
+		t.Fatalf("creatingWorktreeFromBase=%v projectID=%d", m.creatingWorktreeFromBase, m.worktreeFromBaseProjectID)
+	}
+	// Step 1: new branch name.
+	m = press(m, runes("feature"))
+	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})
+	// Step 2: base ref.
+	m = press(m, runes("origin/main"))
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if !m.loading || cmd == nil {
+		t.Fatalf("loading=%v cmd nil=%v", m.loading, cmd == nil)
+	}
+	_ = cmd().(createSessionMsg)
+	if len(api.created) != 1 {
+		t.Fatalf("created calls = %d", len(api.created))
+	}
+	in := api.created[0]
+	if in.ProjectID != 7 || in.Type != "worktree" || in.Branch != "feature" || !in.CreateWorktree || !in.CreateBranch || in.BaseBranch != "origin/main" || in.ParentSessionID != 0 {
+		t.Fatalf("create input = %+v, want parentless worktree off origin/main", in)
+	}
+}
+
+func TestModelWorktreeFromBasePromptShowsBothSteps(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+	})
+	m = press(m, runes("1"))
+	m = press(m, runes("W"))
+	if !strings.Contains(m.View(), "New worktree branch:") {
+		t.Fatalf("step 1 should prompt for the branch name:\n%q", m.View())
+	}
+	m = press(m, runes("feature"))
+	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if !strings.Contains(m.View(), "Base ref:") {
+		t.Fatalf("step 2 should prompt for the base ref:\n%q", m.View())
+	}
+}
+
+func TestModelWorktreeFromBaseEscCancels(t *testing.T) {
+	api := &fakeAPI{}
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+	})
+	m = press(m, runes("1"))
+	m = press(m, runes("W"))
+	m = press(m, runes("feature"))
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.creatingWorktreeFromBase || m.worktreeFromBaseBranch != "" || m.worktreeFromBaseProjectID != 0 || cmd != nil || len(api.created) != 0 {
+		t.Fatalf("after esc: creating=%v branch=%q projectID=%d cmd=%v created=%d", m.creatingWorktreeFromBase, m.worktreeFromBaseBranch, m.worktreeFromBaseProjectID, cmd, len(api.created))
+	}
+}
+
+func TestModelWorktreeFromBaseIgnoredOnAgentsTab(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+		agents:   []httpclient.Agent{{ID: 20, ProjectID: 7, SessionID: 1, Kind: "claude"}},
+	})
+	m = press(m, runes("3")) // agents tab
+	m = press(m, runes("W"))
+	if m.creatingWorktreeFromBase {
+		t.Fatalf("W should be ignored on the agents tab")
 	}
 }
 

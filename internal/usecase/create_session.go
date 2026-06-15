@@ -13,10 +13,16 @@ import (
 )
 
 type CreateSessionInput struct {
-	ProjectID                int
-	Type                     domain.SessionType
-	Branch                   string
-	Create                   bool
+	ProjectID int
+	Type      domain.SessionType
+	Branch    string
+	// CreateWorktree materializes the git worktree on disk and runs the
+	// Worktree Hook. CreateBranch adds the worktree with `-b` (a new branch)
+	// rather than checking out an existing one. Their combinations encode the
+	// creation modes (ADR-0009): fresh (t,t), existing-branch (t,f), adopt
+	// (f,f); (f,t) is rejected.
+	CreateWorktree           bool
+	CreateBranch             bool
 	BaseBranch               string
 	ParentSessionID          int
 	RelativeWorkingDirectory string
@@ -64,8 +70,11 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 	if in.Branch == "" {
 		return nil, fmt.Errorf("%w: branch is required", ErrValidation)
 	}
-	if !in.Create && in.BaseBranch != "" {
-		return nil, fmt.Errorf("%w: baseBranch is only valid when create is true", ErrValidation)
+	if in.CreateBranch && !in.CreateWorktree {
+		return nil, fmt.Errorf("%w: cannot create a branch without a worktree", ErrValidation)
+	}
+	if !in.CreateBranch && in.BaseBranch != "" {
+		return nil, fmt.Errorf("%w: baseBranch is only valid when createBranch is true", ErrValidation)
 	}
 	if err := uc.git.ValidateBranchName(ctx, in.Branch); err != nil {
 		if errors.Is(err, ErrValidation) {
@@ -77,9 +86,19 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 		return nil, err
 	}
 
+	// parent records the new Worktree Session's Provenance (ADR-0010). A 'w'
+	// creation (ParentSessionID set) parents to and branches off a source
+	// Session; a 'W' creation (no parent) branches off in.BaseBranch and stays
+	// Project-level. Provenance is recorded for every creation mode, so an
+	// existing-branch or adopt re-issue that carries the source keeps it as
+	// parent. baseBranch is the ref a new branch is cut from; for a Main source
+	// it is the checkout's current branch, resolved under CreateBranch below.
 	var project *domain.Project
 	var name string
 	var worktreePath string
+	parent := -1
+	baseBranch := in.BaseBranch
+	mainSource := false
 	if err := uc.lock.WithWrite(func() error {
 		p, err := uc.projects.GetByID(ctx, in.ProjectID)
 		if err != nil {
@@ -94,8 +113,26 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 		for _, s := range sessions {
 			used[s.Name()] = true
 			if s.Type() == domain.WorktreeSession && s.ProjectID() == in.ProjectID && s.Branch() == in.Branch {
-				return fmt.Errorf("%w: worktree session already exists for branch", ErrConflict)
+				return &StateConflictError{Code: CodeSessionExists, Msg: "worktree session already exists for branch"}
 			}
+		}
+		if in.ParentSessionID > 0 {
+			src, err := uc.sessions.GetByID(ctx, in.ParentSessionID)
+			if err != nil {
+				return err
+			}
+			if src.ProjectID() != in.ProjectID {
+				return fmt.Errorf("%w: source session belongs to a different project", ErrValidation)
+			}
+			switch src.Type() {
+			case domain.WorktreeSession:
+				baseBranch = src.Branch()
+			case domain.MainSession:
+				mainSource = true
+			default:
+				return fmt.Errorf("%w: a worktree cannot be branched from a secondary session", ErrValidation)
+			}
+			parent = in.ParentSessionID
 		}
 		name = domain.DeriveWorktreeSessionName(project.FullPath(), in.Branch, func(n string) bool { return used[n] })
 		worktreePath = filepath.Join(filepath.Dir(project.FullPath()), name)
@@ -111,45 +148,95 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 	if !root {
 		return nil, fmt.Errorf("%w: project path must be a Git worktree root", ErrValidation)
 	}
-	branchExists, err := uc.git.LocalBranchExists(ctx, project.FullPath(), in.Branch)
+	// baseBranch is the ref a new branch is cut from (ADR-0010), so it only
+	// matters when CreateBranch is set; existing-branch and adopt modes ignore
+	// it. For a Main source it is the checkout's committed current branch; a
+	// detached HEAD has no branch to cut from. The branch's own existence is
+	// validated per-mode below (ADR-0009).
+	if in.CreateBranch {
+		if mainSource {
+			current, err := uc.git.CurrentBranch(ctx, project.FullPath())
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrGateway, err)
+			}
+			if strings.TrimSpace(current) == "" {
+				return nil, fmt.Errorf("%w: cannot branch a worktree from a detached-HEAD main session", ErrValidation)
+			}
+			baseBranch = current
+		}
+		if baseBranch != "" {
+			ok, err := uc.git.ResolveCommit(ctx, project.FullPath(), baseBranch)
+			if err != nil {
+				return nil, fmt.Errorf("%w: %v", ErrGateway, err)
+			}
+			if !ok {
+				return nil, fmt.Errorf("%w: baseBranch does not resolve", ErrValidation)
+			}
+		}
+	}
+
+	// The derived path being a worktree of this repo (and the branch it is on)
+	// is the one signal both modes are validated against (ADR-0009).
+	worktrees, err := uc.git.ListWorktrees(ctx, project.FullPath())
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", ErrGateway, err)
 	}
-	if in.Create && branchExists {
-		return nil, fmt.Errorf("%w: branch already exists", ErrConflict)
-	}
-	if !in.Create && !branchExists {
-		return nil, fmt.Errorf("%w: branch does not exist", ErrConflict)
-	}
-	if in.BaseBranch != "" {
-		ok, err := uc.git.ResolveCommit(ctx, project.FullPath(), in.BaseBranch)
+	worktreeBranch, isWorktree := worktreeAtPath(worktrees, worktreePath)
+
+	if in.CreateWorktree { // fresh (t,t) or existing-branch (t,f)
+		switch {
+		case isWorktree && worktreeBranch == in.Branch:
+			return nil, &StateConflictError{Code: CodeWorktreeExists, Msg: "worktree already exists for branch"}
+		case isWorktree:
+			return nil, &StateConflictError{Code: CodePathBlocked, Msg: fmt.Sprintf("worktree path is checked out on %s, not %s", worktreeBranch, in.Branch)}
+		}
+		// The path is free of a worktree; reject if it is otherwise occupied.
+		pathOccupied, err := uc.git.WorktreePathExists(ctx, worktreePath)
 		if err != nil {
 			return nil, fmt.Errorf("%w: %v", ErrGateway, err)
 		}
-		if !ok {
-			return nil, fmt.Errorf("%w: baseBranch does not resolve", ErrValidation)
+		if pathOccupied {
+			return nil, &StateConflictError{Code: CodePathBlocked, Msg: "worktree path already exists"}
+		}
+		branchExists, err := uc.git.LocalBranchExists(ctx, project.FullPath(), in.Branch)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %v", ErrGateway, err)
+		}
+		switch {
+		case in.CreateBranch && branchExists:
+			return nil, &StateConflictError{Code: CodeBranchExists, Msg: "branch already exists"}
+		case !in.CreateBranch && !branchExists:
+			return nil, fmt.Errorf("%w: branch does not exist", ErrConflict)
+		}
+	} else { // adopt (f,f) — (f,t) was rejected as a validation error above
+		switch {
+		case isWorktree && worktreeBranch == in.Branch:
+			// Proceed: wrap the worktree already on disk (no add, no hook).
+		case isWorktree:
+			return nil, &StateConflictError{Code: CodePathBlocked, Msg: fmt.Sprintf("worktree at %s is on %s, not %s", worktreePath, worktreeBranch, in.Branch)}
+		default:
+			return nil, &StateConflictError{Code: CodePathBlocked, Msg: fmt.Sprintf("no worktree to adopt at %s", worktreePath)}
 		}
 	}
-	pathExists, err := uc.git.WorktreePathExists(ctx, worktreePath)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", ErrGateway, err)
-	}
-	if pathExists {
-		return nil, fmt.Errorf("%w: worktree path already exists", ErrConflict)
-	}
 
-	branchCreated := in.Create
-	if err := uc.git.AddWorktree(ctx, project.FullPath(), worktreePath, in.Branch, in.BaseBranch, in.Create); err != nil {
-		uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, true, branchCreated)
-		return nil, fmt.Errorf("%w: %v", ErrGateway, err)
+	branchCreated := in.CreateBranch
+	worktreeCreated := false
+	if in.CreateWorktree {
+		if err := uc.git.AddWorktree(ctx, project.FullPath(), worktreePath, in.Branch, baseBranch, in.CreateBranch); err != nil {
+			uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, true, branchCreated)
+			return nil, fmt.Errorf("%w: %v", ErrGateway, err)
+		}
+		worktreeCreated = true
 	}
-	worktreeCreated := true
 
 	tmuxName := domain.DeriveTmuxSessionName(name)
-	hookToken, err := uc.runConfiguredWorktreeHook(ctx, project, worktreePath, name, tmuxName, in.Branch)
-	if err != nil {
-		uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
-		return nil, err
+	var hookToken string
+	if in.CreateWorktree {
+		hookToken, err = uc.runConfiguredWorktreeHook(ctx, project, worktreePath, name, tmuxName, in.Branch)
+		if err != nil {
+			uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
+			return nil, err
+		}
 	}
 	hookPromoted := false
 	if hookToken != "" {
@@ -168,7 +255,7 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 
 	var session *domain.Session
 	if err := uc.lock.WithWrite(func() error {
-		s, err := uc.sessions.Create(ctx, domain.NewWorktreeSession(0, project.ID(), name, in.Branch, worktreePath))
+		s, err := uc.sessions.Create(ctx, domain.NewWorktreeSession(0, parent, project.ID(), name, in.Branch, worktreePath))
 		session = s
 		return err
 	}); err != nil {
@@ -352,6 +439,10 @@ func secondaryParentRoot(ctx context.Context, sessions ISessionRepository, proje
 	return nil, nil, "", fmt.Errorf("%w: secondary parent chain is invalid", ErrValidation)
 }
 
+// sessionDepth counts how deep a session sits below its nearest Worktree or Main
+// root, with that root counted as depth 1. The climb stops at the first
+// Worktree/Main ancestor so that nesting worktrees (ADR-0010) does not consume
+// the Secondary depth budget measured from each root (ADR-0006).
 func (uc *CreateSession) sessionDepth(ctx context.Context, sessionID int) (int, error) {
 	depth := 0
 	for id := sessionID; id > 0; {
@@ -360,6 +451,9 @@ func (uc *CreateSession) sessionDepth(ctx context.Context, sessionID int) (int, 
 			return 0, err
 		}
 		depth++
+		if s.Type() == domain.WorktreeSession || s.Type() == domain.MainSession {
+			break
+		}
 		id = s.Parent()
 	}
 	return depth, nil
@@ -412,6 +506,26 @@ func (uc *CreateSession) runConfiguredWorktreeHook(ctx context.Context, project 
 		return "", fmt.Errorf("%w: worktree hook failed: %v", ErrGateway, err)
 	}
 	return token, nil
+}
+
+// worktreeAtPath reports whether target is one of repo's worktrees and, if so,
+// the branch it is checked out on. Both sides are canonicalized before
+// comparison because `git worktree list` emits symlink-resolved absolute paths.
+func worktreeAtPath(refs []WorktreeRef, target string) (branch string, ok bool) {
+	want := canonicalPath(target)
+	for _, r := range refs {
+		if canonicalPath(r.Path) == want {
+			return r.Branch, true
+		}
+	}
+	return "", false
+}
+
+func canonicalPath(p string) string {
+	if resolved, err := filepath.EvalSymlinks(p); err == nil {
+		return resolved
+	}
+	return filepath.Clean(p)
 }
 
 func (uc *CreateSession) rollbackCreatedWorktree(ctx context.Context, repoPath, worktreePath, branch string, worktreeCreated, branchCreated bool) {

@@ -29,7 +29,7 @@ func TestGetSessionsOmitsWorktreeWithMissingWorktreePath(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		worktree, err = sessions.Create(ctx, domain.NewWorktreeSession(0, project.ID(), "api.feature", "feature", worktreePath))
+		worktree, err = sessions.Create(ctx, domain.NewWorktreeSession(0, -1, project.ID(), "api.feature", "feature", worktreePath))
 		return err
 	}); err != nil {
 		t.Fatal(err)

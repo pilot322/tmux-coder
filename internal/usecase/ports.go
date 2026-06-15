@@ -55,6 +55,15 @@ type ISessionRepository interface {
 	Delete(ctx context.Context, id int) error
 }
 
+// WorktreeRef is one entry of `git worktree list` — the checkout path and the
+// branch it is on (empty when Detached). Used to decide, in one authoritative
+// call, whether a derived worktree path already belongs to this repo.
+type WorktreeRef struct {
+	Path     string
+	Branch   string
+	Detached bool
+}
+
 // GitWorktreeGateway is the port to Git for Worktree Session lifecycle.
 type GitWorktreeGateway interface {
 	ValidateBranchName(ctx context.Context, branch string) error
@@ -62,7 +71,8 @@ type GitWorktreeGateway interface {
 	LocalBranchExists(ctx context.Context, repoPath, branch string) (bool, error)
 	ResolveCommit(ctx context.Context, repoPath, ref string) (bool, error)
 	WorktreePathExists(ctx context.Context, path string) (bool, error)
-	AddWorktree(ctx context.Context, repoPath, worktreePath, branch, baseBranch string, create bool) error
+	ListWorktrees(ctx context.Context, repoPath string) ([]WorktreeRef, error)
+	AddWorktree(ctx context.Context, repoPath, worktreePath, branch, baseBranch string, createBranch bool) error
 	RemoveWorktree(ctx context.Context, worktreePath string, force bool) error
 	DeleteBranch(ctx context.Context, repoPath, branch string) error
 	CurrentBranch(ctx context.Context, repoPath string) (string, error)

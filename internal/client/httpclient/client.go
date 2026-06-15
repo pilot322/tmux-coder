@@ -67,7 +67,8 @@ type CreateSessionInput struct {
 	ProjectID                int    `json:"projectId,omitempty"`
 	Type                     string `json:"type"`
 	Branch                   string `json:"branch,omitempty"`
-	Create                   bool   `json:"create,omitempty"`
+	CreateWorktree           bool   `json:"createWorktree,omitempty"`
+	CreateBranch             bool   `json:"createBranch,omitempty"`
 	BaseBranch               string `json:"baseBranch,omitempty"`
 	ParentSessionID          int    `json:"parentSessionId,omitempty"`
 	RelativeWorkingDirectory string `json:"relativeWorkingDirectory,omitempty"`
@@ -87,6 +88,33 @@ type AcquirePortInput struct {
 	HookToken string `json:"hookToken,omitempty"`
 	ProjectID int    `json:"projectId,omitempty"`
 	SessionID int    `json:"sessionId,omitempty"`
+}
+
+// Conflict codes the Daemon may carry on a 409. They are the wire contract and
+// must equal the usecase.Code* strings (ADR-0009); the TUI matches on them to
+// offer the right follow-up prompt.
+const (
+	CodeSessionExists  = "session_exists"
+	CodeWorktreeExists = "worktree_exists"
+	CodePathBlocked    = "path_blocked"
+	CodeBranchExists   = "branch_exists"
+)
+
+// APIError is a non-2xx response from the Daemon. Code is populated when the
+// body carried a machine-readable conflict code; callers match on it with
+// errors.As to react without parsing Message.
+type APIError struct {
+	Status  int
+	Code    string
+	Message string
+}
+
+func (e *APIError) Error() string {
+	status := fmt.Sprintf("%d %s", e.Status, http.StatusText(e.Status))
+	if e.Message != "" {
+		return status + ": " + e.Message
+	}
+	return status
 }
 
 type Client struct {
@@ -317,9 +345,8 @@ func statusError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	var e struct {
 		Error string `json:"error"`
+		Code  string `json:"code"`
 	}
-	if json.Unmarshal(body, &e) == nil && e.Error != "" {
-		return fmt.Errorf("%s: %s", resp.Status, e.Error)
-	}
-	return fmt.Errorf("%s", resp.Status)
+	_ = json.Unmarshal(body, &e)
+	return &APIError{Status: resp.StatusCode, Code: e.Code, Message: e.Error}
 }

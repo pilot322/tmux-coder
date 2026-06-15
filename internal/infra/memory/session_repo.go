@@ -27,7 +27,7 @@ func (r *MemorySessionRepository) Create(ctx context.Context, s *domain.Session)
 	r.nextID++
 	stored := domain.NewSession(id, s.Parent(), s.ProjectID(), s.Name(), s.Type())
 	if s.Type() == domain.WorktreeSession {
-		stored = domain.NewWorktreeSession(id, s.ProjectID(), s.Name(), s.Branch(), s.WorktreePath())
+		stored = domain.NewWorktreeSession(id, s.Parent(), s.ProjectID(), s.Name(), s.Branch(), s.WorktreePath())
 	} else if s.Type() == domain.SecondarySession {
 		stored = domain.NewSecondarySessionWithTmuxName(id, s.Parent(), s.ProjectID(), s.Name(), s.TmuxName(), s.RelativeWorkingDirectory(), s.OnDelete())
 	}
@@ -69,7 +69,7 @@ func (r *MemorySessionRepository) Update(ctx context.Context, s *domain.Session)
 	}
 	stored := domain.NewSession(s.ID(), s.Parent(), s.ProjectID(), s.Name(), s.Type())
 	if s.Type() == domain.WorktreeSession {
-		stored = domain.NewWorktreeSession(s.ID(), s.ProjectID(), s.Name(), s.Branch(), s.WorktreePath())
+		stored = domain.NewWorktreeSession(s.ID(), s.Parent(), s.ProjectID(), s.Name(), s.Branch(), s.WorktreePath())
 	} else if s.Type() == domain.SecondarySession {
 		stored = domain.NewSecondarySessionWithTmuxName(s.ID(), s.Parent(), s.ProjectID(), s.Name(), s.TmuxName(), s.RelativeWorkingDirectory(), s.OnDelete())
 	}

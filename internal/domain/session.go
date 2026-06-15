@@ -39,11 +39,13 @@ func NewSession(id, parent, projectID int, name string, kind SessionType) *Sessi
 }
 
 // NewWorktreeSession builds a Worktree Session with the Git metadata tmux-coder
-// needs to enforce duplicate branch creation and remove the owned worktree.
-func NewWorktreeSession(id, projectID int, name, branch, worktree string) *Session {
+// needs to enforce duplicate branch creation and remove the owned worktree. The
+// parent records its Provenance (ADR-0010): the source Session's id, or -1 when
+// it was branched from a bare base ref and sits at the Project level.
+func NewWorktreeSession(id, parent, projectID int, name, branch, worktree string) *Session {
 	return &Session{
 		id:        id,
-		parent:    -1,
+		parent:    parent,
 		projectID: projectID,
 		name:      name,
 		tmuxName:  DeriveTmuxSessionName(name),

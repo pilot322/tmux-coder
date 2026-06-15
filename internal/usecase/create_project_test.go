@@ -315,7 +315,7 @@ func TestCreateProject_ReconcileSecondaryHealsAtWorktreeRoot(t *testing.T) {
 
 	// A worktree session rooted at its own checkout, with a secondary session
 	// nested under it pointing at a relative subdirectory.
-	wt, err := sessions.Create(ctx, domain.NewWorktreeSession(0, projectID, "api.feat", "feat", "/work/api-feat"))
+	wt, err := sessions.Create(ctx, domain.NewWorktreeSession(0, -1, projectID, "api.feat", "feat", "/work/api-feat"))
 	if err != nil {
 		t.Fatalf("seed worktree session: %v", err)
 	}

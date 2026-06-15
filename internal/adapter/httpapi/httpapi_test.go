@@ -55,13 +55,14 @@ func (g *stubGateway) SwitchClients(ctx context.Context, from, to string) error 
 }
 
 type stubGit struct {
-	paths map[string]bool
+	paths     map[string]bool
+	worktrees []usecase.WorktreeRef
 }
 
 func (g *stubGit) ValidateBranchName(ctx context.Context, branch string) error   { return nil }
 func (g *stubGit) IsWorktreeRoot(ctx context.Context, path string) (bool, error) { return true, nil }
 func (g *stubGit) LocalBranchExists(ctx context.Context, repoPath, branch string) (bool, error) {
-	return true, nil
+	return false, nil
 }
 func (g *stubGit) ResolveCommit(ctx context.Context, repoPath, ref string) (bool, error) {
 	return true, nil
@@ -69,7 +70,10 @@ func (g *stubGit) ResolveCommit(ctx context.Context, repoPath, ref string) (bool
 func (g *stubGit) WorktreePathExists(ctx context.Context, path string) (bool, error) {
 	return g.paths[path], nil
 }
-func (g *stubGit) AddWorktree(ctx context.Context, repoPath, worktreePath, branch, baseBranch string, create bool) error {
+func (g *stubGit) ListWorktrees(ctx context.Context, repoPath string) ([]usecase.WorktreeRef, error) {
+	return g.worktrees, nil
+}
+func (g *stubGit) AddWorktree(ctx context.Context, repoPath, worktreePath, branch, baseBranch string, createBranch bool) error {
 	g.paths[worktreePath] = true
 	return nil
 }
@@ -130,9 +134,12 @@ func (g *stubAgentGateway) ListPanes(ctx context.Context, sessionName string) ([
 }
 
 func newServer() *http.ServeMux {
+	return newServerWithGit(&stubGit{paths: make(map[string]bool)})
+}
+
+func newServerWithGit(git *stubGit) *http.ServeMux {
 	state := memory.NewDaemonState()
 	gw := &stubGateway{exists: make(map[string]bool)}
-	git := &stubGit{paths: make(map[string]bool)}
 	agentGw := &stubAgentGateway{panes: make(map[string]bool)}
 
 	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gw, state, state.Config())
@@ -362,7 +369,7 @@ func TestPostSessions_CreatesWorktreeSessionAndRejectsDuplicateBranch(t *testing
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &project)
 
-	body := `{"projectId":` + strconv.Itoa(project.ID) + `,"type":"worktree","branch":"feature/login"}`
+	body := `{"projectId":` + strconv.Itoa(project.ID) + `,"type":"worktree","branch":"feature/login","createWorktree":true,"createBranch":true}`
 	rec = do(t, mux, "POST", "/sessions", body)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("POST /sessions status = %d, want 201 (body: %s)", rec.Code, rec.Body)
@@ -384,6 +391,83 @@ func TestPostSessions_CreatesWorktreeSessionAndRejectsDuplicateBranch(t *testing
 
 	if rec := do(t, mux, "POST", "/sessions", body); rec.Code != http.StatusConflict {
 		t.Fatalf("duplicate branch status = %d, want 409", rec.Code)
+	}
+}
+
+func TestPostSessions_StateConflictCarriesCode(t *testing.T) {
+	git := &stubGit{
+		paths:     make(map[string]bool),
+		worktrees: []usecase.WorktreeRef{{Path: "/work/api.feature-login", Branch: "feature/login"}},
+	}
+	mux := newServerWithGit(git)
+	rec := do(t, mux, "POST", "/projects", `{"fullPath":"/work/api"}`)
+	var project struct {
+		ID int `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &project)
+
+	body := `{"projectId":` + strconv.Itoa(project.ID) + `,"type":"worktree","branch":"feature/login","createWorktree":true,"createBranch":true}`
+	rec = do(t, mux, "POST", "/sessions", body)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409 (body: %s)", rec.Code, rec.Body)
+	}
+	var resp struct {
+		Error string `json:"error"`
+		Code  string `json:"code"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Code != usecase.CodeWorktreeExists {
+		t.Fatalf("code = %q, want %q (body: %s)", resp.Code, usecase.CodeWorktreeExists, rec.Body)
+	}
+	if resp.Error == "" {
+		t.Fatalf("error message missing (body: %s)", rec.Body)
+	}
+}
+
+func TestPostSessions_WorktreeProvenanceParentRoundTrips(t *testing.T) {
+	mux := newServer()
+	rec := do(t, mux, "POST", "/projects", `{"fullPath":"/work/api"}`)
+	var project struct {
+		ID int `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &project)
+	mainID := getSessionID(t, mux, project.ID)
+
+	// A 'w' creation is a fresh worktree (createWorktree+createBranch) that
+	// carries parentSessionId; the controller forwards it and the response
+	// reports the stored Provenance parent (ADR-0010).
+	body := `{"projectId":` + strconv.Itoa(project.ID) + `,"type":"worktree","branch":"feature/login","createWorktree":true,"createBranch":true,"parentSessionId":` + strconv.Itoa(mainID) + `}`
+	rec = do(t, mux, "POST", "/sessions", body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /sessions status = %d, want 201 (body: %s)", rec.Code, rec.Body)
+	}
+	var session struct {
+		ID              int    `json:"id"`
+		Parent          int    `json:"parent"`
+		ParentSessionID int    `json:"parentSessionId"`
+		Type            string `json:"type"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &session); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if session.Type != "worktree" || session.Parent != mainID || session.ParentSessionID != mainID {
+		t.Fatalf("worktree provenance not wired: %+v (want parent %d)", session, mainID)
+	}
+
+	rec = do(t, mux, "GET", "/sessions?type=worktree&projectId="+strconv.Itoa(project.ID), "")
+	var listed struct {
+		Sessions []struct {
+			ID              int `json:"id"`
+			ParentSessionID int `json:"parentSessionId"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
+		t.Fatalf("decode list: %v", err)
+	}
+	if len(listed.Sessions) != 1 || listed.Sessions[0].ID != session.ID || listed.Sessions[0].ParentSessionID != mainID {
+		t.Fatalf("listed worktree provenance = %+v, want parent %d", listed.Sessions, mainID)
 	}
 }
 
@@ -450,7 +534,7 @@ func TestDeleteSessions_DeletesWorktreeSession(t *testing.T) {
 		ID int `json:"id"`
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &project)
-	rec = do(t, mux, "POST", "/sessions", `{"projectId":`+strconv.Itoa(project.ID)+`,"type":"worktree","branch":"feature/login"}`)
+	rec = do(t, mux, "POST", "/sessions", `{"projectId":`+strconv.Itoa(project.ID)+`,"type":"worktree","branch":"feature/login","createWorktree":true,"createBranch":true}`)
 	var session struct {
 		ID int `json:"id"`
 	}

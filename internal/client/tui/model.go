@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -42,6 +43,14 @@ const (
 	secondaryPromptNone secondaryPromptStep = iota
 	secondaryPromptRelativeWorkingDirectory
 	secondaryPromptPreferredName
+)
+
+type worktreeBasePromptStep uint8
+
+const (
+	worktreeBaseStepNone worktreeBasePromptStep = iota
+	worktreeBaseStepBranch
+	worktreeBaseStepBaseRef
 )
 
 type rowKind uint8
@@ -104,6 +113,19 @@ type Model struct {
 	creatingWorktree  bool
 	worktreeBranch    string
 	worktreeProjectID int
+	worktreeParentID  int
+	// worktreeConflict holds the Daemon's conflict code (branch_exists or
+	// worktree_exists) while the user is being asked y/n whether to re-issue the
+	// create in the resolving mode. Empty when no such prompt is pending. The
+	// re-issue reuses worktreeProjectID/worktreeParentID/worktreeBranch, which
+	// both the 'w' and 'W' flows populate before firing their create.
+	worktreeConflict string
+
+	creatingWorktreeFromBase  bool
+	worktreeFromBaseStep      worktreeBasePromptStep
+	worktreeFromBaseProjectID int
+	worktreeFromBaseBranch    string
+	worktreeFromBaseRef       string
 
 	creatingSecondary bool
 	secondaryStep     secondaryPromptStep
@@ -154,23 +176,24 @@ var (
 
 const noProjectsMsg = "No projects yet. Run `tmux-coder open` or `tmux-coder o` in a directory to create and attach it."
 
-const helpText = "Keys: j/k or ctrl+n/ctrl+p or arrows move, g/G jump, 0-3 switch tab, enter attach, X delete, w worktree (Projects), S secondary (Sessions), r refresh, ? help, q quit"
+const helpText = "Keys: j/k or ctrl+n/ctrl+p or arrows move, g/G jump, 0-3 switch tab, enter attach, X delete, w worktree (off session), W base worktree (off ref), S secondary (Sessions), r refresh, ? help, q quit"
 
 var keys = struct {
-	up, down, top, bottom, enter, del, refresh, worktree, secondary, help, quit, tab key.Binding
+	up, down, top, bottom, enter, del, refresh, worktree, worktreeBase, secondary, help, quit, tab key.Binding
 }{
-	up:        key.NewBinding(key.WithKeys("up", "k", "ctrl+p")),
-	down:      key.NewBinding(key.WithKeys("down", "j", "ctrl+n")),
-	top:       key.NewBinding(key.WithKeys("g")),
-	bottom:    key.NewBinding(key.WithKeys("G")),
-	enter:     key.NewBinding(key.WithKeys("enter")),
-	del:       key.NewBinding(key.WithKeys("X")),
-	refresh:   key.NewBinding(key.WithKeys("r")),
-	worktree:  key.NewBinding(key.WithKeys("w")),
-	secondary: key.NewBinding(key.WithKeys("S")),
-	help:      key.NewBinding(key.WithKeys("?")),
-	quit:      key.NewBinding(key.WithKeys("q", "esc", "ctrl+c")),
-	tab:       key.NewBinding(key.WithKeys("0", "1", "2", "3")),
+	up:           key.NewBinding(key.WithKeys("up", "k", "ctrl+p")),
+	down:         key.NewBinding(key.WithKeys("down", "j", "ctrl+n")),
+	top:          key.NewBinding(key.WithKeys("g")),
+	bottom:       key.NewBinding(key.WithKeys("G")),
+	enter:        key.NewBinding(key.WithKeys("enter")),
+	del:          key.NewBinding(key.WithKeys("X")),
+	refresh:      key.NewBinding(key.WithKeys("r")),
+	worktree:     key.NewBinding(key.WithKeys("w")),
+	worktreeBase: key.NewBinding(key.WithKeys("W")),
+	secondary:    key.NewBinding(key.WithKeys("S")),
+	help:         key.NewBinding(key.WithKeys("?")),
+	quit:         key.NewBinding(key.WithKeys("q", "esc", "ctrl+c")),
+	tab:          key.NewBinding(key.WithKeys("0", "1", "2", "3")),
 }
 
 func Run(ctx context.Context, api API, initialSession ...string) (AttachTarget, bool, error) {
@@ -247,12 +270,29 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case createSessionMsg:
 		m.loading = false
 		if msg.err != nil {
+			// A worktree/branch-exists conflict offers a follow-up create; keep
+			// the pending branch + project (not yet cleared) and prompt y/n.
+			var apiErr *httpclient.APIError
+			if errors.As(msg.err, &apiErr) && (apiErr.Code == httpclient.CodeBranchExists || apiErr.Code == httpclient.CodeWorktreeExists) {
+				m.creatingWorktree = false
+				m.creatingWorktreeFromBase = false
+				m.worktreeConflict = apiErr.Code
+				m.status = ""
+				return m, nil
+			}
 			m.status = msg.err.Error()
 			return m, nil
 		}
 		m.creatingWorktree = false
+		m.worktreeConflict = ""
 		m.worktreeBranch = ""
 		m.worktreeProjectID = 0
+		m.worktreeParentID = 0
+		m.creatingWorktreeFromBase = false
+		m.worktreeFromBaseStep = worktreeBaseStepNone
+		m.worktreeFromBaseProjectID = 0
+		m.worktreeFromBaseBranch = ""
+		m.worktreeFromBaseRef = ""
 		m.creatingSecondary = false
 		m.secondaryStep = secondaryPromptNone
 		m.secondaryParentID = 0
@@ -263,11 +303,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.loading = true
 		return m, m.listCmd()
 	case tea.KeyMsg:
+		if m.worktreeConflict != "" {
+			return m.updateWorktreeConflict(msg)
+		}
 		if m.creatingSecondary {
 			return m.updateSecondaryPrompt(msg)
 		}
 		if m.creatingWorktree {
 			return m.updateWorktreePrompt(msg)
+		}
+		if m.creatingWorktreeFromBase {
+			return m.updateWorktreeFromBasePrompt(msg)
 		}
 
 		if m.confirm {
@@ -302,6 +348,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, m.listCmd()
 		case key.Matches(msg, keys.worktree):
 			m.startWorktree()
+		case key.Matches(msg, keys.worktreeBase):
+			m.startWorktreeFromBase()
 		case key.Matches(msg, keys.secondary):
 			m.startSecondary()
 		case key.Matches(msg, keys.up):
@@ -370,6 +418,19 @@ func (m Model) View() string {
 	if m.creatingWorktree {
 		b.WriteString("\nNew worktree branch: " + m.worktreeBranch + "\n")
 	}
+	if m.creatingWorktreeFromBase {
+		if m.worktreeFromBaseStep == worktreeBaseStepBaseRef {
+			b.WriteString("\nBase ref: " + m.worktreeFromBaseRef + "\n")
+		} else {
+			b.WriteString("\nNew worktree branch: " + m.worktreeFromBaseBranch + "\n")
+		}
+	}
+	switch m.worktreeConflict {
+	case httpclient.CodeBranchExists:
+		b.WriteString("\nbranch already exists. Create a worktree for it? y/n\n")
+	case httpclient.CodeWorktreeExists:
+		b.WriteString("\nworktree already exists. Create a session? y/n\n")
+	}
 	if m.status != "" {
 		b.WriteString("\n" + errorStyle.Render(m.status) + "\n")
 	}
@@ -377,6 +438,10 @@ func (m Model) View() string {
 		b.WriteString("\n" + mutedStyle.Render("enter next/create  esc cancel") + "\n")
 	} else if m.creatingWorktree {
 		b.WriteString("\n" + mutedStyle.Render("enter create  esc cancel") + "\n")
+	} else if m.creatingWorktreeFromBase {
+		b.WriteString("\n" + mutedStyle.Render("enter next/create  esc cancel") + "\n")
+	} else if m.worktreeConflict != "" {
+		b.WriteString("\n" + mutedStyle.Render("y confirm  n cancel") + "\n")
 	} else if m.help {
 		b.WriteString("\n" + helpText + "\n")
 	} else {
@@ -403,10 +468,10 @@ func (m Model) tabStrip() string {
 func (m Model) footer() string {
 	parts := []string{"j/k move", "enter attach"}
 	switch m.tab {
-	case tabProjects:
-		parts = append(parts, "w worktree", "X delete")
+	case tabOverview, tabProjects:
+		parts = append(parts, "w worktree", "W base worktree", "X delete")
 	case tabSessions:
-		parts = append(parts, "S secondary", "X delete")
+		parts = append(parts, "w worktree", "W base worktree", "S secondary", "X delete")
 	default:
 		parts = append(parts, "X delete")
 	}
@@ -597,13 +662,29 @@ func (m Model) createSecondaryCmd(parentID int, relwd, preferredName string) tea
 	}
 }
 
-func (m Model) createWorktreeCmd(projectID int, branch string) tea.Cmd {
+func (m Model) createWorktreeCmd(projectID, parentID int, branch string, createWorktree, createBranch bool) tea.Cmd {
 	return func() tea.Msg {
 		session, err := m.api.CreateSession(m.ctx, httpclient.CreateSessionInput{
-			ProjectID: projectID,
-			Type:      "worktree",
-			Branch:    branch,
-			Create:    true,
+			ProjectID:       projectID,
+			Type:            "worktree",
+			Branch:          branch,
+			CreateWorktree:  createWorktree,
+			CreateBranch:    createBranch,
+			ParentSessionID: parentID,
+		})
+		return createSessionMsg{session: session, err: err}
+	}
+}
+
+func (m Model) createWorktreeFromBaseCmd(projectID int, branch, baseRef string) tea.Cmd {
+	return func() tea.Msg {
+		session, err := m.api.CreateSession(m.ctx, httpclient.CreateSessionInput{
+			ProjectID:      projectID,
+			Type:           "worktree",
+			Branch:         branch,
+			CreateWorktree: true,
+			CreateBranch:   true,
+			BaseBranch:     baseRef,
 		})
 		return createSessionMsg{session: session, err: err}
 	}
@@ -617,6 +698,7 @@ func (m Model) updateWorktreePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.creatingWorktree = false
 		m.worktreeBranch = ""
 		m.worktreeProjectID = 0
+		m.worktreeParentID = 0
 		m.status = ""
 		return m, nil
 	case tea.KeyBackspace, tea.KeyCtrlH:
@@ -633,9 +715,99 @@ func (m Model) updateWorktreePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.worktreeBranch = branch
 		m.status = ""
 		m.loading = true
-		return m, m.createWorktreeCmd(m.worktreeProjectID, branch)
+		return m, m.createWorktreeCmd(m.worktreeProjectID, m.worktreeParentID, branch, true, true)
 	case tea.KeyRunes:
 		m.worktreeBranch += string(msg.Runes)
+		return m, nil
+	}
+	return m, nil
+}
+
+// updateWorktreeConflict handles the y/n prompt raised after a create returned
+// a worktree_exists or branch_exists conflict. On y it re-issues the create in
+// the mode that resolves the conflict (ADR-0009): branch_exists adds a worktree
+// for the existing branch (t,f); worktree_exists adopts the worktree (f,f). The
+// re-issue keeps the source's Provenance parent (ADR-0010) via worktreeParentID,
+// so an existing-branch or adopted worktree nests under the gesture's source.
+func (m Model) updateWorktreeConflict(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if msg.Type == tea.KeyCtrlC {
+		return m, tea.Quit
+	}
+	switch msg.String() {
+	case "y":
+		code := m.worktreeConflict
+		m.worktreeConflict = ""
+		m.status = ""
+		m.loading = true
+		// branch_exists → create a worktree for the existing branch (t,f);
+		// worktree_exists → adopt the existing worktree (f,f).
+		createWorktree := code == httpclient.CodeBranchExists
+		return m, m.createWorktreeCmd(m.worktreeProjectID, m.worktreeParentID, m.worktreeBranch, createWorktree, false)
+	case "n", "esc":
+		m.worktreeConflict = ""
+		m.worktreeBranch = ""
+		m.worktreeProjectID = 0
+		m.worktreeParentID = 0
+		m.status = ""
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m Model) updateWorktreeFromBasePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.creatingWorktreeFromBase = false
+		m.worktreeFromBaseStep = worktreeBaseStepNone
+		m.worktreeFromBaseProjectID = 0
+		m.worktreeFromBaseBranch = ""
+		m.worktreeFromBaseRef = ""
+		m.status = ""
+		return m, nil
+	case tea.KeyBackspace, tea.KeyCtrlH:
+		if m.worktreeFromBaseStep == worktreeBaseStepBaseRef {
+			if len(m.worktreeFromBaseRef) > 0 {
+				m.worktreeFromBaseRef = m.worktreeFromBaseRef[:len(m.worktreeFromBaseRef)-1]
+			}
+		} else if len(m.worktreeFromBaseBranch) > 0 {
+			m.worktreeFromBaseBranch = m.worktreeFromBaseBranch[:len(m.worktreeFromBaseBranch)-1]
+		}
+		return m, nil
+	case tea.KeyEnter:
+		if m.worktreeFromBaseStep == worktreeBaseStepBranch {
+			branch := strings.TrimSpace(m.worktreeFromBaseBranch)
+			if branch == "" {
+				m.status = "branch is required"
+				return m, nil
+			}
+			m.worktreeFromBaseBranch = branch
+			m.worktreeFromBaseStep = worktreeBaseStepBaseRef
+			m.status = ""
+			return m, nil
+		}
+		baseRef := strings.TrimSpace(m.worktreeFromBaseRef)
+		if baseRef == "" {
+			m.status = "base ref is required"
+			return m, nil
+		}
+		m.worktreeFromBaseRef = baseRef
+		m.status = ""
+		m.loading = true
+		// Stash the create's identity in the shared worktree fields so a
+		// branch_exists/worktree_exists conflict re-issues for the same
+		// project/branch; a 'W' create is Project-level, so it has no parent.
+		m.worktreeProjectID = m.worktreeFromBaseProjectID
+		m.worktreeParentID = 0
+		m.worktreeBranch = m.worktreeFromBaseBranch
+		return m, m.createWorktreeFromBaseCmd(m.worktreeFromBaseProjectID, m.worktreeFromBaseBranch, baseRef)
+	case tea.KeyRunes:
+		if m.worktreeFromBaseStep == worktreeBaseStepBaseRef {
+			m.worktreeFromBaseRef += string(msg.Runes)
+		} else {
+			m.worktreeFromBaseBranch += string(msg.Runes)
+		}
 		return m, nil
 	}
 	return m, nil
@@ -879,18 +1051,89 @@ func (m *Model) selectInitialSession() {
 	}
 }
 
+// startWorktree begins a 'w' creation: the new worktree branches off a source
+// Session and is parented to it (ADR-0010). The source is resolved from the
+// active view's selection — the Project's Main Session (Projects), the selected
+// session (Sessions), or the selected session / the selected agent's owning
+// session (Overview). A Secondary source is rejected since it shares its root's
+// worktree.
 func (m *Model) startWorktree() {
-	if m.tab != tabProjects {
+	switch m.tab {
+	case tabOverview, tabProjects, tabSessions:
+	default:
 		return
 	}
 	row, ok := m.cursor()
-	if !ok || row.kind != rowProject {
+	if !ok || row.project.ID == 0 {
 		m.status = "no project selected"
+		return
+	}
+	src, ok := m.worktreeSource(row)
+	if !ok {
+		m.status = "no source session selected"
+		return
+	}
+	if src.Type == "secondary" {
+		m.status = "cannot create a worktree from a secondary session"
 		return
 	}
 	m.creatingWorktree = true
 	m.worktreeBranch = ""
-	m.worktreeProjectID = row.project.ID
+	m.worktreeProjectID = src.ProjectID
+	m.worktreeParentID = src.ID
+	m.status = ""
+}
+
+// worktreeSource maps the active view's selected row to the source Session a 'w'
+// creation branches from.
+func (m Model) worktreeSource(row viewRow) (httpclient.Session, bool) {
+	switch m.tab {
+	case tabProjects:
+		return m.mainSessionOf(row.project.ID)
+	case tabSessions:
+		if row.kind == rowSession {
+			return row.session, true
+		}
+	case tabOverview:
+		switch row.kind {
+		case rowSession:
+			return row.session, true
+		case rowAgent:
+			return m.sessionByID(row.agent.SessionID)
+		}
+	}
+	return httpclient.Session{}, false
+}
+
+func (m Model) mainSessionOf(projectID int) (httpclient.Session, bool) {
+	p := m.projectByID(projectID)
+	for _, s := range m.sessions {
+		if s.ProjectID == projectID && isMainSession(s, p) {
+			return s, true
+		}
+	}
+	return httpclient.Session{}, false
+}
+
+// startWorktreeFromBase begins a 'W' creation: the new worktree branches off a
+// bare base ref that no Session represents, so it is parentless and renders at
+// the Project level (ADR-0010). It targets the selected row's Project.
+func (m *Model) startWorktreeFromBase() {
+	switch m.tab {
+	case tabOverview, tabProjects, tabSessions:
+	default:
+		return
+	}
+	row, ok := m.cursor()
+	if !ok || row.project.ID == 0 {
+		m.status = "no project selected"
+		return
+	}
+	m.creatingWorktreeFromBase = true
+	m.worktreeFromBaseStep = worktreeBaseStepBranch
+	m.worktreeFromBaseProjectID = row.project.ID
+	m.worktreeFromBaseBranch = ""
+	m.worktreeFromBaseRef = ""
 	m.status = ""
 }
 
@@ -976,6 +1219,11 @@ func (m Model) attachTarget() (AttachTarget, bool) {
 	return AttachTarget{}, false
 }
 
+// sessionRows lays each Project out as a tree walked by Provenance (ADR-0010):
+// the Main Session followed by its full subtree (nested worktrees and their
+// secondaries), then parentless 'W' worktrees at the Project level. A worktree
+// whose provenance parent is no longer present also surfaces at the Project
+// level so it never falls out of the tree.
 func (m Model) sessionRows() []httpclient.Session {
 	rows := make([]httpclient.Session, 0, len(m.sessions))
 	for _, p := range m.projects {
@@ -986,17 +1234,40 @@ func (m Model) sessionRows() []httpclient.Session {
 			}
 			rows = append(rows, s)
 			mainID = s.ID
-			rows = m.appendSecondaryChildren(rows, p.ID, s.ID)
+			rows = m.appendSessionChildren(rows, p.ID, s.ID)
+			break
 		}
 		for _, s := range m.sessions {
 			if s.ProjectID != p.ID || s.Type != "worktree" {
 				continue
 			}
+			if pid := parentID(s); pid > 0 {
+				if _, ok := m.sessionByID(pid); ok {
+					continue // nested under an existing parent, rendered there
+				}
+			}
 			rows = append(rows, s)
-			rows = m.appendSecondaryChildren(rows, p.ID, s.ID)
+			rows = m.appendSessionChildren(rows, p.ID, s.ID)
 		}
 		if mainID == 0 {
 			rows = m.appendSecondaryChildren(rows, p.ID, 0)
+		}
+	}
+	return rows
+}
+
+// appendSessionChildren appends the worktree and secondary children of a parent
+// session, depth-first, so nested worktrees and secondaries follow the session
+// they descend from.
+func (m Model) appendSessionChildren(rows []httpclient.Session, projectID, parent int) []httpclient.Session {
+	for _, s := range m.sessions {
+		if s.ProjectID != projectID || parentID(s) != parent {
+			continue
+		}
+		switch s.Type {
+		case "worktree", "secondary":
+			rows = append(rows, s)
+			rows = m.appendSessionChildren(rows, projectID, s.ID)
 		}
 	}
 	return rows
@@ -1013,15 +1284,16 @@ func (m Model) appendSecondaryChildren(rows []httpclient.Session, projectID, par
 	return rows
 }
 
+// sessionDepth is how far a session sits below the Project level, counting each
+// ancestor session in its Provenance/parent chain. Main and parentless 'W'
+// worktrees are at depth 0; nested worktrees and secondaries indent by their
+// depth.
 func (m Model) sessionDepth(s httpclient.Session) int {
-	if s.Type != "secondary" {
-		return 0
-	}
 	depth := 0
 	for id := parentID(s); id > 0; {
 		parent, ok := m.sessionByID(id)
-		if !ok || parent.Type != "secondary" {
-			return depth + 1
+		if !ok {
+			break
 		}
 		depth++
 		id = parentID(parent)

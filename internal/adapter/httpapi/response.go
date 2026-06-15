@@ -21,6 +21,13 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 
 // writeUsecaseError maps domain/usecase errors to HTTP status codes.
 func writeUsecaseError(w http.ResponseWriter, err error) {
+	// A StateConflictError is an ErrConflict, so it must be matched before the
+	// generic conflict branch to surface its machine-readable code (ADR-0009).
+	var sce *usecase.StateConflictError
+	if errors.As(err, &sce) {
+		writeJSON(w, http.StatusConflict, errorResponse{Error: sce.Error(), Code: sce.Code})
+		return
+	}
 	switch {
 	case errors.Is(err, domain.ErrInvalidProjectTitle):
 		writeError(w, http.StatusBadRequest, err.Error())

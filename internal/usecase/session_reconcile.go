@@ -67,7 +67,32 @@ func reconcileWorktreeSessions(ctx context.Context, sessions ISessionRepository,
 	if len(prune) == 0 {
 		return nil
 	}
+	prunedSet := make(map[int]bool, len(prune))
+	for _, id := range prune {
+		prunedSet[id] = true
+	}
+	parentOf := make(map[int]int, len(allSessions))
+	for _, s := range allSessions {
+		parentOf[s.ID()] = s.Parent()
+	}
 	return lock.WithWrite(func() error {
+		// Worktree children of a pruned worktree are independent checkouts that
+		// survive; reparent them to the nearest ancestor that is not itself
+		// being pruned so they stay attached to the tree (ADR-0010). Secondary
+		// children are already in the prune set via cascade above.
+		for _, s := range allSessions {
+			if prunedSet[s.ID()] || s.Type() != domain.WorktreeSession || !prunedSet[s.Parent()] {
+				continue
+			}
+			newParent := s.Parent()
+			for newParent > 0 && prunedSet[newParent] {
+				newParent = parentOf[newParent]
+			}
+			reparented := domain.NewWorktreeSession(s.ID(), newParent, s.ProjectID(), s.Name(), s.Branch(), s.WorktreePath())
+			if _, err := sessions.Update(ctx, reparented); err != nil {
+				return err
+			}
+		}
 		for _, id := range prune {
 			if err := leases.ReleaseSessionLeases(ctx, id); err != nil {
 				return err

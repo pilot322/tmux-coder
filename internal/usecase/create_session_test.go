@@ -3,6 +3,7 @@ package usecase_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -50,7 +51,7 @@ func TestCreateSessionRunsConfiguredHookBeforeTmuxCreate(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	session, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", Create: true, BaseBranch: "main"})
+	session, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -140,7 +141,7 @@ func TestCreateSessionMaterializesSecondariesUnderWorktreeAfterHook(t *testing.T
 		t.Fatal(err)
 	}
 
-	wt, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", Create: true, BaseBranch: "main"})
+	wt, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -197,7 +198,7 @@ func TestCreateSessionSecondaryFailureRollsBackWorktreeBranchAndSession(t *testi
 		t.Fatal(err)
 	}
 
-	_, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", Create: true, BaseBranch: "main"})
+	_, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
 	if !errors.Is(err, usecase.ErrValidation) {
 		t.Fatalf("Execute error = %v, want ErrValidation", err)
 	}
@@ -255,7 +256,7 @@ func TestCreateSessionHookFailureRollsBackWorktreeAndBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", Create: true, BaseBranch: "main"})
+	_, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
 	if !errors.Is(err, usecase.ErrGateway) {
 		t.Fatalf("Execute error = %v, want ErrGateway", err)
 	}
@@ -315,7 +316,7 @@ func TestCreateSessionRejectsHookScriptSymlinkEscapingProjectRoot(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	_, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", Create: true, BaseBranch: "main"})
+	_, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
 	if !errors.Is(err, usecase.ErrValidation) {
 		t.Fatalf("Execute error = %v, want ErrValidation", err)
 	}
@@ -410,7 +411,7 @@ func TestCreateSessionRejectsInvalidConfiguredHookScript(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			_, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", Create: true, BaseBranch: "main"})
+			_, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
 			if !errors.Is(err, usecase.ErrValidation) {
 				t.Fatalf("Execute error = %v, want ErrValidation", err)
 			}
@@ -457,7 +458,7 @@ func TestCreateSessionTmuxFailureAfterHookReleasesProvisionalLeases(t *testing.T
 		t.Fatal(err)
 	}
 
-	_, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", Create: true, BaseBranch: "main"})
+	_, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
 	if !errors.Is(err, usecase.ErrGateway) {
 		t.Fatalf("Execute error = %v, want ErrGateway", err)
 	}
@@ -509,7 +510,7 @@ func TestCreateSessionPromotesHookLeasesToCreatedSession(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	session, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", Create: true, BaseBranch: "main"})
+	session, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -542,7 +543,7 @@ func TestCreateSessionReconciliationReleasesPrunedSessionLeases(t *testing.T) {
 		if err != nil {
 			return err
 		}
-		pruned, err = sessions.Create(ctx, domain.NewWorktreeSession(0, project.ID(), "api.old", "old", filepath.Join(parent, "api.old")))
+		pruned, err = sessions.Create(ctx, domain.NewWorktreeSession(0, -1, project.ID(), "api.old", "old", filepath.Join(parent, "api.old")))
 		return err
 	}); err != nil {
 		t.Fatal(err)
@@ -555,7 +556,7 @@ func TestCreateSessionReconciliationReleasesPrunedSessionLeases(t *testing.T) {
 	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
 	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
 	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, &fakeWorktreeHookRunner{events: &events}, leases)
-	if _, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", Create: true, BaseBranch: "main"}); err != nil {
+	if _, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"}); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 
@@ -568,6 +569,554 @@ func TestCreateSessionReconciliationReleasesPrunedSessionLeases(t *testing.T) {
 	}
 	if port != 8000 {
 		t.Fatalf("port after reconcile = %d, want released port 8000", port)
+	}
+}
+
+// createFixture wires a CreateSession use case over in-memory repositories and
+// programmable Git/tmux fakes, with one project ("api") already stored. New
+// creation-mode tests program git.worktrees / git.branches to stage the
+// pre-existing state a mode is validated against.
+type worktreeFixture struct {
+	ctx      context.Context
+	uc       *usecase.CreateSession
+	project  *domain.Project
+	sessions *memory.MemorySessionRepository
+	lock     *spyLock
+	git      *fakeWorktreeGit
+	tmux     *eventTmuxGateway
+	hooks    *fakeWorktreeHookRunner
+	events   *[]string
+	parent   string
+}
+
+func newWorktreeFixture(t *testing.T) *worktreeFixture {
+	t.Helper()
+	ctx := context.Background()
+	parent := t.TempDir()
+	projectRoot := filepath.Join(parent, "api")
+	if err := os.Mkdir(projectRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	projects := memory.NewMemoryProjectRepository()
+	sessions := memory.NewMemorySessionRepository()
+	lock := &spyLock{}
+	events := &[]string{}
+	git := &fakeWorktreeGit{paths: make(map[string]bool), branches: make(map[string]bool), events: events}
+	tmux := &eventTmuxGateway{events: events, exists: make(map[string]bool)}
+	hooks := &fakeWorktreeHookRunner{events: events}
+	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository())
+	var project *domain.Project
+	if err := lock.WithWrite(func() error {
+		var err error
+		project, err = projects.Create(ctx, domain.NewProject(0, projectRoot, "api"))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	return &worktreeFixture{ctx: ctx, uc: uc, project: project, sessions: sessions, lock: lock, git: git, tmux: tmux, hooks: hooks, events: events, parent: parent}
+}
+
+// seedWorktreeSession stores a pre-existing Worktree Session bound to branch on
+// the fixture's project, as if one had been created earlier.
+func (f *worktreeFixture) seedWorktreeSession(t *testing.T, branch string) {
+	t.Helper()
+	path := filepath.Join(f.parent, "api."+branch)
+	// Mark the worktree present on disk so reconciliation does not prune the
+	// seeded session before the duplicate-branch check runs.
+	f.git.paths[path] = true
+	if err := f.lock.WithWrite(func() error {
+		_, err := f.sessions.Create(f.ctx, domain.NewWorktreeSession(0, -1, f.project.ID(), "api."+branch, branch, path))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// worktreePath is the path CreateSession derives for the standard test branch
+// "feature/login" under project "api".
+func (f *worktreeFixture) worktreePath() string {
+	return filepath.Join(f.parent, "api.feature-login")
+}
+
+func (f *worktreeFixture) execute(in usecase.CreateSessionInput) (*domain.Session, error) {
+	in.ProjectID = f.project.ID()
+	in.Type = domain.WorktreeSession
+	if in.Branch == "" {
+		in.Branch = "feature/login"
+	}
+	return f.uc.Execute(f.ctx, in)
+}
+
+// writeHook configures a no-op on-create Worktree Hook for the fixture's
+// project, so tests can assert the hook does (or does not) run.
+func (f *worktreeFixture) writeHook(t *testing.T) {
+	t.Helper()
+	projectRoot := f.project.FullPath()
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder-on-create-worktree.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non-create-script = \".tmux-coder-on-create-worktree.sh\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func conflictCode(t *testing.T, err error) string {
+	t.Helper()
+	var sce *usecase.StateConflictError
+	if !errors.As(err, &sce) {
+		t.Fatalf("error = %v, want *StateConflictError", err)
+	}
+	return sce.Code
+}
+
+func TestCreateSessionRejectsBranchWithoutWorktree(t *testing.T) {
+	f := newWorktreeFixture(t)
+	_, err := f.execute(usecase.CreateSessionInput{CreateWorktree: false, CreateBranch: true})
+	if !errors.Is(err, usecase.ErrValidation) {
+		t.Fatalf("Execute error = %v, want ErrValidation", err)
+	}
+}
+
+func TestCreateSessionRejectsBaseBranchWhenNotCreatingBranch(t *testing.T) {
+	f := newWorktreeFixture(t)
+	_, err := f.execute(usecase.CreateSessionInput{CreateWorktree: true, CreateBranch: false, BaseBranch: "main"})
+	if !errors.Is(err, usecase.ErrValidation) {
+		t.Fatalf("Execute error = %v, want ErrValidation", err)
+	}
+}
+
+func TestCreateSessionFreshConflictsWhenSessionExistsForBranch(t *testing.T) {
+	f := newWorktreeFixture(t)
+	f.seedWorktreeSession(t, "feature/login")
+	_, err := f.execute(usecase.CreateSessionInput{CreateWorktree: true, CreateBranch: true})
+	if code := conflictCode(t, err); code != usecase.CodeSessionExists {
+		t.Fatalf("code = %q, want %q", code, usecase.CodeSessionExists)
+	}
+	if len(*f.events) != 0 {
+		t.Fatalf("events = %v, want none (conflict before any side effect)", *f.events)
+	}
+}
+
+func TestCreateSessionFreshConflictsWhenWorktreeAdoptable(t *testing.T) {
+	f := newWorktreeFixture(t)
+	f.git.worktrees = []usecase.WorktreeRef{{Path: f.worktreePath(), Branch: "feature/login"}}
+	_, err := f.execute(usecase.CreateSessionInput{CreateWorktree: true, CreateBranch: true})
+	if code := conflictCode(t, err); code != usecase.CodeWorktreeExists {
+		t.Fatalf("code = %q, want %q", code, usecase.CodeWorktreeExists)
+	}
+}
+
+func TestCreateSessionFreshConflictsWhenWorktreeOnDifferentBranch(t *testing.T) {
+	f := newWorktreeFixture(t)
+	f.git.worktrees = []usecase.WorktreeRef{{Path: f.worktreePath(), Branch: "other"}}
+	_, err := f.execute(usecase.CreateSessionInput{CreateWorktree: true, CreateBranch: true})
+	if code := conflictCode(t, err); code != usecase.CodePathBlocked {
+		t.Fatalf("code = %q, want %q", code, usecase.CodePathBlocked)
+	}
+}
+
+func TestCreateSessionFreshConflictsWhenStrayDirAtPath(t *testing.T) {
+	f := newWorktreeFixture(t)
+	f.git.paths[f.worktreePath()] = true // occupied, but not a worktree of this repo
+	_, err := f.execute(usecase.CreateSessionInput{CreateWorktree: true, CreateBranch: true})
+	if code := conflictCode(t, err); code != usecase.CodePathBlocked {
+		t.Fatalf("code = %q, want %q", code, usecase.CodePathBlocked)
+	}
+}
+
+func TestCreateSessionFreshConflictsWhenBranchOnlyExists(t *testing.T) {
+	f := newWorktreeFixture(t)
+	f.git.branches["feature/login"] = true // branch exists, no worktree at the derived path
+	_, err := f.execute(usecase.CreateSessionInput{CreateWorktree: true, CreateBranch: true})
+	if code := conflictCode(t, err); code != usecase.CodeBranchExists {
+		t.Fatalf("code = %q, want %q", code, usecase.CodeBranchExists)
+	}
+}
+
+func TestCreateSessionExistingBranchAddsWorktreeWithoutCreatingBranchAndRunsHook(t *testing.T) {
+	f := newWorktreeFixture(t)
+	f.writeHook(t)
+	f.git.branches["feature/login"] = true // branch exists, no worktree yet
+	session, err := f.execute(usecase.CreateSessionInput{CreateWorktree: true, CreateBranch: false})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if session.Branch() != "feature/login" {
+		t.Fatalf("session branch = %q, want feature/login", session.Branch())
+	}
+	if !reflect.DeepEqual(*f.events, []string{"git:add", "hook:run", "tmux:create"}) {
+		t.Fatalf("events = %v, want git add, hook, tmux create", *f.events)
+	}
+	if len(f.git.addCalls) != 1 || f.git.addCalls[0].createBranch {
+		t.Fatalf("AddWorktree calls = %+v, want one with createBranch=false", f.git.addCalls)
+	}
+}
+
+func TestCreateSessionExistingBranchConflictsWhenBranchMissing(t *testing.T) {
+	f := newWorktreeFixture(t)
+	_, err := f.execute(usecase.CreateSessionInput{CreateWorktree: true, CreateBranch: false})
+	if !errors.Is(err, usecase.ErrConflict) {
+		t.Fatalf("Execute error = %v, want ErrConflict", err)
+	}
+	if len(*f.events) != 0 {
+		t.Fatalf("events = %v, want none", *f.events)
+	}
+}
+
+func TestCreateSessionAdoptWrapsExistingWorktreeWithoutAddOrHook(t *testing.T) {
+	f := newWorktreeFixture(t)
+	f.writeHook(t) // a hook is configured but adoption must not run it
+	f.git.worktrees = []usecase.WorktreeRef{{Path: f.worktreePath(), Branch: "feature/login"}}
+	session, err := f.execute(usecase.CreateSessionInput{CreateWorktree: false, CreateBranch: false})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if session.Branch() != "feature/login" || session.WorktreePath() != f.worktreePath() {
+		t.Fatalf("session = branch %q path %q, want feature/login at %q", session.Branch(), session.WorktreePath(), f.worktreePath())
+	}
+	// No worktree materialization and no hook — only the tmux session is created.
+	if !reflect.DeepEqual(*f.events, []string{"tmux:create"}) {
+		t.Fatalf("events = %v, want only tmux:create", *f.events)
+	}
+	if len(f.git.addCalls) != 0 {
+		t.Fatalf("AddWorktree calls = %+v, want none for adoption", f.git.addCalls)
+	}
+	if len(f.hooks.calls) != 0 {
+		t.Fatalf("hook ran during adoption: %+v", f.hooks.calls)
+	}
+}
+
+func TestCreateSessionAdoptKeepsProvenanceParent(t *testing.T) {
+	f := newWorktreeFixture(t)
+	// A 'w' gesture that hits a worktree_exists conflict re-issues as adopt while
+	// carrying its source; the adopted worktree must still nest under that source
+	// (ADR-0010 provenance is recorded for every creation mode).
+	sourcePath := filepath.Join(f.parent, "api.feature")
+	f.git.paths[sourcePath] = true // present on disk so reconcile does not prune it
+	var source *domain.Session
+	if err := f.lock.WithWrite(func() error {
+		var err error
+		source, err = f.sessions.Create(f.ctx, domain.NewWorktreeSession(0, -1, f.project.ID(), "api.feature", "feature", sourcePath))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	f.git.worktrees = []usecase.WorktreeRef{{Path: f.worktreePath(), Branch: "feature/login"}}
+
+	session, err := f.execute(usecase.CreateSessionInput{CreateWorktree: false, CreateBranch: false, ParentSessionID: source.ID()})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if session.Parent() != source.ID() {
+		t.Fatalf("adopted worktree parent = %d, want source %d (provenance carried through adopt)", session.Parent(), source.ID())
+	}
+	if len(f.git.addCalls) != 0 {
+		t.Fatalf("AddWorktree calls = %+v, want none for adoption", f.git.addCalls)
+	}
+}
+
+func TestCreateSessionAdoptConflictsWhenWorktreeOnDifferentBranch(t *testing.T) {
+	f := newWorktreeFixture(t)
+	f.git.worktrees = []usecase.WorktreeRef{{Path: f.worktreePath(), Branch: "other"}}
+	_, err := f.execute(usecase.CreateSessionInput{CreateWorktree: false, CreateBranch: false})
+	if code := conflictCode(t, err); code != usecase.CodePathBlocked {
+		t.Fatalf("code = %q, want %q", code, usecase.CodePathBlocked)
+	}
+}
+
+func TestCreateSessionAdoptConflictsWhenNothingToAdopt(t *testing.T) {
+	f := newWorktreeFixture(t)
+	_, err := f.execute(usecase.CreateSessionInput{CreateWorktree: false, CreateBranch: false})
+	if code := conflictCode(t, err); code != usecase.CodePathBlocked {
+		t.Fatalf("code = %q, want %q", code, usecase.CodePathBlocked)
+	}
+}
+
+func TestCreateSessionAdoptRollbackLeavesWorktreeAndBranchIntact(t *testing.T) {
+	f := newWorktreeFixture(t)
+	f.git.worktrees = []usecase.WorktreeRef{{Path: f.worktreePath(), Branch: "feature/login"}}
+	f.tmux.createErr = errors.New("tmux failed")
+	_, err := f.execute(usecase.CreateSessionInput{CreateWorktree: false, CreateBranch: false})
+	if !errors.Is(err, usecase.ErrGateway) {
+		t.Fatalf("Execute error = %v, want ErrGateway", err)
+	}
+	if len(f.git.removed) != 0 {
+		t.Fatalf("removed worktrees = %v, want none (adoption must not remove the worktree)", f.git.removed)
+	}
+	if len(f.git.deletedBranches) != 0 {
+		t.Fatalf("deleted branches = %v, want none (adoption must not delete the branch)", f.git.deletedBranches)
+	}
+}
+
+// worktreeProvenanceUC wires a CreateSession against in-memory repos and a fake
+// Git gateway for the ADR-0010 provenance tests, returning the use case, the
+// session repo (to inspect parents), the git fake (to inspect AddWorktree) and
+// the created Project.
+func worktreeProvenanceUC(t *testing.T, git *fakeWorktreeGit) (context.Context, *usecase.CreateSession, *memory.MemorySessionRepository, *domain.Project) {
+	t.Helper()
+	ctx := context.Background()
+	projectRoot := filepath.Join(t.TempDir(), "api")
+	if err := os.Mkdir(projectRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	projects := memory.NewMemoryProjectRepository()
+	sessions := memory.NewMemorySessionRepository()
+	lock := &spyLock{}
+	tmux := &eventTmuxGateway{events: git.events, exists: make(map[string]bool)}
+	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, &fakeWorktreeHookRunner{events: git.events}, memory.NewMemoryResourceLeaseRepository())
+	project, err := projects.Create(ctx, domain.NewProject(0, projectRoot, "api"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return ctx, uc, sessions, project
+}
+
+func TestCreateSessionWorktreeFromWorktreeParentsToSourceAndBranchesOffItsBranch(t *testing.T) {
+	var events []string
+	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
+	ctx, uc, sessions, project := worktreeProvenanceUC(t, git)
+
+	sourcePath := filepath.Join(filepath.Dir(project.FullPath()), "api.feature")
+	git.paths[sourcePath] = true
+	source, err := sessions.Create(ctx, domain.NewWorktreeSession(0, -1, project.ID(), "api.feature", "feature", sourcePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	child, err := uc.Execute(ctx, usecase.CreateSessionInput{
+		ProjectID:       project.ID(),
+		Type:            domain.WorktreeSession,
+		Branch:          "feature-backend",
+		CreateWorktree:  true,
+		CreateBranch:    true,
+		ParentSessionID: source.ID(),
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if child.Parent() != source.ID() {
+		t.Errorf("child parent = %d, want source %d (provenance)", child.Parent(), source.ID())
+	}
+	// The new branch is cut from the source worktree's committed branch tip.
+	if len(git.addCalls) != 1 || git.addCalls[0].baseBranch != "feature" || !git.addCalls[0].createBranch {
+		t.Errorf("AddWorktree = %+v, want one create off baseBranch=feature", git.addCalls)
+	}
+}
+
+func TestCreateSessionWorktreeFromMainParentsToMainAndBranchesOffCurrentBranch(t *testing.T) {
+	var events []string
+	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events, currentBranch: "develop"}
+	ctx, uc, sessions, project := worktreeProvenanceUC(t, git)
+
+	main, err := sessions.Create(ctx, domain.NewSession(0, -1, project.ID(), "api.main", domain.MainSession))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	child, err := uc.Execute(ctx, usecase.CreateSessionInput{
+		ProjectID:       project.ID(),
+		Type:            domain.WorktreeSession,
+		Branch:          "feature",
+		CreateWorktree:  true,
+		CreateBranch:    true,
+		ParentSessionID: main.ID(),
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if child.Parent() != main.ID() {
+		t.Errorf("child parent = %d, want main %d", child.Parent(), main.ID())
+	}
+	if len(git.addCalls) != 1 || git.addCalls[0].baseBranch != "develop" {
+		t.Errorf("AddWorktree = %+v, want baseBranch=develop (main's current branch)", git.addCalls)
+	}
+}
+
+func TestCreateSessionWorktreeFromDetachedMainIsRejected(t *testing.T) {
+	var events []string
+	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events, currentBranch: ""}
+	ctx, uc, sessions, project := worktreeProvenanceUC(t, git)
+
+	main, err := sessions.Create(ctx, domain.NewSession(0, -1, project.ID(), "api.main", domain.MainSession))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = uc.Execute(ctx, usecase.CreateSessionInput{
+		ProjectID:       project.ID(),
+		Type:            domain.WorktreeSession,
+		Branch:          "feature",
+		CreateWorktree:  true,
+		CreateBranch:    true,
+		ParentSessionID: main.ID(),
+	})
+	if !errors.Is(err, usecase.ErrValidation) {
+		t.Fatalf("Execute error = %v, want ErrValidation for detached HEAD", err)
+	}
+	if len(git.addCalls) != 0 {
+		t.Errorf("AddWorktree should not run for a detached-HEAD source, got %+v", git.addCalls)
+	}
+}
+
+func TestCreateSessionWorktreeFromSecondaryIsRejected(t *testing.T) {
+	var events []string
+	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
+	ctx, uc, sessions, project := worktreeProvenanceUC(t, git)
+
+	main, err := sessions.Create(ctx, domain.NewSession(0, -1, project.ID(), "api.main", domain.MainSession))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondary, err := sessions.Create(ctx, domain.NewSecondarySession(0, main.ID(), project.ID(), "backend", "backend", "cascade"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = uc.Execute(ctx, usecase.CreateSessionInput{
+		ProjectID:       project.ID(),
+		Type:            domain.WorktreeSession,
+		Branch:          "feature",
+		CreateWorktree:  true,
+		CreateBranch:    true,
+		ParentSessionID: secondary.ID(),
+	})
+	if !errors.Is(err, usecase.ErrValidation) {
+		t.Fatalf("Execute error = %v, want ErrValidation for a secondary source", err)
+	}
+	if len(git.addCalls) != 0 {
+		t.Errorf("AddWorktree should not run for a secondary source, got %+v", git.addCalls)
+	}
+}
+
+func TestCreateSessionWorktreeFromBaseRefIsParentlessAndValidatesRef(t *testing.T) {
+	var events []string
+	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
+	ctx, uc, _, project := worktreeProvenanceUC(t, git)
+
+	child, err := uc.Execute(ctx, usecase.CreateSessionInput{
+		ProjectID:      project.ID(),
+		Type:           domain.WorktreeSession,
+		Branch:         "feature",
+		CreateWorktree: true,
+		CreateBranch:   true,
+		BaseBranch:     "origin/main",
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if child.Parent() != -1 {
+		t.Errorf("child parent = %d, want -1 (parentless 'W')", child.Parent())
+	}
+	if len(git.addCalls) != 1 || git.addCalls[0].baseBranch != "origin/main" {
+		t.Errorf("AddWorktree = %+v, want baseBranch=origin/main", git.addCalls)
+	}
+}
+
+func TestCreateSessionWorktreeFromUnresolvableBaseRefIsRejected(t *testing.T) {
+	var events []string
+	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events, unresolvable: map[string]bool{"nope": true}}
+	ctx, uc, _, project := worktreeProvenanceUC(t, git)
+
+	_, err := uc.Execute(ctx, usecase.CreateSessionInput{
+		ProjectID:      project.ID(),
+		Type:           domain.WorktreeSession,
+		Branch:         "feature",
+		CreateWorktree: true,
+		CreateBranch:   true,
+		BaseBranch:     "nope",
+	})
+	if !errors.Is(err, usecase.ErrValidation) {
+		t.Fatalf("Execute error = %v, want ErrValidation for unresolvable base ref", err)
+	}
+	if len(git.addCalls) != 0 {
+		t.Errorf("AddWorktree should not run for an unresolvable base ref, got %+v", git.addCalls)
+	}
+}
+
+func TestCreateSecondaryDepthBudgetResetsAtWorktreeRoot(t *testing.T) {
+	var events []string
+	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
+	ctx, uc, sessions, project := worktreeProvenanceUC(t, git)
+
+	main, err := sessions.Create(ctx, domain.NewSession(0, -1, project.ID(), "api.main", domain.MainSession))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Four nested worktrees: main -> wt1 -> wt2 -> wt3 -> wt4. Measured from the
+	// root the chain spans five levels, so without the depth-budget reset it
+	// would exhaust the Secondary depth-5 cap and reject any secondary under wt4.
+	base := filepath.Dir(project.FullPath())
+	parentID := main.ID()
+	var deepest *domain.Session
+	for i := 1; i <= 4; i++ {
+		wtPath := filepath.Join(base, fmt.Sprintf("api.wt%d", i))
+		if err := os.Mkdir(wtPath, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		wt, err := sessions.Create(ctx, domain.NewWorktreeSession(0, parentID, project.ID(), fmt.Sprintf("api.wt%d", i), fmt.Sprintf("wt%d", i), wtPath))
+		if err != nil {
+			t.Fatal(err)
+		}
+		parentID = wt.ID()
+		deepest = wt
+	}
+
+	// A secondary directly under the deepest worktree must be allowed: the
+	// worktree root resets the budget, so the secondary sits at depth 2.
+	sec, err := uc.Execute(ctx, usecase.CreateSessionInput{
+		Type:            domain.SecondarySession,
+		ParentSessionID: deepest.ID(),
+		PreferredName:   "logs",
+	})
+	if err != nil {
+		t.Fatalf("secondary under a deeply-nested worktree should be allowed: %v", err)
+	}
+	if sec.Parent() != deepest.ID() {
+		t.Errorf("secondary parent = %d, want deepest worktree %d", sec.Parent(), deepest.ID())
+	}
+}
+
+func TestCreateSecondaryDepthCapStillEnforcedFromWorktreeRoot(t *testing.T) {
+	var events []string
+	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
+	ctx, uc, sessions, project := worktreeProvenanceUC(t, git)
+
+	main, err := sessions.Create(ctx, domain.NewSession(0, -1, project.ID(), "api.main", domain.MainSession))
+	if err != nil {
+		t.Fatal(err)
+	}
+	wtPath := filepath.Join(filepath.Dir(project.FullPath()), "api.feature")
+	if err := os.Mkdir(wtPath, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wt, err := sessions.Create(ctx, domain.NewWorktreeSession(0, main.ID(), project.ID(), "api.feature", "feature", wtPath))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// The worktree root is depth 1, so four nested secondaries (depths 2..5) are
+	// allowed and a fifth under the deepest must be rejected by the depth-5 cap.
+	parentID := wt.ID()
+	for i := 1; i <= 4; i++ {
+		sec, err := uc.Execute(ctx, usecase.CreateSessionInput{
+			Type:            domain.SecondarySession,
+			ParentSessionID: parentID,
+			PreferredName:   fmt.Sprintf("lvl%d", i),
+		})
+		if err != nil {
+			t.Fatalf("secondary at level %d should be allowed: %v", i, err)
+		}
+		parentID = sec.ID()
+	}
+	if _, err := uc.Execute(ctx, usecase.CreateSessionInput{
+		Type:            domain.SecondarySession,
+		ParentSessionID: parentID,
+		PreferredName:   "toodeep",
+	}); !errors.Is(err, usecase.ErrValidation) {
+		t.Fatalf("fifth nested secondary error = %v, want ErrValidation (depth cap)", err)
 	}
 }
 
@@ -634,11 +1183,23 @@ func (g *eventTmuxGateway) SwitchClients(ctx context.Context, from, to string) e
 	return nil
 }
 
+type addWorktreeCall struct {
+	worktreePath string
+	branch       string
+	baseBranch   string
+	createBranch bool
+}
+
 type fakeWorktreeGit struct {
 	paths           map[string]bool
+	worktrees       []usecase.WorktreeRef
+	branches        map[string]bool
 	events          *[]string
+	addCalls        []addWorktreeCall
 	removed         []string
 	deletedBranches []string
+	currentBranch   string          // returned by CurrentBranch ("" models detached HEAD)
+	unresolvable    map[string]bool // refs ResolveCommit reports as not resolving
 }
 
 func (g *fakeWorktreeGit) ValidateBranchName(ctx context.Context, branch string) error { return nil }
@@ -648,19 +1209,24 @@ func (g *fakeWorktreeGit) IsWorktreeRoot(ctx context.Context, path string) (bool
 }
 
 func (g *fakeWorktreeGit) LocalBranchExists(ctx context.Context, repoPath, branch string) (bool, error) {
-	return false, nil
+	return g.branches[branch], nil
 }
 
 func (g *fakeWorktreeGit) ResolveCommit(ctx context.Context, repoPath, ref string) (bool, error) {
-	return true, nil
+	return !g.unresolvable[ref], nil
 }
 
 func (g *fakeWorktreeGit) WorktreePathExists(ctx context.Context, path string) (bool, error) {
 	return g.paths[path], nil
 }
 
-func (g *fakeWorktreeGit) AddWorktree(ctx context.Context, repoPath, worktreePath, branch, baseBranch string, create bool) error {
+func (g *fakeWorktreeGit) ListWorktrees(ctx context.Context, repoPath string) ([]usecase.WorktreeRef, error) {
+	return g.worktrees, nil
+}
+
+func (g *fakeWorktreeGit) AddWorktree(ctx context.Context, repoPath, worktreePath, branch, baseBranch string, createBranch bool) error {
 	*g.events = append(*g.events, "git:add")
+	g.addCalls = append(g.addCalls, addWorktreeCall{worktreePath, branch, baseBranch, createBranch})
 	g.paths[worktreePath] = true
 	return nil
 }
@@ -677,5 +1243,5 @@ func (g *fakeWorktreeGit) DeleteBranch(ctx context.Context, repoPath, branch str
 }
 
 func (g *fakeWorktreeGit) CurrentBranch(ctx context.Context, repoPath string) (string, error) {
-	return "main", nil
+	return g.currentBranch, nil
 }

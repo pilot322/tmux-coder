@@ -53,30 +53,64 @@ func (uc *DeleteSession) Execute(ctx context.Context, in DeleteSessionInput) err
 	case domain.SecondarySession:
 		return uc.deleteSecondary(ctx, session)
 	case domain.WorktreeSession:
-		// continue
+		return uc.deleteWorktree(ctx, session, in.Force)
 	default:
 		return fmt.Errorf("%w: unsupported session type", ErrValidation)
 	}
+}
 
-	if err := uc.git.RemoveWorktree(ctx, session.WorktreePath(), in.Force); err != nil {
+// deleteWorktree removes a Worktree Session and its owned worktree. Its Secondary
+// children cascade — their subdirectories vanished with the worktree — while its
+// Worktree children are independent checkouts that survive and are reparented to
+// this session's parent (ADR-0010).
+func (uc *DeleteSession) deleteWorktree(ctx context.Context, session *domain.Session, force bool) error {
+	var allSessions []*domain.Session
+	if err := uc.lock.WithRead(func() error {
+		s, err := uc.sessions.GetAll(ctx)
+		allSessions = s
+		return err
+	}); err != nil {
+		return err
+	}
+
+	if err := uc.git.RemoveWorktree(ctx, session.WorktreePath(), force); err != nil {
 		if errors.Is(err, ErrConflict) {
 			return err
 		}
 		return fmt.Errorf("%w: %v", ErrGateway, err)
 	}
-	// The worktree is already gone, so the session record must be removed to
-	// stay consistent — a listed-but-unattachable session is worse than a
-	// stray tmux session.
+
+	// The worktree is already gone, so the records must be removed to stay
+	// consistent — listed-but-unattachable sessions are worse than stray tmux
+	// sessions, which the kills below clear best-effort.
+	cascade := secondaryDescendants(allSessions, session.ID())
 	uc.releaseAndKill(ctx, session)
+	for _, s := range cascade {
+		uc.releaseAndKill(ctx, s)
+	}
 
 	return uc.lock.WithWrite(func() error {
-		if err := uc.agents.DeleteBySessionID(ctx, session.ID()); err != nil {
-			return err
+		for _, s := range allSessions {
+			if s.Type() != domain.WorktreeSession || s.Parent() != session.ID() {
+				continue
+			}
+			reparented := domain.NewWorktreeSession(s.ID(), session.Parent(), s.ProjectID(), s.Name(), s.Branch(), s.WorktreePath())
+			if _, err := uc.sessions.Update(ctx, reparented); err != nil {
+				return err
+			}
 		}
-		if err := uc.leases.ReleaseSessionLeases(ctx, session.ID()); err != nil {
-			return err
+		for _, s := range append(cascade, session) {
+			if err := uc.agents.DeleteBySessionID(ctx, s.ID()); err != nil {
+				return err
+			}
+			if err := uc.leases.ReleaseSessionLeases(ctx, s.ID()); err != nil {
+				return err
+			}
+			if err := uc.sessions.Delete(ctx, s.ID()); err != nil {
+				return err
+			}
 		}
-		return uc.sessions.Delete(ctx, session.ID())
+		return nil
 	})
 }
 

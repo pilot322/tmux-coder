@@ -17,8 +17,12 @@ The single **Session** per **Project** that always exists — the home base for 
 _Avoid_: Root session, default session
 
 **Worktree Session**:
-A **Session** tied 1:1 to a git worktree for the same **Project**. Created with its git worktree; deleting the Worktree Session removes that worktree, while deleting the Project only removes tmux-coder's ownership of the Session.
+A **Session** tied 1:1 to a git worktree for the same **Project**. Created with its git worktree; deleting the Worktree Session removes that worktree, while deleting the Project only removes tmux-coder's ownership of the Session. A Worktree Session records its **Provenance**: the **Session** it was created from becomes its `parent` (a **Main Session** or another **Worktree Session**), or it is parentless when created directly from a bare base branch. Provenance is fixed at creation and is independent of where Git later moves branches.
 _Avoid_: Branch session
+
+**Provenance**:
+The creation-time origin of a **Worktree Session**, recorded as its `parent`. When a Worktree Session is created *from* another **Session** (its source), that source becomes the parent and the new Session renders nested beneath it. When created from a bare base branch that no Session represents, the Worktree Session is parentless and renders at the **Project** level. Provenance is a frozen structural fact, not a live Git merge-base.
+_Avoid_: Lineage, ancestry, base
 
 **Secondary Session**:
 A child **Session** that stems from a **Main Session**, **Worktree Session**, or another **Secondary Session**. Represents a sub-context within the same worktree (e.g. `packages/frontend`) and may be declared in a **Config File**.
@@ -67,6 +71,10 @@ _Avoid_: Sync, refresh, resync
 **Worktree Hook**:
 A **Project**-declared lifecycle script that customizes setup around a **Worktree Session**. It belongs to tmux-coder's lifecycle, not Git's hook system.
 _Avoid_: Git hook, shell command
+
+**Worktree Adoption**:
+Taking a git worktree that already exists on disk under management as a **Worktree Session**, without re-materializing it — tmux-coder neither creates the worktree nor runs its **Worktree Hooks**, only wrapping the existing checkout in a Session. Contrast with creating a Worktree Session, which materializes a new worktree and runs its hooks.
+_Avoid_: Import, attach, link, reuse
 
 **Resource Lease**:
 A **Daemon**-owned reservation of a local resource value for a **Project** and a **Session** or in-progress **Worktree Session** creation.

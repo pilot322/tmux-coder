@@ -64,9 +64,50 @@ func (g *Gateway) WorktreePathExists(ctx context.Context, path string) (bool, er
 	return false, err
 }
 
-func (g *Gateway) AddWorktree(ctx context.Context, repoPath, worktreePath, branch, baseBranch string, create bool) error {
+func (g *Gateway) ListWorktrees(ctx context.Context, repoPath string) ([]usecase.WorktreeRef, error) {
+	out, err := exec.CommandContext(ctx, g.binary, "-C", repoPath, "worktree", "list", "--porcelain").CombinedOutput()
+	if err != nil {
+		return nil, fmt.Errorf("git worktree list --porcelain: %w: %s", err, out)
+	}
+	return parseWorktreePorcelain(out), nil
+}
+
+// parseWorktreePorcelain reads the records emitted by
+// `git worktree list --porcelain`. Records are separated by blank lines and
+// begin with a `worktree <path>` line; a record may carry `branch
+// refs/heads/<name>`, `detached`, or `bare`. The bare main repository has no
+// checkout to wrap, so it is omitted.
+func parseWorktreePorcelain(out []byte) []usecase.WorktreeRef {
+	var refs []usecase.WorktreeRef
+	var cur usecase.WorktreeRef
+	var have, bare bool
+	flush := func() {
+		if have && !bare {
+			refs = append(refs, cur)
+		}
+		cur, have, bare = usecase.WorktreeRef{}, false, false
+	}
+	for _, line := range strings.Split(string(out), "\n") {
+		switch {
+		case strings.HasPrefix(line, "worktree "):
+			flush()
+			cur.Path = strings.TrimPrefix(line, "worktree ")
+			have = true
+		case strings.HasPrefix(line, "branch refs/heads/"):
+			cur.Branch = strings.TrimPrefix(line, "branch refs/heads/")
+		case line == "detached":
+			cur.Detached = true
+		case line == "bare":
+			bare = true
+		}
+	}
+	flush()
+	return refs
+}
+
+func (g *Gateway) AddWorktree(ctx context.Context, repoPath, worktreePath, branch, baseBranch string, createBranch bool) error {
 	args := []string{"-C", repoPath, "worktree", "add"}
-	if create {
+	if createBranch {
 		args = append(args, "-b", branch, worktreePath)
 		if baseBranch != "" {
 			args = append(args, baseBranch)

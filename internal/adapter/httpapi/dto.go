@@ -24,7 +24,8 @@ type createSessionRequest struct {
 	ProjectID                int    `json:"projectId"`
 	Type                     string `json:"type"`
 	Branch                   string `json:"branch"`
-	Create                   bool   `json:"create"`
+	CreateWorktree           bool   `json:"createWorktree"`
+	CreateBranch             bool   `json:"createBranch"`
 	BaseBranch               string `json:"baseBranch"`
 	ParentSessionID          int    `json:"parentSessionId"`
 	RelativeWorkingDirectory string `json:"relativeWorkingDirectory"`
@@ -54,6 +55,7 @@ type sessionsResponse struct {
 
 type errorResponse struct {
 	Error string `json:"error"`
+	Code  string `json:"code,omitempty"`
 }
 
 type acquirePortRequest struct {
