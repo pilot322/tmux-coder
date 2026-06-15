@@ -74,6 +74,11 @@ type SessionGateway interface {
 	Create(ctx context.Context, name, workingDir string) error
 	Kill(ctx context.Context, name string) error
 	Exists(ctx context.Context, name string) (bool, error)
+	// SwitchClients moves every tmux client currently attached to the from
+	// session over to the to session. It is a no-op (nil error) when from has
+	// no attached clients or no longer exists, so callers can switch a session's
+	// clients away unconditionally before killing it.
+	SwitchClients(ctx context.Context, from, to string) error
 }
 
 // StateLock guards the daemon's in-memory state (ADR-0003). Repository calls

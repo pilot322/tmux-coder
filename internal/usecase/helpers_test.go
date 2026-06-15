@@ -128,6 +128,10 @@ func (g *fakeGateway) Exists(ctx context.Context, name string) (bool, error) {
 	return g.exists[name], nil
 }
 
+func (g *fakeGateway) SwitchClients(ctx context.Context, from, to string) error {
+	return nil
+}
+
 // createFixture wires a CreateProject against real in-memory repos, the spy
 // lock and the fake gateway, returning all of them for assertions.
 func createFixture() (*usecase.CreateProject, *memory.MemoryProjectRepository, *memory.MemorySessionRepository, *fakeGateway, *spyLock) {

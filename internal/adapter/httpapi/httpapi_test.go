@@ -50,6 +50,9 @@ func (g *stubGateway) Kill(ctx context.Context, name string) error {
 func (g *stubGateway) Exists(ctx context.Context, name string) (bool, error) {
 	return g.exists[name], nil
 }
+func (g *stubGateway) SwitchClients(ctx context.Context, from, to string) error {
+	return nil
+}
 
 type stubGit struct {
 	paths map[string]bool
