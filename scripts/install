@@ -69,3 +69,7 @@ fi
   cd "$root_dir"
   go install ./cmd/tmux-coder ./cmd/tmux-coderd
 )
+
+gobin="$(go env GOBIN)"
+[[ -z "$gobin" ]] && gobin="$(go env GOPATH)/bin"
+echo "installed prod tmux-coder, tmux-coderd → ${gobin} (defaults: port 64357, tmux server tmux-coder)"

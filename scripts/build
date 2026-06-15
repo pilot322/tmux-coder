@@ -28,7 +28,7 @@ dev_label="tmux-coder-${worktree_name}"
 ldflags="-X ${module}/internal/daemonaddr.DefaultPort=${dev_port}"
 ldflags+=" -X ${module}/internal/tmuxserver.DefaultLabel=${dev_label}"
 
-echo "dev build: port=${dev_port} tmux-server=${dev_label}" >&2
+echo "  bin/ dev build → port ${dev_port}, tmux server ${dev_label}" >&2
 
 mkdir -p "$root_dir/bin"
 
