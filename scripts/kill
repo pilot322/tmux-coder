@@ -41,21 +41,74 @@ fi
 pids=()
 tmux_servers=()
 
+# env_from_proc prints a variable from a process's launch-time environment, or
+# nothing if it is unset. /proc/<pid>/environ only reflects the environment that
+# existed at exec, so it misses any var the daemon sets later (loadEnvFile in
+# cmd/tmux-coderd reads the worktree .env via os.Setenv after start-up).
+env_from_proc() {
+  local pid="$1"
+  local name="$2"
+  local entry
+
+  [[ -r "/proc/$pid/environ" ]] || return 0
+  while IFS= read -r -d '' entry; do
+    if [[ "${entry%%=*}" == "$name" ]]; then
+      printf '%s\n' "${entry#*=}"
+      return 0
+    fi
+  done < "/proc/$pid/environ"
+}
+
+# env_from_file prints a variable from a .env file using the same parsing rules
+# as loadEnvFile in cmd/tmux-coderd/main.go, or nothing if absent. This is the
+# label source a worktree daemon actually uses but never exposes in its
+# environment.
+env_from_file() {
+  local file="$1"
+  local name="$2"
+  local line key value
+
+  [[ -r "$file" ]] || return 0
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    [[ "$line" == *=* ]] || continue
+    key="${line%%=*}"
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    [[ "$key" == "$name" ]] || continue
+    value="${line#*=}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+    value="${value#[\"\']}"
+    value="${value%[\"\']}"
+    printf '%s\n' "$value"
+    return 0
+  done < "$file"
+}
+
+# tmux_server_for_pid resolves the tmux server label a daemon is using, mirroring
+# the daemon's own precedence: an env var exported before launch wins (it is the
+# only label visible in /proc/<pid>/environ, and loadEnvFile skips already-set
+# keys), otherwise the worktree .env two directories up from <worktree>/bin/
+# tmux-coderd. With neither, a dev build still has its label baked in by
+# scripts/build via -ldflags, so reconstruct it the same way scripts/build does
+# from the worktree path; the scripts/build guard keeps this from ever firing on
+# the installed (prod) daemon, which falls through to the shipped default.
 tmux_server_for_pid() {
   local pid="$1"
-  local entry key value
-  value=""
+  local exe="$2"
+  local value root
 
-  if [[ -r "/proc/$pid/environ" ]]; then
-    while IFS= read -r -d '' entry; do
-      key="${entry%%=*}"
-      if [[ "$key" == "$tmux_server_env" ]]; then
-        value="${entry#*=}"
-        break
-      fi
-    done < "/proc/$pid/environ"
+  value="$(env_from_proc "$pid" "$tmux_server_env")"
+  if [[ -z "$value" && -n "$exe" ]]; then
+    root="$(dirname "$(dirname "$exe")")"
+    value="$(env_from_file "$root/.env" "$tmux_server_env")"
+    if [[ -z "$value" && "$exe" == */bin/tmux-coderd && -f "$root/scripts/build" ]]; then
+      value="tmux-coder-$(basename "$root")"
+    fi
   fi
-
   if [[ -z "$value" ]]; then
     value="$default_tmux_server"
   fi
@@ -92,11 +145,11 @@ for proc in /proc/[0-9]*; do
   if [[ $all -eq 1 ]]; then
     if [[ "$exe" == */bin/tmux-coderd ]]; then
       pids+=("$pid")
-      add_tmux_server "$(tmux_server_for_pid "$pid")"
+      add_tmux_server "$(tmux_server_for_pid "$pid" "$exe")"
     fi
   elif [[ "$(readlink -f "$exe")" == "$local_daemon_real" ]]; then
     pids+=("$pid")
-    add_tmux_server "$(tmux_server_for_pid "$pid")"
+    add_tmux_server "$(tmux_server_for_pid "$pid" "$exe")"
   fi
 done
 
