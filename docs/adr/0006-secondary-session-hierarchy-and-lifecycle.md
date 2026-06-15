@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Accepted. Naming amended by ADR-0007 (see the note under "Decision").
 
 ## Context
 
@@ -19,6 +19,16 @@ Secondary creation uses `parentSessionId` as the authoritative parent and Projec
 Secondary Session names shown in the CLI are derived from `preferredName` when present, otherwise from the basename of `relativeWorkingDirectory`. Names are globally suffixed with `-2`, `-3`, etc. on collision.
 
 Secondary tmux session names are separate from CLI-facing names. They use the Project directory name plus an underscore prefix, followed by the derived Secondary Session name with tmux-safe separators, for example `api_pkg` for CLI session `pkg` under Project `api`.
+
+> **Amended by ADR-0007.** Once a Config File declares Secondary Sessions as a
+> template applied under the Main Session and every Worktree Session, global CLI
+> suffixing makes the same `backend` read as `backend`, `backend-2`, `backend-3`
+> across worktrees — noise, since each is the only `backend` in its own subtree.
+> The revised rule: the secondary tmux target is prefixed with its **root
+> Session's** tmux name (e.g. `api_main_backend`, `api_auth_backend`,
+> `api_auth_backend_tools`) rather than the Project directory alone, so CLI names
+> only need **sibling** uniqueness and may repeat across subtrees. Addressing is
+> by the globally-unique tmux name, so repeating display names costs nothing.
 
 Deletion uses the stored `onDelete` policy. `cascade` deletes the selected Secondary and all descendant Secondary Sessions. `inherit` deletes the selected Secondary and reparents its direct Secondary children to the deleted Session's parent, preserving their descendants. Project and Worktree deletion cascade all descendant Secondary Sessions regardless of their own policy.
 
