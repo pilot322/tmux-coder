@@ -283,7 +283,7 @@ func (m Model) tickCmd() tea.Cmd {
 // modalActive reports whether a confirm or text-entry prompt is open. Background
 // refreshes must leave that interaction state untouched.
 func (m Model) modalActive() bool {
-	return m.confirm || m.creatingWorktree || m.creatingSecondary || m.creatingAgent || m.renamingAgent
+	return m.confirm || m.creatingWorktree || m.creatingWorktreeFromBase || m.creatingSecondary || m.creatingAgent || m.renamingAgent || m.worktreeConflict != ""
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -919,6 +919,9 @@ func (m Model) updateWorktreePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyEnter:
+		if m.loading {
+			return m, nil
+		}
 		branch := strings.TrimSpace(m.worktreeBranch)
 		if branch == "" {
 			m.status = "branch is required"
@@ -947,6 +950,9 @@ func (m Model) updateWorktreeConflict(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	switch msg.String() {
 	case "y":
+		if m.loading {
+			return m, nil
+		}
 		code := m.worktreeConflict
 		m.worktreeConflict = ""
 		m.status = ""
@@ -997,6 +1003,9 @@ func (m Model) updateWorktreeFromBasePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd)
 			m.worktreeFromBaseBranch = branch
 			m.worktreeFromBaseStep = worktreeBaseStepBaseRef
 			m.status = ""
+			return m, nil
+		}
+		if m.loading {
 			return m, nil
 		}
 		baseRef := strings.TrimSpace(m.worktreeFromBaseRef)

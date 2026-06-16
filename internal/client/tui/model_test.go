@@ -597,6 +597,34 @@ func TestModelWorktreePromptCreatesSessionForSelectedProject(t *testing.T) {
 	}
 }
 
+func TestModelWorktreePromptIgnoresDuplicateSubmitWhileLoading(t *testing.T) {
+	api := &fakeAPI{createdSession: httpclient.Session{ID: 2, ProjectID: 7, SessionName: "api-feature-login", Type: "worktree", Branch: "feature/login"}}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api-main", Type: "main"}},
+	})
+	m = updated.(Model)
+	m = press(m, runes("1"))
+	m = press(m, runes("w"))
+	m = press(m, runes("feature/login"))
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if !m.loading || cmd == nil {
+		t.Fatalf("first submit loading=%v cmd nil=%v", m.loading, cmd == nil)
+	}
+
+	updated, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if !m.loading || cmd != nil {
+		t.Fatalf("duplicate submit loading=%v cmd nil=%v, want loading and no command", m.loading, cmd == nil)
+	}
+	if len(api.created) != 0 {
+		t.Fatalf("create command should not have run yet, got %d calls", len(api.created))
+	}
+}
+
 func TestModelWorktreeCreateRefetchesAndSelectsNewSession(t *testing.T) {
 	api := &fakeAPI{createdSession: httpclient.Session{ID: 2, ProjectID: 7, SessionName: "api-feature-login", Type: "worktree", Branch: "feature/login"}}
 	m := NewModel(context.Background(), api)

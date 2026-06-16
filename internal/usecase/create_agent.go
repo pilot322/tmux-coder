@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/pilot322/tmux-coder/internal/binresolve"
@@ -130,7 +131,7 @@ func (uc *CreateAgent) Execute(ctx context.Context, in CreateAgentInput) (Create
 			})
 			return CreateAgentResult{}, err
 		}
-		resultPaneID, err := uc.tmux.NewWindow(ctx, session.TmuxName(), project.FullPath(), cmd, env)
+		resultPaneID, err := uc.tmux.NewWindow(ctx, session.TmuxName(), agentWorkingDir(project, session), cmd, env)
 		if err != nil {
 			uc.log.Error(ctx, "agent window create failed, deleting agent record", "agent_id", agent.ID(), "kind", in.Kind, "err", err.Error())
 			_ = uc.lock.WithWrite(func() error {
@@ -161,6 +162,20 @@ func (uc *CreateAgent) Execute(ctx context.Context, in CreateAgentInput) (Create
 		}
 	}
 	return res, nil
+}
+
+func agentWorkingDir(project *domain.Project, session *domain.Session) string {
+	switch session.Type() {
+	case domain.WorktreeSession:
+		if session.WorktreePath() != "" {
+			return session.WorktreePath()
+		}
+	case domain.SecondarySession:
+		if session.RelativeWorkingDirectory() != "" {
+			return filepath.Join(project.FullPath(), session.RelativeWorkingDirectory())
+		}
+	}
+	return project.FullPath()
 }
 
 func agentEnvVars(agent *domain.Agent, daemonAddr string) []string {

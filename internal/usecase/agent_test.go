@@ -15,6 +15,7 @@ import (
 
 type fakeAgentGateway struct {
 	createdWindows []string
+	workingDirs    []string
 	commands       []string
 	paneIDCounter  int
 	panes          map[string]bool
@@ -38,6 +39,7 @@ func (g *fakeAgentGateway) NewWindow(ctx context.Context, sessionName, workingDi
 	paneID := "%" + itoa(g.paneIDCounter)
 	g.panes[paneID] = true
 	g.createdWindows = append(g.createdWindows, sessionName)
+	g.workingDirs = append(g.workingDirs, workingDir)
 	g.commands = append(g.commands, command)
 	return paneID, nil
 }
@@ -122,6 +124,28 @@ func TestCreateAgent_OwnedPane(t *testing.T) {
 	}
 	if len(gw.commands) != 1 || !strings.Contains(gw.commands[0], "agent-wrapper") {
 		t.Fatalf("commands = %v, want agent-wrapper subcommand", gw.commands)
+	}
+	if len(gw.workingDirs) != 1 || gw.workingDirs[0] != p.FullPath() {
+		t.Fatalf("workingDirs = %v, want project root %q", gw.workingDirs, p.FullPath())
+	}
+}
+
+func TestCreateAgentOwnedPaneUsesWorktreeDirectory(t *testing.T) {
+	uc, _, projects, sessions, gw, _ := agentFixture()
+	ctx := context.Background()
+	p, _ := projects.Create(ctx, domain.NewProject(0, "/work/api", "api"))
+	s, _ := sessions.Create(ctx, domain.NewWorktreeSession(0, -1, p.ID(), "api.feature", "feature", "/work/api.feature"))
+
+	if _, err := uc.Execute(ctx, usecase.CreateAgentInput{
+		ProjectID:  p.ID(),
+		SessionID:  s.ID(),
+		Kind:       "opencode",
+		DaemonAddr: "127.0.0.1:64357",
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(gw.workingDirs) != 1 || gw.workingDirs[0] != "/work/api.feature" {
+		t.Fatalf("workingDirs = %v, want worktree root", gw.workingDirs)
 	}
 }
 
