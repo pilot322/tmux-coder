@@ -12,6 +12,7 @@ import (
 
 	"github.com/pilot322/tmux-coder/internal/adapter/httpapi"
 	"github.com/pilot322/tmux-coder/internal/daemonaddr"
+	"github.com/pilot322/tmux-coder/internal/infra/desktopnotify"
 	gitinfra "github.com/pilot322/tmux-coder/internal/infra/git"
 	"github.com/pilot322/tmux-coder/internal/infra/hookexec"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
@@ -34,6 +35,7 @@ func main() {
 	hooks := hookexec.NewRunner()
 	ports := netport.NewChecker()
 	processGw := processinfra.NewProcessGateway()
+	notifier := desktopnotify.NewNotifier()
 
 	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gateway, state, state.Config())
 	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state)
@@ -43,7 +45,7 @@ func main() {
 	deleteSession := usecase.NewDeleteSessionWithLeases(state.Sessions(), state.Agents(), gateway, git, state, state.Leases())
 	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), gateway, state)
 	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), gateway, state)
-	agentEvent := usecase.NewAgentEvent(state.Agents(), state)
+	agentEvent := usecase.NewAgentEvent(state.Agents(), state.Projects(), state.Sessions(), notifier, state)
 	deleteAgent := usecase.NewDeleteAgent(state.Agents(), gateway, processGw, state)
 	acquirePort := usecase.NewAcquirePort(state.Sessions(), state.Leases(), ports, state)
 

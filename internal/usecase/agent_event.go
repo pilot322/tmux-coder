@@ -14,12 +14,15 @@ type AgentEventInput struct {
 }
 
 type AgentEvent struct {
-	agents IAgentRepository
-	lock   StateLock
+	agents   IAgentRepository
+	projects IProjectRepository
+	sessions ISessionRepository
+	notifier Notifier
+	lock     StateLock
 }
 
-func NewAgentEvent(a IAgentRepository, l StateLock) *AgentEvent {
-	return &AgentEvent{agents: a, lock: l}
+func NewAgentEvent(a IAgentRepository, p IProjectRepository, s ISessionRepository, n Notifier, l StateLock) *AgentEvent {
+	return &AgentEvent{agents: a, projects: p, sessions: s, notifier: n, lock: l}
 }
 
 func (uc *AgentEvent) Execute(ctx context.Context, in AgentEventInput) error {
@@ -62,17 +65,77 @@ func (uc *AgentEvent) handleStarted(ctx context.Context, agentID int, childProce
 }
 
 // handleActivity applies an agent-reported activity status (busy/idle/waiting)
-// last-write-wins.
+// last-write-wins, then raises a Desktop Notification on the transitions that
+// want the user's attention.
 func (uc *AgentEvent) handleActivity(ctx context.Context, agentID int, status domain.AgentStatus) error {
 	agent, err := uc.readAgent(ctx, agentID)
 	if err != nil {
 		return err
 	}
 
-	return uc.lock.WithWrite(func() error {
+	old := agent.Status()
+	if err := uc.lock.WithWrite(func() error {
 		_, err := uc.agents.Update(ctx, agent.WithStatus(status))
 		return err
+	}); err != nil {
+		return err
+	}
+
+	// Notify only when an agent leaves busy for a state the user cares about.
+	// Composing the body needs the project and session, looked up outside the
+	// write lock; delivery is best-effort and never affects event processing
+	// (ADR 0008).
+	if old == domain.AgentBusy && (status == domain.AgentWaiting || status == domain.AgentIdle) {
+		project, session := uc.lookupContext(ctx, agent)
+		if n, ok := notificationFor(old, status, agentName(agent), project, session); ok {
+			_ = uc.notifier.Notify(ctx, n)
+		}
+	}
+
+	return nil
+}
+
+// lookupContext fetches the agent's project title and session name for the
+// notification body, tolerating missing lookups by leaving that part empty.
+func (uc *AgentEvent) lookupContext(ctx context.Context, agent *domain.Agent) (project, session string) {
+	_ = uc.lock.WithRead(func() error {
+		if p, err := uc.projects.GetByID(ctx, agent.ProjectID()); err == nil {
+			project = p.Title()
+		}
+		if s, err := uc.sessions.GetByID(ctx, agent.SessionID()); err == nil {
+			session = s.Name()
+		}
+		return nil
 	})
+	return project, session
+}
+
+// agentName is the agent's display name, falling back to agent-{id} — the same
+// fallback the TUI's agentRowLabel uses.
+func agentName(agent *domain.Agent) string {
+	if name := agent.DisplayName(); name != "" {
+		return name
+	}
+	return fmt.Sprintf("agent-%d", agent.ID())
+}
+
+// notificationFor maps a busy departure to its Desktop Notification, mirroring
+// the TUI's visual semantics: waiting needs the user (critical), idle is done
+// (normal). It is the single source of truth for which transitions notify, so
+// any other (old, new) pair yields ok=false.
+func notificationFor(old, new domain.AgentStatus, name, project, session string) (Notification, bool) {
+	if old != domain.AgentBusy {
+		return Notification{}, false
+	}
+	body := project + " · " + session
+	switch new {
+	case domain.AgentWaiting:
+		return Notification{Title: name + " needs input", Body: body, Urgency: UrgencyCritical}, true
+	case domain.AgentIdle:
+		return Notification{Title: name + " is idle", Body: body, Urgency: UrgencyNormal}, true
+	default:
+		return Notification{}, false
+	}
 }
 
 func (uc *AgentEvent) readAgent(ctx context.Context, agentID int) (*domain.Agent, error) {

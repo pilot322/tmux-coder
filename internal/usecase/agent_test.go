@@ -260,7 +260,7 @@ func TestAgentEvent_StartedAndExited(t *testing.T) {
 		DaemonAddr: "127.0.0.1:64357",
 	})
 
-	eventUc := usecase.NewAgentEvent(agents, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock)
 	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "started"}); err != nil {
 		t.Fatalf("started event: %v", err)
 	}
@@ -290,7 +290,7 @@ func TestAgentEvent_BusySetsStatus(t *testing.T) {
 		DaemonAddr: "127.0.0.1:64357",
 	})
 
-	eventUc := usecase.NewAgentEvent(agents, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock)
 	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "busy"}); err != nil {
 		t.Fatalf("busy event: %v", err)
 	}
@@ -312,7 +312,7 @@ func TestAgentEvent_IdleSetsStatus(t *testing.T) {
 		DaemonAddr: "127.0.0.1:64357",
 	})
 
-	eventUc := usecase.NewAgentEvent(agents, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock)
 	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "idle"}); err != nil {
 		t.Fatalf("idle event: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestAgentEvent_WaitingSetsStatus(t *testing.T) {
 		DaemonAddr: "127.0.0.1:64357",
 	})
 
-	eventUc := usecase.NewAgentEvent(agents, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock)
 	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "waiting"}); err != nil {
 		t.Fatalf("waiting event: %v", err)
 	}
@@ -356,7 +356,7 @@ func TestAgentEvent_StartedDoesNotDowngradeActivityButRecordsPGID(t *testing.T) 
 		DaemonAddr: "127.0.0.1:64357",
 	})
 
-	eventUc := usecase.NewAgentEvent(agents, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock)
 	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "busy"}); err != nil {
 		t.Fatalf("busy event: %v", err)
 	}
@@ -387,7 +387,7 @@ func TestAgentEvent_StartedFromStartingPromotesToRunningAndRecordsPGID(t *testin
 		DaemonAddr: "127.0.0.1:64357",
 	})
 
-	eventUc := usecase.NewAgentEvent(agents, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock)
 	pgid := 9001
 	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "started", ChildProcessGroupID: &pgid}); err != nil {
 		t.Fatalf("started event: %v", err)
@@ -414,7 +414,7 @@ func TestAgentEvent_InvalidEvent(t *testing.T) {
 		DaemonAddr: "127.0.0.1:64357",
 	})
 
-	eventUc := usecase.NewAgentEvent(agents, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock)
 	err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "unknown"})
 	if err == nil {
 		t.Fatal("want error for unknown event type")

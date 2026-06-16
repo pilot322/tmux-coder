@@ -3,6 +3,7 @@ package tui
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1240,6 +1241,189 @@ func TestAgentStatusStyleHighlightsAttention(t *testing.T) {
 	}
 	if agentStatusStyle("idle").GetForeground() == running.GetForeground() {
 		t.Error("idle should be visually distinct from neutral running")
+	}
+}
+
+// --- agents view: status sort & grouping --------------------------------
+
+func TestAgentRowsFlatStatusSorted(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 1, Title: "API", MainSessionName: "main"}},
+		sessions: []httpclient.Session{{ID: 10, ProjectID: 1, SessionName: "main", Type: "main"}},
+		agents: []httpclient.Agent{
+			{ID: 1, ProjectID: 1, SessionID: 10, Status: "starting"},
+			{ID: 2, ProjectID: 1, SessionID: 10, Status: "running"},
+			{ID: 3, ProjectID: 1, SessionID: 10, Status: "busy"},
+			{ID: 4, ProjectID: 1, SessionID: 10, Status: "idle"},
+			{ID: 5, ProjectID: 1, SessionID: 10, Status: "waiting"},
+			{ID: 6, ProjectID: 1, SessionID: 10, Status: ""},
+		},
+	})
+
+	var got []string
+	for _, r := range m.agentRows() {
+		got = append(got, r.agent.Status)
+	}
+	want := []string{"waiting", "idle", "busy", "running", "starting", ""}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("agentRows status order = %v, want %v", got, want)
+	}
+}
+
+func TestAgentRowsTiebreaksByAscendingID(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 1, Title: "API", MainSessionName: "main"}},
+		sessions: []httpclient.Session{{ID: 10, ProjectID: 1, SessionName: "main", Type: "main"}},
+		agents: []httpclient.Agent{
+			{ID: 30, ProjectID: 1, SessionID: 10, Status: "waiting"},
+			{ID: 12, ProjectID: 1, SessionID: 10, Status: "waiting"},
+		},
+	})
+
+	rows := m.agentRows()
+	if len(rows) != 2 || rows[0].agent.ID != 12 || rows[1].agent.ID != 30 {
+		t.Fatalf("within a status, agents should sort by ascending id; got %d then %d", rows[0].agent.ID, rows[1].agent.ID)
+	}
+}
+
+func TestModelGroupToggleOnlyAffectsAgentsTab(t *testing.T) {
+	base := listMsg{
+		projects: []httpclient.Project{{ID: 1, Title: "API", MainSessionName: "main"}},
+		sessions: []httpclient.Session{{ID: 10, ProjectID: 1, SessionName: "main", Type: "main"}},
+		agents:   []httpclient.Agent{{ID: 1, ProjectID: 1, SessionID: 10, Status: "running"}},
+	}
+
+	// On the Agents tab, 's' toggles grouping on and off.
+	m := loaded(t, base)
+	m = press(m, runes("3"))
+	m = press(m, runes("s"))
+	if !m.groupAgents {
+		t.Fatalf("'s' on agents tab should turn grouping on")
+	}
+	m = press(m, runes("s"))
+	if m.groupAgents {
+		t.Fatalf("'s' on agents tab should toggle grouping back off")
+	}
+
+	// On any other tab, 's' is a no-op.
+	m = loaded(t, base)
+	m = press(m, runes("2")) // sessions tab
+	m = press(m, runes("s"))
+	if m.groupAgents {
+		t.Fatalf("'s' outside the agents tab should not toggle grouping")
+	}
+}
+
+func TestAgentRowsGroupedByProject(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{
+			{ID: 1, Title: "API", MainSessionName: "api-main"},
+			{ID: 2, Title: "WEB", MainSessionName: "web-main"},
+		},
+		sessions: []httpclient.Session{
+			{ID: 10, ProjectID: 1, SessionName: "api-main", Type: "main"},
+			{ID: 20, ProjectID: 2, SessionName: "web-main", Type: "main"},
+		},
+		agents: []httpclient.Agent{
+			{ID: 1, ProjectID: 1, SessionID: 10, Status: "running"},
+			{ID: 2, ProjectID: 1, SessionID: 10, Status: "waiting"},
+			{ID: 3, ProjectID: 2, SessionID: 20, Status: "busy"},
+			{ID: 4, ProjectID: 2, SessionID: 20, Status: "waiting"},
+		},
+	})
+	m = press(m, runes("3"))
+	m = press(m, runes("s")) // group on
+
+	// Agents bucket by project (existing project order), status-sorted within
+	// each bucket: project 1 [waiting 2, running 1], then project 2 [waiting 4, busy 3].
+	var gotIDs []int
+	for _, r := range m.agentRows() {
+		gotIDs = append(gotIDs, r.agent.ID)
+	}
+	wantIDs := []int{2, 1, 4, 3}
+	if !reflect.DeepEqual(gotIDs, wantIDs) {
+		t.Fatalf("grouped agentRows ids = %v, want %v", gotIDs, wantIDs)
+	}
+
+	// Navigation rows stay selectable-only: one per agent, no header rows.
+	navRows := m.rows(tabAgents)
+	if len(navRows) != 4 {
+		t.Fatalf("rows(tabAgents) should hold only the 4 agents, got %d", len(navRows))
+	}
+	for _, r := range navRows {
+		if r.kind != rowAgent {
+			t.Fatalf("rows(tabAgents) should contain only agent rows, got kind %d", r.kind)
+		}
+	}
+
+	// The rendered view shows a non-selectable header per project group.
+	view := m.View()
+	if !strings.Contains(view, "API") || !strings.Contains(view, "WEB") {
+		t.Fatalf("grouped agents view should show a header per project: %q", view)
+	}
+}
+
+func TestModelAgentCursorFollowsAgentAcrossResort(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 1, Title: "API", MainSessionName: "main"}},
+		sessions: []httpclient.Session{{ID: 10, ProjectID: 1, SessionName: "main", Type: "main"}},
+		agents: []httpclient.Agent{
+			{ID: 1, ProjectID: 1, SessionID: 10, Status: "idle"},
+			{ID: 2, ProjectID: 1, SessionID: 10, Status: "waiting"},
+		},
+	})
+	m = press(m, runes("3"))
+	m = press(m, runes("j")) // waiting(2) at top, so j selects idle(1)
+	if m.agentSel.id != 1 {
+		t.Fatalf("setup: expected agent 1 selected, got %d", m.agentSel.id)
+	}
+
+	// A poll flips the statuses, reversing the sort order. The cursor must stay
+	// glued to agent 1 by identity, not to its old position.
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 1, Title: "API", MainSessionName: "main"}},
+		sessions: []httpclient.Session{{ID: 10, ProjectID: 1, SessionName: "main", Type: "main"}},
+		agents: []httpclient.Agent{
+			{ID: 1, ProjectID: 1, SessionID: 10, Status: "waiting"},
+			{ID: 2, ProjectID: 1, SessionID: 10, Status: "idle"},
+		},
+	})
+	m = updated.(Model)
+	if cur, _ := m.cursor(); cur.agent.ID != 1 {
+		t.Fatalf("cursor should follow agent 1 across the re-sort, got %d", cur.agent.ID)
+	}
+}
+
+func TestModelJumpToTopAndBottomWorkInAgentsView(t *testing.T) {
+	base := listMsg{
+		projects: []httpclient.Project{{ID: 1, Title: "API", MainSessionName: "main"}},
+		sessions: []httpclient.Session{{ID: 10, ProjectID: 1, SessionName: "main", Type: "main"}},
+		agents: []httpclient.Agent{
+			{ID: 1, ProjectID: 1, SessionID: 10, Status: "waiting"},
+			{ID: 2, ProjectID: 1, SessionID: 10, Status: "busy"},
+			{ID: 3, ProjectID: 1, SessionID: 10, Status: "running"},
+		},
+	}
+	// g/G keep their jump-to-top / jump-to-bottom meaning in the Agents view,
+	// both flat and grouped — s (group) does not shadow them.
+	for _, grouped := range []bool{false, true} {
+		m := loaded(t, base)
+		m = press(m, runes("3"))
+		if grouped {
+			m = press(m, runes("s"))
+		}
+		rows := m.agentRows()
+		last := rows[len(rows)-1].agent.ID
+		first := rows[0].agent.ID
+
+		m = press(m, runes("G"))
+		if cur, _ := m.cursor(); cur.agent.ID != last {
+			t.Fatalf("grouped=%v: G should jump to last agent %d, got %d", grouped, last, cur.agent.ID)
+		}
+		m = press(m, runes("g"))
+		if cur, _ := m.cursor(); cur.agent.ID != first {
+			t.Fatalf("grouped=%v: g should jump to first agent %d, got %d", grouped, first, cur.agent.ID)
+		}
 	}
 }
 

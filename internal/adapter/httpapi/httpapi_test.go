@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/pilot322/tmux-coder/internal/adapter/httpapi"
+	"github.com/pilot322/tmux-coder/internal/infra/desktopnotify"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
@@ -150,7 +151,7 @@ func newServerWithGit(git *stubGit) *http.ServeMux {
 	deleteSession := usecase.NewDeleteSession(state.Sessions(), state.Agents(), gw, git, state)
 	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state)
 	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), agentGw, state)
-	agentEvent := usecase.NewAgentEvent(state.Agents(), state)
+	agentEvent := usecase.NewAgentEvent(state.Agents(), state.Projects(), state.Sessions(), desktopnotify.NoopNotifier{}, state)
 	deleteAgent := usecase.NewDeleteAgent(state.Agents(), agentGw, nil, state)
 
 	return httpapi.NewRouter(
@@ -174,7 +175,7 @@ func newResourceServer(ports *stubPortAvailability) (*http.ServeMux, *memory.Mem
 	deleteSession := usecase.NewDeleteSession(state.Sessions(), state.Agents(), gw, git, state)
 	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state)
 	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), agentGw, state)
-	agentEvent := usecase.NewAgentEvent(state.Agents(), state)
+	agentEvent := usecase.NewAgentEvent(state.Agents(), state.Projects(), state.Sessions(), desktopnotify.NoopNotifier{}, state)
 	deleteAgent := usecase.NewDeleteAgent(state.Agents(), agentGw, nil, state)
 	acquirePort := usecase.NewAcquirePort(state.Sessions(), state.Leases(), ports, state)
 

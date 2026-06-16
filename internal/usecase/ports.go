@@ -119,3 +119,26 @@ type AgentTmuxGateway interface {
 type AgentProcessGateway interface {
 	TerminateProcessGroup(ctx context.Context, pgid int, sigtermTimeout time.Duration) error
 }
+
+// NotificationUrgency is the host urgency level of a Desktop Notification.
+type NotificationUrgency int
+
+const (
+	UrgencyNormal NotificationUrgency = iota
+	UrgencyCritical
+)
+
+// Notification is a single Desktop Notification to deliver to the host.
+type Notification struct {
+	Title   string
+	Body    string
+	Urgency NotificationUrgency
+}
+
+// Notifier delivers a Desktop Notification to the host. It is generic — the
+// usecase composes the content and decides which Agent Status transitions
+// notify. Delivery is best-effort: a returned error is logged and otherwise
+// ignored by callers.
+type Notifier interface {
+	Notify(ctx context.Context, n Notification) error
+}

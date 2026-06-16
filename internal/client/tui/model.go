@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"time"
 
@@ -103,6 +104,10 @@ type Model struct {
 	agentSel     selection
 	overviewKind rowKind
 
+	// groupAgents buckets the Agents view by project when on. Ephemeral view
+	// state — not persisted and never sent to the daemon.
+	groupAgents bool
+
 	status          string
 	loading         bool
 	confirm         bool
@@ -176,10 +181,10 @@ var (
 
 const noProjectsMsg = "No projects yet. Run `tmux-coder open` or `tmux-coder o` in a directory to create and attach it."
 
-const helpText = "Keys: j/k or ctrl+n/ctrl+p or arrows move, g/G jump, 0-3 switch tab, enter attach, X delete, w worktree (off session), W base worktree (off ref), S secondary (Sessions), r refresh, ? help, q quit"
+const helpText = "Keys: j/k or ctrl+n/ctrl+p or arrows move, g/G jump, 0-3 switch tab, enter attach, X delete, w worktree (off session), W base worktree (off ref), S secondary (Sessions), s group (Agents), r refresh, ? help, q quit"
 
 var keys = struct {
-	up, down, top, bottom, enter, del, refresh, worktree, worktreeBase, secondary, help, quit, tab key.Binding
+	up, down, top, bottom, enter, del, refresh, worktree, worktreeBase, secondary, group, help, quit, tab key.Binding
 }{
 	up:           key.NewBinding(key.WithKeys("up", "k", "ctrl+p")),
 	down:         key.NewBinding(key.WithKeys("down", "j", "ctrl+n")),
@@ -191,6 +196,7 @@ var keys = struct {
 	worktree:     key.NewBinding(key.WithKeys("w")),
 	worktreeBase: key.NewBinding(key.WithKeys("W")),
 	secondary:    key.NewBinding(key.WithKeys("S")),
+	group:        key.NewBinding(key.WithKeys("s")),
 	help:         key.NewBinding(key.WithKeys("?")),
 	quit:         key.NewBinding(key.WithKeys("q", "esc", "ctrl+c")),
 	tab:          key.NewBinding(key.WithKeys("0", "1", "2", "3")),
@@ -352,6 +358,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.startWorktreeFromBase()
 		case key.Matches(msg, keys.secondary):
 			m.startSecondary()
+		case key.Matches(msg, keys.group):
+			// Grouping is a presentation toggle scoped to the Agents view.
+			if m.tab == tabAgents {
+				m.groupAgents = !m.groupAgents
+				m.normalizeSelection()
+			}
 		case key.Matches(msg, keys.up):
 			m.move(-1)
 		case key.Matches(msg, keys.down):
@@ -528,7 +540,15 @@ func (m Model) writeAgentsView(b *strings.Builder) {
 		return
 	}
 	cur, has := m.cursor()
-	for _, a := range m.agents {
+	lastProject := -1
+	for _, row := range m.agentRows() {
+		// In grouped mode each project gets a non-selectable header, emitted
+		// when the project changes — exactly like the Sessions tab.
+		if m.groupAgents && row.project.ID != lastProject {
+			b.WriteString("  " + projectHeaderLine(row.project) + "\n")
+			lastProject = row.project.ID
+		}
+		a := row.agent
 		line := m.agentRowLabel(a)
 		if has && cur.kind == rowAgent && cur.agent.ID == a.ID {
 			b.WriteString(selectStyle.Render("> "+line) + "\n")
@@ -582,6 +602,71 @@ func styleSession(s httpclient.Session, depth int, content string) string {
 		return secondaryStyle[d].Render(content)
 	}
 	return content
+}
+
+// agentRows is the single source of order for the Agents view: agents are
+// always status-sorted (waiting first), so the rows feeding navigation and the
+// rows feeding rendering can never disagree. Both rows(tabAgents) and
+// writeAgentsView consume it.
+func (m Model) agentRows() []viewRow {
+	// appendSorted status-sorts agents in place and maps them to rows.
+	appendSorted := func(rows []viewRow, agents []httpclient.Agent) []viewRow {
+		sortAgentsByStatus(agents)
+		for _, a := range agents {
+			session, _ := m.sessionByID(a.SessionID)
+			rows = append(rows, viewRow{kind: rowAgent, project: m.projectByID(a.ProjectID), session: session, agent: a})
+		}
+		return rows
+	}
+	if m.groupAgents {
+		rows := make([]viewRow, 0, len(m.agents))
+		for _, p := range m.projects {
+			bucket := make([]httpclient.Agent, 0)
+			for _, a := range m.agents {
+				if a.ProjectID == p.ID {
+					bucket = append(bucket, a)
+				}
+			}
+			rows = appendSorted(rows, bucket)
+		}
+		return rows
+	}
+	all := make([]httpclient.Agent, len(m.agents))
+	copy(all, m.agents)
+	return appendSorted(make([]viewRow, 0, len(all)), all)
+}
+
+// sortAgentsByStatus orders agents by Agent Status rank (waiting first), then by
+// ascending id as a stable tiebreaker so the order is deterministic across the
+// 1 s poll.
+func sortAgentsByStatus(agents []httpclient.Agent) {
+	sort.SliceStable(agents, func(i, j int) bool {
+		ri, rj := agentStatusRank(agents[i].Status), agentStatusRank(agents[j].Status)
+		if ri != rj {
+			return ri < rj
+		}
+		return agents[i].ID < agents[j].ID
+	})
+}
+
+// agentStatusRank ranks an Agent Status for the Agents view sort: statuses that
+// want the user's attention sort to the top, lifecycle states to the bottom,
+// anything unknown last.
+func agentStatusRank(status string) int {
+	switch status {
+	case "waiting":
+		return 0
+	case "idle":
+		return 1
+	case "busy":
+		return 2
+	case "running":
+		return 3
+	case "starting":
+		return 4
+	default:
+		return 5
+	}
 }
 
 func (m Model) agentRowLabel(a httpclient.Agent) string {
@@ -858,12 +943,7 @@ func (m Model) rows(tab int) []viewRow {
 		}
 		return rows
 	case tabAgents:
-		rows := make([]viewRow, 0, len(m.agents))
-		for _, a := range m.agents {
-			session, _ := m.sessionByID(a.SessionID)
-			rows = append(rows, viewRow{kind: rowAgent, project: m.projectByID(a.ProjectID), session: session, agent: a})
-		}
-		return rows
+		return m.agentRows()
 	case tabSessions:
 		rows := make([]viewRow, 0, len(m.sessions))
 		for _, p := range m.projects {

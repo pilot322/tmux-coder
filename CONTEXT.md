@@ -64,6 +64,10 @@ _Avoid_: Agent state, activity, mode
 A notification sent to the **Daemon** about a **TC Agent**, carrying an event type, agent ID, and optional payload. Two sources emit them: the `tmux-coder agent-wrapper` subcommand reports lifecycle events (`started`, `exited`) derived from the OS process, and an **Agent Kind**'s own integration reports activity events (`busy`, `idle`, `waiting`) translated from that kind's native signals — the OpenCode plugin POSTs them directly, while Claude Code runs hooks that shell out to `tmux-coder agent-event <status>`. Every event type names a target **Agent Status**; the Daemon applies it under a fixed conflict policy (terminal `exited` wins; `started` records process identity but never downgrades a richer status).
 _Avoid_: Message, signal, notification
 
+**Desktop Notification**:
+An outbound, user-facing OS alert the **Daemon** raises to the host desktop when a **TC Agent** leaves `busy` for `waiting` or `idle`. It is the mirror image of an **Event**: an Event flows *in* to the Daemon, a Desktop Notification flows *out* to the user. Platform-specific and best-effort — delivered only where the host supports it, and never allowed to block or fail the handling of the **Event** that triggered it.
+_Avoid_: Event, alert, toast, message
+
 **Reconciliation**:
 The process by which the **Daemon** heals drift between its in-memory record of a **Session** and the runtime resources it owns: the tmux session for every **Session**, and the git worktree for a **Worktree Session**. Triggered on write operations, never on plain reads.
 _Avoid_: Sync, refresh, resync
