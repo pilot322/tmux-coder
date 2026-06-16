@@ -101,6 +101,7 @@ func NewSessionController(c *usecase.CreateSession, l *usecase.GetSessions, d *u
 type AgentController struct {
 	create *usecase.CreateAgent
 	list   *usecase.GetAgents
+	update *usecase.RenameAgent
 	event  *usecase.AgentEvent
 	delete *usecase.DeleteAgent
 }
@@ -109,8 +110,8 @@ type ResourceController struct {
 	acquirePort *usecase.AcquirePort
 }
 
-func NewAgentController(c *usecase.CreateAgent, l *usecase.GetAgents, e *usecase.AgentEvent, d *usecase.DeleteAgent) *AgentController {
-	return &AgentController{create: c, list: l, event: e, delete: d}
+func NewAgentController(c *usecase.CreateAgent, l *usecase.GetAgents, u *usecase.RenameAgent, e *usecase.AgentEvent, d *usecase.DeleteAgent) *AgentController {
+	return &AgentController{create: c, list: l, update: u, event: e, delete: d}
 }
 
 func NewResourceController(acquirePort *usecase.AcquirePort) *ResourceController {
@@ -302,6 +303,30 @@ func (ac *AgentController) List(w http.ResponseWriter, r *http.Request) {
 		resp.Agents = append(resp.Agents, agentViewToDTO(v))
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (ac *AgentController) Update(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "id must be an integer")
+		return
+	}
+	var req updateAgentRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.DisplayName == nil {
+		writeError(w, http.StatusBadRequest, "displayName is required")
+		return
+	}
+
+	view, err := ac.update.Execute(r.Context(), usecase.RenameAgentInput{AgentID: id, DisplayName: *req.DisplayName})
+	if err != nil {
+		writeUsecaseError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, agentViewToDTO(view))
 }
 
 func (ac *AgentController) Event(w http.ResponseWriter, r *http.Request) {

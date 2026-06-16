@@ -451,6 +451,44 @@ func TestGetAgents_PrunesMissingPanesAndFilters(t *testing.T) {
 	}
 }
 
+func TestRenameAgent_UpdatesDisplayName(t *testing.T) {
+	_, agents, projects, sessions, _, lock := agentFixture()
+	p, s := seedProjectAndSession(projects, sessions)
+	ctx := context.Background()
+	agent, _ := agents.Create(ctx, domain.NewAgent(0, p.ID(), s.ID(), "opencode", "old", "%10", true, domain.AgentRunning))
+
+	view, err := usecase.NewRenameAgent(agents, projects, sessions, lock).Execute(ctx, usecase.RenameAgentInput{AgentID: agent.ID(), DisplayName: " new name "})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if view.Agent.DisplayName() != "new name" {
+		t.Fatalf("DisplayName = %q, want new name", view.Agent.DisplayName())
+	}
+	stored, _ := agents.GetByID(ctx, agent.ID())
+	if stored.DisplayName() != "new name" {
+		t.Fatalf("stored DisplayName = %q, want new name", stored.DisplayName())
+	}
+	if view.Project.ID() != p.ID() || view.Session.ID() != s.ID() || view.MainSessionName != s.Name() {
+		t.Fatalf("view context = project %d session %d main %q", view.Project.ID(), view.Session.ID(), view.MainSessionName)
+	}
+}
+
+func TestRenameAgent_NotFound(t *testing.T) {
+	_, agents, projects, sessions, _, lock := agentFixture()
+	_, err := usecase.NewRenameAgent(agents, projects, sessions, lock).Execute(context.Background(), usecase.RenameAgentInput{AgentID: 999, DisplayName: "new"})
+	if !errors.Is(err, usecase.ErrAgentNotFound) {
+		t.Fatalf("Execute error = %v, want ErrAgentNotFound", err)
+	}
+}
+
+func TestRenameAgent_RejectsEmptyName(t *testing.T) {
+	_, agents, projects, sessions, _, lock := agentFixture()
+	_, err := usecase.NewRenameAgent(agents, projects, sessions, lock).Execute(context.Background(), usecase.RenameAgentInput{AgentID: 1, DisplayName: "  "})
+	if !errors.Is(err, usecase.ErrValidation) {
+		t.Fatalf("Execute error = %v, want ErrValidation", err)
+	}
+}
+
 func TestDeleteAgent_KillsOwnedPaneAndDeletesRecord(t *testing.T) {
 	_, agents, _, _, gw, lock := agentFixture()
 	ctx := context.Background()

@@ -45,13 +45,14 @@ func main() {
 	deleteSession := usecase.NewDeleteSessionWithLeases(state.Sessions(), state.Agents(), gateway, git, state, state.Leases())
 	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), gateway, state)
 	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), gateway, state)
+	renameAgent := usecase.NewRenameAgent(state.Agents(), state.Projects(), state.Sessions(), state)
 	agentEvent := usecase.NewAgentEvent(state.Agents(), state.Projects(), state.Sessions(), notifier, state)
 	deleteAgent := usecase.NewDeleteAgent(state.Agents(), gateway, processGw, state)
 	acquirePort := usecase.NewAcquirePort(state.Sessions(), state.Leases(), ports, state)
 
 	controller := httpapi.NewProjectController(create, list, del)
 	sessionController := httpapi.NewSessionController(createSession, listSessions, deleteSession)
-	agentController := httpapi.NewAgentController(createAgent, listAgents, agentEvent, deleteAgent)
+	agentController := httpapi.NewAgentController(createAgent, listAgents, renameAgent, agentEvent, deleteAgent)
 	resourceController := httpapi.NewResourceController(acquirePort)
 	router := httpapi.NewRouter(controller, sessionController, agentController, resourceController)
 

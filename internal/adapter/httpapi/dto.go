@@ -79,6 +79,10 @@ type createAgentRequest struct {
 	TmuxPaneID  *string `json:"tmuxPaneId"`
 }
 
+type updateAgentRequest struct {
+	DisplayName *string `json:"displayName"`
+}
+
 type agentResponse struct {
 	ID                  int             `json:"id"`
 	ProjectID           int             `json:"projectId"`

@@ -23,6 +23,13 @@ type fakeAPI struct {
 	created           []httpclient.CreateSessionInput
 	createdSession    httpclient.Session
 	createErr         error
+	createdAgents     []httpclient.CreateAgentInput
+	createdAgent      httpclient.Agent
+	createAgentErr    error
+	renamedAgentID    int
+	renamedAgentName  string
+	renamedAgent      httpclient.Agent
+	renameAgentErr    error
 	listProjectsCalls int
 	listSessionsCalls int
 	listAgentsCalls   int
@@ -46,6 +53,17 @@ func (a *fakeAPI) ListAgents(context.Context, httpclient.ListAgentsInput) ([]htt
 func (a *fakeAPI) CreateSession(_ context.Context, in httpclient.CreateSessionInput) (httpclient.Session, error) {
 	a.created = append(a.created, in)
 	return a.createdSession, a.createErr
+}
+
+func (a *fakeAPI) CreateAgent(_ context.Context, in httpclient.CreateAgentInput) (httpclient.Agent, error) {
+	a.createdAgents = append(a.createdAgents, in)
+	return a.createdAgent, a.createAgentErr
+}
+
+func (a *fakeAPI) RenameAgent(_ context.Context, id int, displayName string) (httpclient.Agent, error) {
+	a.renamedAgentID = id
+	a.renamedAgentName = displayName
+	return a.renamedAgent, a.renameAgentErr
 }
 
 func (a *fakeAPI) DeleteProject(_ context.Context, id int) error {
@@ -984,6 +1002,215 @@ func TestModelSecondaryIgnoredOutsideSessionsTab(t *testing.T) {
 	m = press(m, runes("S"))
 	if m.creatingSecondary {
 		t.Fatalf("S should be ignored outside the sessions tab")
+	}
+}
+
+// --- agent creation ('a') ------------------------------------------------
+
+func TestModelAgentPromptCreatesAgentInSelectedSession(t *testing.T) {
+	api := &fakeAPI{createdAgent: httpclient.Agent{ID: 9, ProjectID: 7, SessionID: 2, Kind: "claude", DisplayName: "reviewer"}}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{
+			{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"},
+			{ID: 2, ProjectID: 7, SessionName: "api.feature", Type: "worktree", Branch: "feature"},
+		},
+	})
+	m = updated.(Model)
+	m = press(m, runes("2")) // sessions tab
+	m = press(m, runes("j")) // select the worktree session
+	m = press(m, runes("a"))
+	if !m.creatingAgent || m.agentSessionID != 2 || m.agentProjectID != 7 {
+		t.Fatalf("creatingAgent=%v sessionID=%d projectID=%d", m.creatingAgent, m.agentSessionID, m.agentProjectID)
+	}
+	m = press(m, runes("claude"))
+	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = press(m, runes("reviewer"))
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if !m.loading || cmd == nil {
+		t.Fatalf("loading=%v cmd nil=%v", m.loading, cmd == nil)
+	}
+	msg := cmd().(createAgentMsg)
+	if msg.err != nil {
+		t.Fatalf("create err = %v", msg.err)
+	}
+	if len(api.createdAgents) != 1 {
+		t.Fatalf("created agent calls = %d", len(api.createdAgents))
+	}
+	in := api.createdAgents[0]
+	if in.ProjectID != 7 || in.SessionID != 2 || in.Kind != "claude" || in.DisplayName == nil || *in.DisplayName != "reviewer" || in.TmuxPaneID != nil {
+		t.Fatalf("create input = %+v, want claude agent in session 2 owned by the daemon", in)
+	}
+}
+
+func TestModelAgentPromptOmitsEmptyName(t *testing.T) {
+	api := &fakeAPI{createdAgent: httpclient.Agent{ID: 9, ProjectID: 7, SessionID: 1, Kind: "opencode"}}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+	})
+	m = updated.(Model)
+	m = press(m, runes("2")) // sessions tab
+	m = press(m, runes("a"))
+	m = press(m, runes("opencode"))
+	m = press(m, tea.KeyMsg{Type: tea.KeyEnter}) // advance to the name step
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected create command with an empty name")
+	}
+	_ = cmd().(createAgentMsg)
+	if len(api.createdAgents) != 1 {
+		t.Fatalf("created agent calls = %d", len(api.createdAgents))
+	}
+	if in := api.createdAgents[0]; in.DisplayName != nil {
+		t.Fatalf("displayName = %v, want nil for an empty name", *in.DisplayName)
+	}
+}
+
+func TestModelAgentPromptUsesDefaultExecutable(t *testing.T) {
+	api := &fakeAPI{createdAgent: httpclient.Agent{ID: 9, ProjectID: 7, SessionID: 1, Kind: defaultAgentExecutable}}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+	})
+	m = updated.(Model)
+	m = press(m, runes("2")) // sessions tab
+	m = press(m, runes("a"))
+	m = press(m, tea.KeyMsg{Type: tea.KeyEnter}) // accept the default executable
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("expected create command with the default executable")
+	}
+	_ = cmd().(createAgentMsg)
+	if len(api.createdAgents) != 1 {
+		t.Fatalf("created agent calls = %d", len(api.createdAgents))
+	}
+	if in := api.createdAgents[0]; in.Kind != defaultAgentExecutable {
+		t.Fatalf("kind = %q, want %q", in.Kind, defaultAgentExecutable)
+	}
+}
+
+func TestModelAgentPromptEscCancels(t *testing.T) {
+	api := &fakeAPI{}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+	})
+	m = updated.(Model)
+	m = press(m, runes("2")) // sessions tab
+	m = press(m, runes("a"))
+	m = press(m, runes("claude"))
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.creatingAgent || m.agentExecutable != "" || m.agentSessionID != 0 || cmd != nil || len(api.createdAgents) != 0 {
+		t.Fatalf("creatingAgent=%v executable=%q sessionID=%d cmd=%v created=%d", m.creatingAgent, m.agentExecutable, m.agentSessionID, cmd, len(api.createdAgents))
+	}
+}
+
+func TestModelAgentFromAgentsTabUsesOwningSession(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 7, Title: "API", MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 5, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+		agents:   []httpclient.Agent{{ID: 3, ProjectID: 7, SessionID: 5, Kind: "claude", Status: "running"}},
+	})
+	m = press(m, runes("3")) // agents tab
+	m = press(m, runes("a"))
+	if !m.creatingAgent || m.agentSessionID != 5 || m.agentProjectID != 7 {
+		t.Fatalf("creatingAgent=%v sessionID=%d projectID=%d, want the selected agent's owning session", m.creatingAgent, m.agentSessionID, m.agentProjectID)
+	}
+}
+
+func TestModelAgentCreateSelectsNewAgentOnAgentsTab(t *testing.T) {
+	api := &fakeAPI{createdAgent: httpclient.Agent{ID: 9, ProjectID: 7, SessionID: 1, Kind: "claude"}}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+	})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(createAgentMsg{agent: api.createdAgent})
+	m = updated.(Model)
+	if !m.loading || m.tab != tabAgents || m.creatingAgent || cmd == nil {
+		t.Fatalf("loading=%v tab=%d creatingAgent=%v cmd nil=%v", m.loading, m.tab, m.creatingAgent, cmd == nil)
+	}
+	if m.agentSel.id != 9 {
+		t.Fatalf("agentSel.id = %d, want the newly created agent 9", m.agentSel.id)
+	}
+}
+
+func TestModelRenameAgentPromptRenamesSelectedAgent(t *testing.T) {
+	api := &fakeAPI{renamedAgent: httpclient.Agent{ID: 3, ProjectID: 7, SessionID: 5, Kind: "claude", DisplayName: "new-name"}}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, Title: "API", MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 5, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+		agents:   []httpclient.Agent{{ID: 3, ProjectID: 7, SessionID: 5, Kind: "claude", DisplayName: "old", Status: "running"}},
+	})
+	m = updated.(Model)
+	m = press(m, runes("3")) // agents tab
+	m = press(m, runes("u"))
+	if !m.renamingAgent || m.renameAgentID != 3 || m.renameValue != "old" {
+		t.Fatalf("renamingAgent=%v id=%d value=%q", m.renamingAgent, m.renameAgentID, m.renameValue)
+	}
+	for range "old" {
+		m = press(m, tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	m = press(m, runes("new-name"))
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if !m.loading || cmd == nil {
+		t.Fatalf("loading=%v cmd nil=%v", m.loading, cmd == nil)
+	}
+	msg := cmd().(renameAgentMsg)
+	if msg.err != nil {
+		t.Fatalf("rename err = %v", msg.err)
+	}
+	if api.renamedAgentID != 3 || api.renamedAgentName != "new-name" {
+		t.Fatalf("rename call id=%d name=%q", api.renamedAgentID, api.renamedAgentName)
+	}
+
+	updated, cmd = m.Update(msg)
+	m = updated.(Model)
+	if m.renamingAgent || m.agentSel.id != 3 || cmd == nil {
+		t.Fatalf("renamingAgent=%v agentSel=%d cmd nil=%v", m.renamingAgent, m.agentSel.id, cmd == nil)
+	}
+}
+
+func TestModelRenameAgentRequiresName(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 7, Title: "API", MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 5, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+		agents:   []httpclient.Agent{{ID: 3, ProjectID: 7, SessionID: 5, Kind: "claude", DisplayName: "old", Status: "running"}},
+	})
+	m = press(m, runes("3"))
+	m = press(m, runes("u"))
+	for range "old" {
+		m = press(m, tea.KeyMsg{Type: tea.KeyBackspace})
+	}
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if cmd != nil || !m.renamingAgent || m.status == "" {
+		t.Fatalf("cmd=%v renamingAgent=%v status=%q", cmd, m.renamingAgent, m.status)
+	}
+}
+
+func TestModelRenameIgnoredOutsideAgentsTab(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 5, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+	})
+	m = press(m, runes("2"))
+	m = press(m, runes("u"))
+	if m.renamingAgent {
+		t.Fatal("u should be ignored outside the agents tab")
 	}
 }
 

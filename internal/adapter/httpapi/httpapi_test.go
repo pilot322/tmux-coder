@@ -151,13 +151,14 @@ func newServerWithGit(git *stubGit) *http.ServeMux {
 	deleteSession := usecase.NewDeleteSession(state.Sessions(), state.Agents(), gw, git, state)
 	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state)
 	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), agentGw, state)
+	renameAgent := usecase.NewRenameAgent(state.Agents(), state.Projects(), state.Sessions(), state)
 	agentEvent := usecase.NewAgentEvent(state.Agents(), state.Projects(), state.Sessions(), desktopnotify.NoopNotifier{}, state)
 	deleteAgent := usecase.NewDeleteAgent(state.Agents(), agentGw, nil, state)
 
 	return httpapi.NewRouter(
 		httpapi.NewProjectController(create, list, del),
 		httpapi.NewSessionController(createSession, listSessions, deleteSession),
-		httpapi.NewAgentController(createAgent, listAgents, agentEvent, deleteAgent),
+		httpapi.NewAgentController(createAgent, listAgents, renameAgent, agentEvent, deleteAgent),
 	)
 }
 
@@ -175,6 +176,7 @@ func newResourceServer(ports *stubPortAvailability) (*http.ServeMux, *memory.Mem
 	deleteSession := usecase.NewDeleteSession(state.Sessions(), state.Agents(), gw, git, state)
 	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state)
 	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), agentGw, state)
+	renameAgent := usecase.NewRenameAgent(state.Agents(), state.Projects(), state.Sessions(), state)
 	agentEvent := usecase.NewAgentEvent(state.Agents(), state.Projects(), state.Sessions(), desktopnotify.NoopNotifier{}, state)
 	deleteAgent := usecase.NewDeleteAgent(state.Agents(), agentGw, nil, state)
 	acquirePort := usecase.NewAcquirePort(state.Sessions(), state.Leases(), ports, state)
@@ -182,7 +184,7 @@ func newResourceServer(ports *stubPortAvailability) (*http.ServeMux, *memory.Mem
 	return httpapi.NewRouter(
 		httpapi.NewProjectController(create, list, del),
 		httpapi.NewSessionController(createSession, listSessions, deleteSession),
-		httpapi.NewAgentController(createAgent, listAgents, agentEvent, deleteAgent),
+		httpapi.NewAgentController(createAgent, listAgents, renameAgent, agentEvent, deleteAgent),
 		httpapi.NewResourceController(acquirePort),
 	), state.Leases()
 }
@@ -694,6 +696,38 @@ func TestGetAgents_ListsAgents(t *testing.T) {
 	}
 	if resp.Agents[0].Kind != "opencode" {
 		t.Fatalf("kind = %q, want opencode", resp.Agents[0].Kind)
+	}
+}
+
+func TestPatchAgent_RenamesAgent(t *testing.T) {
+	mux := newServer()
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	agentID := createAgent(t, mux, projectID, sessionID)
+
+	rec := do(t, mux, "PATCH", "/agents/"+strconv.Itoa(agentID), `{"displayName":"reviewer"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH /agents/{id} status = %d, want 200 (body: %s)", rec.Code, rec.Body)
+	}
+	var agent struct {
+		ID          int    `json:"id"`
+		DisplayName string `json:"displayName"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &agent); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if agent.ID != agentID || agent.DisplayName != "reviewer" {
+		t.Fatalf("agent = %+v, want id %d displayName reviewer", agent, agentID)
+	}
+}
+
+func TestPatchAgent_RejectsEmptyName(t *testing.T) {
+	mux := newServer()
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	agentID := createAgent(t, mux, projectID, sessionID)
+
+	rec := do(t, mux, "PATCH", "/agents/"+strconv.Itoa(agentID), `{"displayName":"  "}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("PATCH empty displayName status = %d, want 400", rec.Code)
 	}
 }
 

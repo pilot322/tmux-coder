@@ -290,6 +290,25 @@ func (c *Client) CreateAgent(ctx context.Context, in CreateAgentInput) (Agent, e
 	return agent, nil
 }
 
+func (c *Client) RenameAgent(ctx context.Context, id int, displayName string) (Agent, error) {
+	body, err := json.Marshal(struct {
+		DisplayName string `json:"displayName"`
+	}{DisplayName: displayName})
+	if err != nil {
+		return Agent{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, fmt.Sprintf("%s/agents/%d", c.baseURL, id), bytes.NewReader(body))
+	if err != nil {
+		return Agent{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var agent Agent
+	if err := c.doJSON(req, http.StatusOK, &agent); err != nil {
+		return Agent{}, err
+	}
+	return agent, nil
+}
+
 func (c *Client) SendAgentEvent(ctx context.Context, id int, event string) error {
 	return c.sendAgentEvent(ctx, id, event, nil)
 }

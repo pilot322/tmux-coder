@@ -24,6 +24,8 @@ type API interface {
 	ListSessions(context.Context, httpclient.ListSessionsInput) ([]httpclient.Session, error)
 	ListAgents(context.Context, httpclient.ListAgentsInput) ([]httpclient.Agent, error)
 	CreateSession(context.Context, httpclient.CreateSessionInput) (httpclient.Session, error)
+	CreateAgent(context.Context, httpclient.CreateAgentInput) (httpclient.Agent, error)
+	RenameAgent(context.Context, int, string) (httpclient.Agent, error)
 	DeleteProject(context.Context, int) error
 	DeleteSession(context.Context, int, bool) error
 	DeleteAgent(context.Context, int) error
@@ -53,6 +55,14 @@ const (
 	worktreeBaseStepNone worktreeBasePromptStep = iota
 	worktreeBaseStepBranch
 	worktreeBaseStepBaseRef
+)
+
+type agentPromptStep uint8
+
+const (
+	agentPromptNone agentPromptStep = iota
+	agentPromptExecutable
+	agentPromptName
 )
 
 type rowKind uint8
@@ -146,6 +156,20 @@ type Model struct {
 	secondaryRelwd    string
 	secondaryName     string
 
+	// creatingAgent drives the 'a' flow: a two-step prompt (executable, then an
+	// optional name) that spawns an agent in the resolved target session. The
+	// daemon owns the new pane, so this is wholly client-side.
+	creatingAgent   bool
+	agentStep       agentPromptStep
+	agentProjectID  int
+	agentSessionID  int
+	agentExecutable string
+	agentName       string
+
+	renamingAgent bool
+	renameAgentID int
+	renameValue   string
+
 	pendingSelectSession string
 	initialSession       string
 	attach               AttachTarget
@@ -170,6 +194,16 @@ type createSessionMsg struct {
 	err     error
 }
 
+type createAgentMsg struct {
+	agent httpclient.Agent
+	err   error
+}
+
+type renameAgentMsg struct {
+	agent httpclient.Agent
+	err   error
+}
+
 var (
 	errorStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	mutedStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
@@ -191,10 +225,12 @@ var (
 
 const noProjectsMsg = "No projects yet. Run `tmux-coder open` or `tmux-coder o` in a directory to create and attach it."
 
-const helpText = "Keys: j/k or ctrl+n/ctrl+p or arrows move, g/G jump, 0-3 switch tab, enter attach, X delete, w worktree (off session), W base worktree (off ref), S secondary (Sessions), s group (Agents), f filter, r refresh, ? help, q quit"
+const defaultAgentExecutable = "opencode"
+
+const helpText = "Keys: j/k or ctrl+n/ctrl+p or arrows move, g/G jump, 0-3 switch tab, enter attach, a agent, u rename (Agents), X delete, w worktree (off session), W base worktree (off ref), S secondary (Sessions), s group (Agents), f filter, r refresh, ? help, q quit"
 
 var keys = struct {
-	up, down, top, bottom, enter, del, refresh, worktree, worktreeBase, secondary, group, filter, help, quit, tab key.Binding
+	up, down, top, bottom, enter, del, refresh, worktree, worktreeBase, secondary, agent, rename, group, filter, help, quit, tab key.Binding
 }{
 	up:           key.NewBinding(key.WithKeys("up", "k", "ctrl+p")),
 	down:         key.NewBinding(key.WithKeys("down", "j", "ctrl+n")),
@@ -206,6 +242,8 @@ var keys = struct {
 	worktree:     key.NewBinding(key.WithKeys("w")),
 	worktreeBase: key.NewBinding(key.WithKeys("W")),
 	secondary:    key.NewBinding(key.WithKeys("S")),
+	agent:        key.NewBinding(key.WithKeys("a")),
+	rename:       key.NewBinding(key.WithKeys("u")),
 	group:        key.NewBinding(key.WithKeys("s")),
 	filter:       key.NewBinding(key.WithKeys("f")),
 	help:         key.NewBinding(key.WithKeys("?")),
@@ -245,7 +283,7 @@ func (m Model) tickCmd() tea.Cmd {
 // modalActive reports whether a confirm or text-entry prompt is open. Background
 // refreshes must leave that interaction state untouched.
 func (m Model) modalActive() bool {
-	return m.confirm || m.creatingWorktree || m.creatingSecondary
+	return m.confirm || m.creatingWorktree || m.creatingSecondary || m.creatingAgent || m.renamingAgent
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -319,6 +357,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tab = tabSessions
 		m.loading = true
 		return m, m.listCmd()
+	case createAgentMsg:
+		m.loading = false
+		if msg.err != nil {
+			// Keep the prompt open so the user can correct and resubmit.
+			m.status = msg.err.Error()
+			return m, nil
+		}
+		m.resetAgentPrompt()
+		m.agentSel = selection{id: msg.agent.ID}
+		m.tab = tabAgents
+		m.loading = true
+		return m, m.listCmd()
+	case renameAgentMsg:
+		m.loading = false
+		if msg.err != nil {
+			m.status = msg.err.Error()
+			return m, nil
+		}
+		m.resetRenamePrompt()
+		m.agentSel = selection{id: msg.agent.ID}
+		m.loading = true
+		return m, m.listCmd()
 	case tea.KeyMsg:
 		if m.worktreeConflict != "" {
 			return m.updateWorktreeConflict(msg)
@@ -331,6 +391,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.creatingWorktreeFromBase {
 			return m.updateWorktreeFromBasePrompt(msg)
+		}
+		if m.creatingAgent {
+			return m.updateAgentPrompt(msg)
+		}
+		if m.renamingAgent {
+			return m.updateRenamePrompt(msg)
 		}
 		if m.filtering {
 			return m.updateFilter(msg)
@@ -372,6 +438,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.startWorktreeFromBase()
 		case key.Matches(msg, keys.secondary):
 			m.startSecondary()
+		case key.Matches(msg, keys.agent):
+			m.startAgent()
+		case key.Matches(msg, keys.rename):
+			m.startRename()
 		case key.Matches(msg, keys.group):
 			// Grouping is a presentation toggle scoped to the Agents view.
 			if m.tab == tabAgents {
@@ -455,6 +525,16 @@ func (m Model) View() string {
 			b.WriteString("\nNew worktree branch: " + m.worktreeFromBaseBranch + "\n")
 		}
 	}
+	if m.creatingAgent {
+		if m.agentStep == agentPromptName {
+			b.WriteString("\nAgent name (optional): " + m.agentName + "\n")
+		} else {
+			b.WriteString("\nAgent executable (default " + defaultAgentExecutable + "): " + m.agentExecutable + "\n")
+		}
+	}
+	if m.renamingAgent {
+		b.WriteString("\nAgent name: " + m.renameValue + "\n")
+	}
 	switch m.worktreeConflict {
 	case httpclient.CodeBranchExists:
 		b.WriteString("\nbranch already exists. Create a worktree for it? y/n\n")
@@ -470,6 +550,10 @@ func (m Model) View() string {
 		b.WriteString("\n" + mutedStyle.Render("enter create  esc cancel") + "\n")
 	} else if m.creatingWorktreeFromBase {
 		b.WriteString("\n" + mutedStyle.Render("enter next/create  esc cancel") + "\n")
+	} else if m.creatingAgent {
+		b.WriteString("\n" + mutedStyle.Render("enter next/create  esc cancel") + "\n")
+	} else if m.renamingAgent {
+		b.WriteString("\n" + mutedStyle.Render("enter rename  esc cancel") + "\n")
 	} else if m.worktreeConflict != "" {
 		b.WriteString("\n" + mutedStyle.Render("y confirm  n cancel") + "\n")
 	} else if m.filtering {
@@ -498,14 +582,14 @@ func (m Model) tabStrip() string {
 }
 
 func (m Model) footer() string {
-	parts := []string{"j/k move", "enter attach"}
+	parts := []string{"j/k move", "enter attach", "a agent"}
 	switch m.tab {
 	case tabOverview, tabProjects:
 		parts = append(parts, "w worktree", "W base worktree", "X delete")
 	case tabSessions:
 		parts = append(parts, "w worktree", "W base worktree", "S secondary", "X delete")
 	default:
-		parts = append(parts, "X delete")
+		parts = append(parts, "u rename", "X delete")
 	}
 	parts = append(parts, "f filter", "0-3 tabs", "r refresh", "? help", "q quit")
 	return strings.Join(parts, "  ")
@@ -764,6 +848,32 @@ func (m Model) createSecondaryCmd(parentID int, relwd, preferredName string) tea
 	}
 }
 
+// createAgentCmd asks the daemon to spawn an agent in the target session. The
+// daemon owns the new pane (TmuxPaneID left nil), running the executable via the
+// agent-wrapper. An empty name is sent as no display name.
+func (m Model) createAgentCmd(projectID, sessionID int, executable, name string) tea.Cmd {
+	return func() tea.Msg {
+		var displayName *string
+		if name != "" {
+			displayName = &name
+		}
+		agent, err := m.api.CreateAgent(m.ctx, httpclient.CreateAgentInput{
+			ProjectID:   projectID,
+			SessionID:   sessionID,
+			Kind:        executable,
+			DisplayName: displayName,
+		})
+		return createAgentMsg{agent: agent, err: err}
+	}
+}
+
+func (m Model) renameAgentCmd(id int, name string) tea.Cmd {
+	return func() tea.Msg {
+		agent, err := m.api.RenameAgent(m.ctx, id, strings.TrimSpace(name))
+		return renameAgentMsg{agent: agent, err: err}
+	}
+}
+
 func (m Model) createWorktreeCmd(projectID, parentID int, branch string, createWorktree, createBranch bool) tea.Cmd {
 	return func() tea.Msg {
 		session, err := m.api.CreateSession(m.ctx, httpclient.CreateSessionInput{
@@ -953,6 +1063,83 @@ func (m Model) updateSecondaryPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		} else {
 			m.secondaryRelwd += string(msg.Runes)
 		}
+		return m, nil
+	}
+	return m, nil
+}
+
+// updateAgentPrompt handles key input for the 'a' flow: the first step captures
+// the agent executable (required), the second an optional name. Enter advances
+// from the executable to the name, then fires the create; an empty name means no
+// name is sent.
+func (m Model) updateAgentPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.resetAgentPrompt()
+		m.status = ""
+		return m, nil
+	case tea.KeyBackspace, tea.KeyCtrlH:
+		if m.agentStep == agentPromptName {
+			if len(m.agentName) > 0 {
+				m.agentName = m.agentName[:len(m.agentName)-1]
+			}
+		} else if len(m.agentExecutable) > 0 {
+			m.agentExecutable = m.agentExecutable[:len(m.agentExecutable)-1]
+		}
+		return m, nil
+	case tea.KeyEnter:
+		if m.agentStep == agentPromptExecutable {
+			executable := strings.TrimSpace(m.agentExecutable)
+			if executable == "" {
+				executable = defaultAgentExecutable
+			}
+			m.agentExecutable = executable
+			m.agentStep = agentPromptName
+			m.status = ""
+			return m, nil
+		}
+		m.agentName = strings.TrimSpace(m.agentName)
+		m.status = ""
+		m.loading = true
+		return m, m.createAgentCmd(m.agentProjectID, m.agentSessionID, m.agentExecutable, m.agentName)
+	case tea.KeyRunes:
+		if m.agentStep == agentPromptName {
+			m.agentName += string(msg.Runes)
+		} else {
+			m.agentExecutable += string(msg.Runes)
+		}
+		return m, nil
+	}
+	return m, nil
+}
+
+func (m Model) updateRenamePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.resetRenamePrompt()
+		m.status = ""
+		return m, nil
+	case tea.KeyBackspace, tea.KeyCtrlH:
+		if len(m.renameValue) > 0 {
+			m.renameValue = m.renameValue[:len(m.renameValue)-1]
+		}
+		return m, nil
+	case tea.KeyEnter:
+		name := strings.TrimSpace(m.renameValue)
+		if name == "" {
+			m.status = "name is required"
+			return m, nil
+		}
+		m.renameValue = name
+		m.status = ""
+		m.loading = true
+		return m, m.renameAgentCmd(m.renameAgentID, name)
+	case tea.KeyRunes:
+		m.renameValue += string(msg.Runes)
 		return m, nil
 	}
 	return m, nil
@@ -1446,6 +1633,75 @@ func (m *Model) startSecondary() {
 	m.secondaryRelwd = row.session.RelativeWorkingDirectory
 	m.secondaryName = ""
 	m.status = ""
+}
+
+// startAgent begins an 'a' creation: spawn an agent in the session the cursor
+// resolves to. It is available wherever a row maps to a session — a selected
+// session, an agent's owning session, or a project's Main Session.
+func (m *Model) startAgent() {
+	row, ok := m.cursor()
+	if !ok {
+		m.status = "no session selected"
+		return
+	}
+	target, ok := m.agentTargetSession(row)
+	if !ok {
+		m.status = "no session selected"
+		return
+	}
+	m.creatingAgent = true
+	m.agentStep = agentPromptExecutable
+	m.agentProjectID = target.ProjectID
+	m.agentSessionID = target.ID
+	m.agentExecutable = ""
+	m.agentName = ""
+	m.status = ""
+}
+
+func (m *Model) startRename() {
+	if m.tab != tabAgents {
+		return
+	}
+	row, ok := m.cursor()
+	if !ok || row.kind != rowAgent {
+		m.status = "no agent selected"
+		return
+	}
+	m.renamingAgent = true
+	m.renameAgentID = row.agent.ID
+	m.renameValue = row.agent.DisplayName
+	if m.renameValue == "" {
+		m.renameValue = fmt.Sprintf("agent-%d", row.agent.ID)
+	}
+	m.status = ""
+}
+
+func (m *Model) resetRenamePrompt() {
+	m.renamingAgent = false
+	m.renameAgentID = 0
+	m.renameValue = ""
+}
+
+// agentTargetSession maps the cursor's row to the session a new agent runs in.
+func (m Model) agentTargetSession(row viewRow) (httpclient.Session, bool) {
+	switch row.kind {
+	case rowSession:
+		return row.session, true
+	case rowAgent:
+		return m.sessionByID(row.agent.SessionID)
+	case rowProject:
+		return m.mainSessionOf(row.project.ID)
+	}
+	return httpclient.Session{}, false
+}
+
+func (m *Model) resetAgentPrompt() {
+	m.creatingAgent = false
+	m.agentStep = agentPromptNone
+	m.agentProjectID = 0
+	m.agentSessionID = 0
+	m.agentExecutable = ""
+	m.agentName = ""
 }
 
 func (m *Model) requestDeleteConfirmation() {
