@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"time"
 
 	"github.com/pilot322/tmux-coder/internal/binresolve"
+	"github.com/pilot322/tmux-coder/internal/obs"
 )
 
 type Starter struct {
@@ -45,11 +47,22 @@ func Ensure(ctx context.Context, addr string, starter Starter) (string, error) {
 		return "", err
 	}
 
-	logFile, err := os.CreateTemp("", "tmux-coderd-*.log")
+	// The daemon's raw stdout/stderr (panics, runtime crashes, stray prints slog
+	// cannot capture) goes alongside its structured logs in the instance's
+	// daemon/ directory. The child pid is unknown before fork, so the launcher
+	// names the file by start time rather than pid.
+	logDir, err := obs.LogDir(obs.RoleDaemon, os.Getenv)
 	if err != nil {
 		return "", err
 	}
-	logPath := logFile.Name()
+	if err := os.MkdirAll(logDir, 0o700); err != nil {
+		return "", err
+	}
+	logPath := filepath.Join(logDir, "boot-"+time.Now().Format("20060102-150405")+".log")
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return "", err
+	}
 	_ = logFile.Close()
 
 	start := starter.Start

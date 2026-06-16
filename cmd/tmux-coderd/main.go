@@ -5,7 +5,8 @@ package main
 
 import (
 	"bufio"
-	"log"
+	"context"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -18,34 +19,46 @@ import (
 	"github.com/pilot322/tmux-coder/internal/infra/netport"
 	processinfra "github.com/pilot322/tmux-coder/internal/infra/process"
 	"github.com/pilot322/tmux-coder/internal/infra/tmux"
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
 func main() {
-	if err := loadEnvFile(".env"); err != nil && !os.IsNotExist(err) {
-		log.Printf("failed to load .env: %v", err)
+	// .env loads before the logger is built because the log path is derived from
+	// the tmux server label, which .env can set; any failure is surfaced once the
+	// logger exists.
+	envErr := loadEnvFile(".env")
+
+	logger, err := obs.New(obs.RoleDaemon, os.Getenv)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "tmux-coderd: failed to initialise logging: %v\n", err)
+		os.Exit(1)
+	}
+	ctx := context.Background()
+	if envErr != nil && !os.IsNotExist(envErr) {
+		logger.Warn(ctx, "failed to load .env", "err", envErr.Error())
 	}
 
 	addr := "127.0.0.1:" + daemonaddr.Port(os.Getenv)
 
 	state := memory.NewDaemonState()
-	gateway := tmux.NewTmuxGateway()
-	git := gitinfra.NewGateway()
-	hooks := hookexec.NewRunner()
-	ports := netport.NewChecker()
-	processGw := processinfra.NewProcessGateway()
+	gateway := tmux.NewTmuxGateway(logger)
+	git := gitinfra.NewGateway(logger)
+	hooks := hookexec.NewRunner(logger)
+	ports := netport.NewChecker(logger)
+	processGw := processinfra.NewProcessGateway(logger)
 
-	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gateway, state, state.Config())
-	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state)
-	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), state.Agents(), gateway, state)
-	createSession := usecase.NewCreateSessionWithHooks(state.Projects(), state.Sessions(), gateway, git, state, hooks, state.Leases())
-	listSessions := usecase.NewGetSessions(state.Projects(), state.Sessions(), git, state)
-	deleteSession := usecase.NewDeleteSessionWithLeases(state.Sessions(), state.Agents(), gateway, git, state, state.Leases())
-	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), gateway, state)
-	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), gateway, state)
-	agentEvent := usecase.NewAgentEvent(state.Agents(), state)
-	deleteAgent := usecase.NewDeleteAgent(state.Agents(), gateway, processGw, state)
-	acquirePort := usecase.NewAcquirePort(state.Sessions(), state.Leases(), ports, state)
+	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gateway, state, state.Config(), logger)
+	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state, logger)
+	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), state.Agents(), gateway, state, logger)
+	createSession := usecase.NewCreateSessionWithHooks(state.Projects(), state.Sessions(), gateway, git, state, hooks, state.Leases(), logger)
+	listSessions := usecase.NewGetSessions(state.Projects(), state.Sessions(), git, state, logger)
+	deleteSession := usecase.NewDeleteSessionWithLeases(state.Sessions(), state.Agents(), gateway, git, state, state.Leases(), logger)
+	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), gateway, state, logger)
+	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), gateway, state, logger)
+	agentEvent := usecase.NewAgentEvent(state.Agents(), state, logger)
+	deleteAgent := usecase.NewDeleteAgent(state.Agents(), gateway, processGw, state, logger)
+	acquirePort := usecase.NewAcquirePort(state.Sessions(), state.Leases(), ports, state, logger)
 
 	controller := httpapi.NewProjectController(create, list, del)
 	sessionController := httpapi.NewSessionController(createSession, listSessions, deleteSession)
@@ -53,9 +66,10 @@ func main() {
 	resourceController := httpapi.NewResourceController(acquirePort)
 	router := httpapi.NewRouter(controller, sessionController, agentController, resourceController)
 
-	log.Printf("tmux-coderd listening on %s", addr)
-	if err := http.ListenAndServe(addr, router); err != nil {
-		log.Fatal(err)
+	logger.Info(ctx, "tmux-coderd listening", "addr", addr)
+	if err := http.ListenAndServe(addr, obs.AccessLog(logger)(router)); err != nil {
+		logger.Error(ctx, "http server stopped", "err", err.Error())
+		os.Exit(1)
 	}
 }
 
