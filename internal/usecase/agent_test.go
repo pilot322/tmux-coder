@@ -166,6 +166,26 @@ func TestCreateAgentOwnedPaneUsesWorktreeDirectory(t *testing.T) {
 	}
 }
 
+func TestCreateAgentOwnedPaneUsesWorktreeRootForSecondaryDirectory(t *testing.T) {
+	uc, _, projects, sessions, gw, _ := agentFixture()
+	ctx := context.Background()
+	p, _ := projects.Create(ctx, domain.NewProject(0, "/work/api", "api"))
+	wt, _ := sessions.Create(ctx, domain.NewWorktreeSession(0, -1, p.ID(), "api.feature", "feature", "/work/api.feature"))
+	s, _ := sessions.Create(ctx, domain.NewSecondarySessionWithTmuxName(0, wt.ID(), p.ID(), "server", "api_feature_server", "services/server", "cascade"))
+
+	if _, err := uc.Execute(ctx, usecase.CreateAgentInput{
+		ProjectID:  p.ID(),
+		SessionID:  s.ID(),
+		Kind:       "opencode",
+		DaemonAddr: "127.0.0.1:64357",
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(gw.workingDirs) != 1 || gw.workingDirs[0] != "/work/api.feature/services/server" {
+		t.Fatalf("workingDirs = %v, want worktree-rooted secondary dir", gw.workingDirs)
+	}
+}
+
 func TestCreateAgent_BorrowedPane(t *testing.T) {
 	uc, _, projects, sessions, gw, _ := agentFixture()
 	p, s := seedProjectAndSession(projects, sessions)

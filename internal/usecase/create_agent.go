@@ -60,6 +60,7 @@ func (uc *CreateAgent) Execute(ctx context.Context, in CreateAgentInput) (Create
 	var project *domain.Project
 	var session *domain.Session
 	var sessions []*domain.Session
+	workingDir := ""
 	if err := uc.lock.WithRead(func() error {
 		p, err := uc.projects.GetByID(ctx, in.ProjectID)
 		if err != nil {
@@ -71,6 +72,14 @@ func (uc *CreateAgent) Execute(ctx context.Context, in CreateAgentInput) (Create
 			return err
 		}
 		session = s
+		workingDir = agentWorkingDir(project, session)
+		if session.Type() == domain.SecondarySession {
+			_, _, root, err := secondaryParentRoot(ctx, uc.sessions, uc.projects, session.Parent())
+			if err != nil {
+				return err
+			}
+			workingDir = filepath.Join(root, session.RelativeWorkingDirectory())
+		}
 		allSessions, err := uc.sessions.GetAll(ctx)
 		if err != nil {
 			return err
@@ -131,7 +140,7 @@ func (uc *CreateAgent) Execute(ctx context.Context, in CreateAgentInput) (Create
 			})
 			return CreateAgentResult{}, err
 		}
-		resultPaneID, err := uc.tmux.NewWindow(ctx, session.TmuxName(), agent.DisplayName(), agentWorkingDir(project, session), cmd, env)
+		resultPaneID, err := uc.tmux.NewWindow(ctx, session.TmuxName(), agent.DisplayName(), workingDir, cmd, env)
 		if err != nil {
 			uc.log.Error(ctx, "agent window create failed, deleting agent record", "agent_id", agent.ID(), "kind", in.Kind, "err", err.Error())
 			_ = uc.lock.WithWrite(func() error {
