@@ -364,7 +364,7 @@ func TestModelOverviewRendersSessionsUnderProject(t *testing.T) {
 		},
 	})
 	view := m.View()
-	if !strings.Contains(view, "Backend API") || !strings.Contains(view, "- api-main") || !strings.Contains(view, "- api-work (feature/api)") {
+	if !strings.Contains(view, "Backend API") || !strings.Contains(view, "├─ 󰊢 api-main") || !strings.Contains(view, "└─  api-work (feature/api)") {
 		t.Fatalf("view missing overview rows: %q", view)
 	}
 }
@@ -376,7 +376,7 @@ func TestModelOverviewRendersAgentsUnderSessions(t *testing.T) {
 		agents:   []httpclient.Agent{{ID: 20, ProjectID: 1, SessionID: 10, DisplayName: "reviewer", TmuxPaneID: "%7", Status: "running"}},
 	})
 	view := m.View()
-	if !strings.Contains(view, "- api-main") || !strings.Contains(view, "- reviewer [running]") {
+	if !strings.Contains(view, "└─ 󰊢 api-main") || !strings.Contains(view, "└─  reviewer [running]") {
 		t.Fatalf("view missing session agent rows: %q", view)
 	}
 }
@@ -392,8 +392,8 @@ func TestModelOverviewIndentsAgentsUnderSecondarySessions(t *testing.T) {
 		agents: []httpclient.Agent{{ID: 20, ProjectID: 1, SessionID: 12, DisplayName: "reviewer", TmuxPaneID: "%7", Status: "running"}},
 	})
 	view := m.View()
-	secondary := strings.Index(view, "    - inner")
-	agent := strings.Index(view, "        - reviewer [running]")
+	secondary := strings.Index(view, "└─  inner")
+	agent := strings.Index(view, "└─  reviewer [running]")
 	if secondary < 0 || agent < 0 || secondary > agent {
 		t.Fatalf("agent under secondary not indented below secondary session: %q", view)
 	}
@@ -409,9 +409,9 @@ func TestModelSessionRowsRenderSecondaryTreeIndented(t *testing.T) {
 		},
 	})
 	view := m.View()
-	main := strings.Index(view, "- api.main")
-	parent := strings.Index(view, "  - pkg")
-	child := strings.Index(view, "    - inner")
+	main := strings.Index(view, "󰊢 api.main")
+	parent := strings.Index(view, " pkg")
+	child := strings.Index(view, " inner")
 	if main < 0 || parent < 0 || child < 0 || !(main < parent && parent < child) {
 		t.Fatalf("secondary tree not rendered in order/indentation: %q", view)
 	}
@@ -433,10 +433,10 @@ func TestModelSessionRowsNestWorktreesByProvenance(t *testing.T) {
 	m = press(m, runes("2")) // sessions tab
 	view := m.View()
 
-	mainAt := strings.Index(view, "- api.main")
-	featAt := strings.Index(view, "- api.feat (feat)")
-	backendAt := strings.Index(view, "- api.feat-backend (feat-backend)")
-	standaloneAt := strings.Index(view, "- api.standalone (standalone)")
+	mainAt := strings.Index(view, "󰊢 api.main")
+	featAt := strings.Index(view, " api.feat (feat)")
+	backendAt := strings.Index(view, " api.feat-backend (feat-backend)")
+	standaloneAt := strings.Index(view, " api.standalone (standalone)")
 	if mainAt < 0 || featAt < 0 || backendAt < 0 || standaloneAt < 0 {
 		t.Fatalf("missing session rows:\n%q", view)
 	}
@@ -444,15 +444,15 @@ func TestModelSessionRowsNestWorktreesByProvenance(t *testing.T) {
 		t.Fatalf("tree order = main:%d feat:%d backend:%d standalone:%d, want provenance subtree before base worktree\n%q", mainAt, featAt, backendAt, standaloneAt, view)
 	}
 
-	// Nesting is shown by indentation: feat one level under main, feat-backend
-	// under feat, while the base-ref worktree sits at the Project level.
-	if !strings.Contains(view, "      - api.feat (feat)") {
+	// Nesting is shown by rooted-tree lanes: feat one level under main,
+	// feat-backend under feat, while the base-ref worktree sits at the Project level.
+	if !strings.Contains(view, "│  └─  api.feat (feat)") {
 		t.Fatalf("feat should be indented one level under main:\n%q", view)
 	}
-	if !strings.Contains(view, "        - api.feat-backend (feat-backend)") {
+	if !strings.Contains(view, "│     └─  api.feat-backend (feat-backend)") {
 		t.Fatalf("feat-backend should be indented under feat:\n%q", view)
 	}
-	if !strings.Contains(view, "    - api.standalone (standalone)") || strings.Contains(view, "      - api.standalone (standalone)") {
+	if !strings.Contains(view, "└─  api.standalone (standalone)") || strings.Contains(view, "│  └─  api.standalone (standalone)") {
 		t.Fatalf("base-ref worktree should sit at the project level (same indent as main):\n%q", view)
 	}
 }
@@ -465,7 +465,7 @@ func TestModelSessionsViewOmitsAgents(t *testing.T) {
 	})
 	m = press(m, runes("2"))
 	view := m.View()
-	if !strings.Contains(view, "- main") {
+	if !strings.Contains(view, "└─ 󰊢 main") {
 		t.Fatalf("sessions view missing session row: %q", view)
 	}
 	if strings.Contains(view, "reviewer") {

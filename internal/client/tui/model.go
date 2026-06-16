@@ -663,18 +663,21 @@ func (m Model) writeSessionsView(b *strings.Builder, withAgents bool) {
 	cur, has := m.cursor()
 	for _, p := range m.projects {
 		b.WriteString("  " + projectHeaderLine(p) + "\n")
-		for _, s := range m.sessionRows() {
+		projectSessions := m.projectSessionRows(p.ID)
+		for _, s := range projectSessions {
 			if s.ProjectID != p.ID {
 				continue
 			}
 			selected := has && cur.kind == rowSession && cur.session.ID == s.ID
-			m.writeSessionLine(b, s, selected)
+			m.writeSessionLine(b, projectSessions, s, selected)
 			if !withAgents {
 				continue
 			}
-			for _, a := range m.agentsForSession(s.ID) {
+			agents := m.agentsForSession(s.ID)
+			for i, a := range agents {
 				selAgent := has && cur.kind == rowAgent && cur.agent.ID == a.ID
-				m.writeAgentUnderSession(b, s, a, selAgent)
+				isLastAgentChild := i == len(agents)-1 && !m.hasSessionChildren(p.ID, s.ID)
+				m.writeAgentUnderSession(b, projectSessions, s, a, selAgent, isLastAgentChild)
 			}
 		}
 	}
@@ -704,9 +707,9 @@ func (m Model) writeAgentsView(b *strings.Builder) {
 	}
 }
 
-func (m Model) writeSessionLine(b *strings.Builder, s httpclient.Session, selected bool) {
-	prefix := strings.Repeat("  ", m.sessionDepth(s))
-	content := "- " + sessionName(s)
+func (m Model) writeSessionLine(b *strings.Builder, rows []httpclient.Session, s httpclient.Session, selected bool) {
+	prefix := m.sessionTreePrefix(rows, s)
+	content := sessionName(s)
 	if s.Branch != "" {
 		content += " (" + s.Branch + ")"
 	}
@@ -720,8 +723,8 @@ func (m Model) writeSessionLine(b *strings.Builder, s httpclient.Session, select
 	b.WriteString("  " + line + "\n")
 }
 
-func (m Model) writeAgentUnderSession(b *strings.Builder, s httpclient.Session, a httpclient.Agent, selected bool) {
-	line := strings.Repeat("  ", m.sessionDepth(s)+1) + "- " + agentLabel(a)
+func (m Model) writeAgentUnderSession(b *strings.Builder, rows []httpclient.Session, s httpclient.Session, a httpclient.Agent, selected, isLastChild bool) {
+	line := m.agentTreePrefix(rows, s, isLastChild) + agentLabel(a)
 	if selected {
 		line = selectStyle.Render("> " + line)
 	} else {
@@ -1888,6 +1891,107 @@ func (m Model) appendSecondaryChildren(rows []httpclient.Session, projectID, par
 	return rows
 }
 
+func (m Model) projectSessionRows(projectID int) []httpclient.Session {
+	all := m.sessionRows()
+	rows := make([]httpclient.Session, 0)
+	for _, s := range all {
+		if s.ProjectID == projectID {
+			rows = append(rows, s)
+		}
+	}
+	return rows
+}
+
+func (m Model) sessionTreePrefix(rows []httpclient.Session, s httpclient.Session) string {
+	var b strings.Builder
+	for _, ancestor := range m.sessionAncestors(s) {
+		if sessionHasLaterSibling(rows, ancestor) {
+			b.WriteString("│  ")
+		} else {
+			b.WriteString("   ")
+		}
+	}
+	if sessionHasLaterSibling(rows, s) {
+		b.WriteString("├─ ")
+	} else {
+		b.WriteString("└─ ")
+	}
+	b.WriteString(sessionIcon(s) + " ")
+	return b.String()
+}
+
+func (m Model) agentTreePrefix(rows []httpclient.Session, session httpclient.Session, isLastChild bool) string {
+	var b strings.Builder
+	ancestors := append(m.sessionAncestors(session), session)
+	for _, ancestor := range ancestors {
+		if sessionHasLaterSibling(rows, ancestor) {
+			b.WriteString("│  ")
+		} else {
+			b.WriteString("   ")
+		}
+	}
+	if isLastChild {
+		b.WriteString("└─ ")
+	} else {
+		b.WriteString("├─ ")
+	}
+	b.WriteString(" ")
+	return b.String()
+}
+
+func (m Model) sessionAncestors(s httpclient.Session) []httpclient.Session {
+	ancestors := make([]httpclient.Session, 0)
+	for id := parentID(s); id > 0; {
+		parent, ok := m.sessionByID(id)
+		if !ok {
+			break
+		}
+		ancestors = append(ancestors, parent)
+		id = parentID(parent)
+	}
+	for i, j := 0, len(ancestors)-1; i < j; i, j = i+1, j-1 {
+		ancestors[i], ancestors[j] = ancestors[j], ancestors[i]
+	}
+	return ancestors
+}
+
+func sessionHasLaterSibling(rows []httpclient.Session, s httpclient.Session) bool {
+	seen := false
+	parent := parentID(s)
+	for _, row := range rows {
+		if row.ID == s.ID {
+			seen = true
+			continue
+		}
+		if seen && row.ProjectID == s.ProjectID && parentID(row) == parent {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) hasSessionChildren(projectID, parent int) bool {
+	for _, s := range m.sessions {
+		if s.ProjectID == projectID && parentID(s) == parent && (s.Type == "worktree" || s.Type == "secondary") {
+			return true
+		}
+	}
+	return false
+}
+
+func sessionIcon(s httpclient.Session) string {
+	switch s.Type {
+	case "main":
+		return "󰊢"
+	case "worktree":
+		return ""
+	case "secondary":
+		return ""
+	default:
+		return "●"
+	}
+}
+
 // sessionDepth is how far a session sits below the Project level, counting each
 // ancestor session in its Provenance/parent chain. Main and parentless 'W'
 // worktrees are at depth 0; nested worktrees and secondaries indent by their
@@ -2031,7 +2135,7 @@ func agentStatusStyle(status string) lipgloss.Style {
 }
 
 func parentID(s httpclient.Session) int {
-	if s.ParentSessionID != 0 {
+	if s.ParentSessionID > 0 {
 		return s.ParentSessionID
 	}
 	if s.Parent > 0 {
