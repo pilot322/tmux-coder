@@ -278,6 +278,65 @@ func TestCreateSessionHookFailureRollsBackWorktreeAndBranch(t *testing.T) {
 	}
 }
 
+// TestCreateSessionRollsBackWorktreeWhenRequestCancelledMidHook reproduces the
+// existing-branch leak: a client disconnect cancels the request context while
+// the (slow) Worktree Hook runs. The hook process dies, the create fails, and
+// rollback must still remove the worktree it added. Because git is shelled out
+// via exec.CommandContext, a rollback that reuses the cancelled context runs no
+// git at all and the worktree leaks on disk with no Session created.
+func TestCreateSessionRollsBackWorktreeWhenRequestCancelledMidHook(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	parent := t.TempDir()
+	projectRoot := filepath.Join(parent, "api")
+	if err := os.Mkdir(projectRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	scriptPath := filepath.Join(projectRoot, ".tmux-coder-on-create-worktree.sh")
+	if err := os.WriteFile(scriptPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non-create-script = \".tmux-coder-on-create-worktree.sh\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	projects := memory.NewMemoryProjectRepository()
+	sessions := memory.NewMemorySessionRepository()
+	lock := &spyLock{}
+	var events []string
+	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
+	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
+	// The client disconnects mid-hook: cancel the request context, then surface
+	// the error a hook process gets when its context dies.
+	hooks := &fakeWorktreeHookRunner{events: &events, cancel: cancel, err: context.Canceled}
+	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository())
+	var project *domain.Project
+	if err := lock.WithWrite(func() error {
+		var err error
+		project, err = projects.Create(ctx, domain.NewProject(0, projectRoot, "api"))
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
+	if err == nil {
+		t.Fatal("Execute succeeded, want failure after the request was cancelled mid-hook")
+	}
+	worktreePath := filepath.Join(parent, "api.feature-login")
+	if git.paths[worktreePath] {
+		t.Errorf("worktree leaked: still on disk after a cancelled create")
+	}
+	if !reflect.DeepEqual(git.removed, []string{worktreePath}) {
+		t.Errorf("removed worktrees = %v, want %v (rollback must clean up despite request cancellation)", git.removed, []string{worktreePath})
+	}
+	if all, _ := sessions.GetAll(ctx); len(all) != 0 {
+		t.Errorf("sessions stored after cancelled create = %d, want 0", len(all))
+	}
+}
+
 func TestCreateSessionRejectsHookScriptSymlinkEscapingProjectRoot(t *testing.T) {
 	ctx := context.Background()
 	parent := t.TempDir()
@@ -1124,6 +1183,7 @@ type fakeWorktreeHookRunner struct {
 	events      *[]string
 	calls       []usecase.WorktreeHookRequest
 	err         error
+	cancel      context.CancelFunc // models a client disconnecting while the hook runs
 	leases      usecase.ResourceLeaseRepository
 	acquirePort bool
 }
@@ -1131,6 +1191,9 @@ type fakeWorktreeHookRunner struct {
 func (r *fakeWorktreeHookRunner) Run(ctx context.Context, req usecase.WorktreeHookRequest) (usecase.WorktreeHookResult, error) {
 	*r.events = append(*r.events, "hook:run")
 	r.calls = append(r.calls, req)
+	if r.cancel != nil {
+		r.cancel()
+	}
 	if r.acquirePort {
 		if _, err := r.leases.AcquirePort(ctx, usecase.PortLeaseRequest{OwnerKind: usecase.ResourceLeaseOwnerHook, HookToken: req.Env["TMUX_CODER_HOOK_TOKEN"], Key: "web", Start: 8000, End: 8000}, func(int) bool { return true }); err != nil {
 			return usecase.WorktreeHookResult{Output: "acquire port failed"}, err
@@ -1232,12 +1295,19 @@ func (g *fakeWorktreeGit) AddWorktree(ctx context.Context, repoPath, worktreePat
 }
 
 func (g *fakeWorktreeGit) RemoveWorktree(ctx context.Context, worktreePath string, force bool) error {
+	// Mirror exec.CommandContext: a cancelled context runs no git at all.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	g.removed = append(g.removed, worktreePath)
 	delete(g.paths, worktreePath)
 	return nil
 }
 
 func (g *fakeWorktreeGit) DeleteBranch(ctx context.Context, repoPath, branch string) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	g.deletedBranches = append(g.deletedBranches, branch)
 	return nil
 }

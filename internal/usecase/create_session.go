@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pilot322/tmux-coder/internal/config"
 	"github.com/pilot322/tmux-coder/internal/domain"
@@ -259,19 +260,19 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 		session = s
 		return err
 	}); err != nil {
-		_ = uc.tmux.Kill(ctx, tmuxName)
+		uc.killTmuxBestEffort(ctx, tmuxName)
 		uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
 		return nil, err
 	}
 	if hookToken != "" {
 		if err := uc.leases.PromoteHookLeases(ctx, hookToken, session.ID()); err != nil {
-			_ = uc.tmux.Kill(ctx, tmuxName)
+			uc.killTmuxBestEffort(ctx, tmuxName)
 			uc.rollbackCreatedSessionRecord(ctx, session.ID())
 			uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
 			return nil, err
 		}
 		if err := uc.leases.EndHook(ctx, hookToken); err != nil {
-			_ = uc.tmux.Kill(ctx, tmuxName)
+			uc.killTmuxBestEffort(ctx, tmuxName)
 			uc.rollbackCreatedSessionRecord(ctx, session.ID())
 			uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
 			return nil, err
@@ -285,7 +286,7 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 	// create's rollback scope (ADR-0007). subdir resolves against the worktree
 	// path, while the Config File is read from the Project path.
 	if err := materializeSecondarySessions(ctx, uc.sessions, uc.tmux, uc.lock, project.FullPath(), session, worktreePath); err != nil {
-		_ = uc.tmux.Kill(ctx, tmuxName)
+		uc.killTmuxBestEffort(ctx, tmuxName)
 		uc.rollbackCreatedSessionRecord(ctx, session.ID())
 		uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
 		return nil, err
@@ -529,10 +530,32 @@ func canonicalPath(p string) string {
 }
 
 func (uc *CreateSession) rollbackCreatedWorktree(ctx context.Context, repoPath, worktreePath, branch string, worktreeCreated, branchCreated bool) {
+	// Rollback is a compensating action that must run even when the create was
+	// aborted because the request was cancelled (e.g. the Client disconnected
+	// mid-hook). Git is shelled out via exec.CommandContext, which runs nothing
+	// on a cancelled context, so reusing the request context here would leave the
+	// worktree on disk. Detach from cancellation but keep a bounded deadline.
+	ctx, cancel := detachedCleanupContext(ctx)
+	defer cancel()
 	if worktreeCreated {
 		_ = uc.git.RemoveWorktree(ctx, worktreePath, true)
 	}
 	if branchCreated {
 		_ = uc.git.DeleteBranch(ctx, repoPath, branch)
 	}
+}
+
+// killTmuxBestEffort tears down a tmux session created earlier in a create that
+// is now unwinding. Like worktree rollback, it must run even when the request
+// was cancelled, so it uses a detached context rather than the request's.
+func (uc *CreateSession) killTmuxBestEffort(ctx context.Context, tmuxName string) {
+	ctx, cancel := detachedCleanupContext(ctx)
+	defer cancel()
+	_ = uc.tmux.Kill(ctx, tmuxName)
+}
+
+// detachedCleanupContext derives a context for best-effort cleanup that survives
+// cancellation of the originating request but still cannot hang indefinitely.
+func detachedCleanupContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 }
