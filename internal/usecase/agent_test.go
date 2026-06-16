@@ -15,11 +15,19 @@ import (
 
 type fakeAgentGateway struct {
 	createdWindows []string
+	windowNames    []string
+	renamedWindows []renamedWindow
 	workingDirs    []string
 	commands       []string
 	paneIDCounter  int
 	panes          map[string]bool
+	renameErr      error
 	killErr        error
+}
+
+type renamedWindow struct {
+	paneID string
+	name   string
 }
 
 type fakeProcessGateway struct {
@@ -34,11 +42,12 @@ func (g *fakeProcessGateway) TerminateProcessGroup(ctx context.Context, pgid int
 	return g.err
 }
 
-func (g *fakeAgentGateway) NewWindow(ctx context.Context, sessionName, workingDir, command string, env []string) (string, error) {
+func (g *fakeAgentGateway) NewWindow(ctx context.Context, sessionName, windowName, workingDir, command string, env []string) (string, error) {
 	g.paneIDCounter++
 	paneID := "%" + itoa(g.paneIDCounter)
 	g.panes[paneID] = true
 	g.createdWindows = append(g.createdWindows, sessionName)
+	g.windowNames = append(g.windowNames, windowName)
 	g.workingDirs = append(g.workingDirs, workingDir)
 	g.commands = append(g.commands, command)
 	return paneID, nil
@@ -46,6 +55,11 @@ func (g *fakeAgentGateway) NewWindow(ctx context.Context, sessionName, workingDi
 
 func (g *fakeAgentGateway) PaneExists(ctx context.Context, paneID string) (bool, error) {
 	return g.panes[paneID], nil
+}
+
+func (g *fakeAgentGateway) RenameWindow(ctx context.Context, paneID, name string) error {
+	g.renamedWindows = append(g.renamedWindows, renamedWindow{paneID: paneID, name: name})
+	return g.renameErr
 }
 
 func (g *fakeAgentGateway) KillPane(ctx context.Context, paneID string) error {
@@ -122,6 +136,9 @@ func TestCreateAgent_OwnedPane(t *testing.T) {
 	if result.Agent.DisplayName() == "" {
 		t.Fatal("want non-empty default display name")
 	}
+	if len(gw.windowNames) != 1 || gw.windowNames[0] != result.Agent.DisplayName() {
+		t.Fatalf("windowNames = %v, want %q", gw.windowNames, result.Agent.DisplayName())
+	}
 	if len(gw.commands) != 1 || !strings.Contains(gw.commands[0], "agent-wrapper") {
 		t.Fatalf("commands = %v, want agent-wrapper subcommand", gw.commands)
 	}
@@ -174,6 +191,31 @@ func TestCreateAgent_BorrowedPane(t *testing.T) {
 	}
 	if len(gw.createdWindows) != 0 {
 		t.Fatalf("want 0 NewWindow calls for borrowed pane, got %d", len(gw.createdWindows))
+	}
+	if len(gw.renamedWindows) != 1 || gw.renamedWindows[0].paneID != paneID || gw.renamedWindows[0].name != result.Agent.DisplayName() {
+		t.Fatalf("renamedWindows = %#v, want pane %q name %q", gw.renamedWindows, paneID, result.Agent.DisplayName())
+	}
+}
+
+func TestCreateAgent_BorrowedPaneIgnoresWindowRenameFailure(t *testing.T) {
+	uc, _, projects, sessions, gw, _ := agentFixture()
+	p, s := seedProjectAndSession(projects, sessions)
+	ctx := context.Background()
+	paneID := "%12"
+	gw.panes[paneID] = true
+	gw.renameErr = errors.New("tmux rename failed")
+
+	if _, err := uc.Execute(ctx, usecase.CreateAgentInput{
+		ProjectID:  p.ID(),
+		SessionID:  s.ID(),
+		Kind:       "claude",
+		TmuxPaneID: &paneID,
+		DaemonAddr: "127.0.0.1:64357",
+	}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(gw.renamedWindows) != 1 {
+		t.Fatalf("renamedWindows = %#v, want one best-effort attempt", gw.renamedWindows)
 	}
 }
 
@@ -477,12 +519,12 @@ func TestGetAgents_PrunesMissingPanesAndFilters(t *testing.T) {
 }
 
 func TestRenameAgent_UpdatesDisplayName(t *testing.T) {
-	_, agents, projects, sessions, _, lock := agentFixture()
+	_, agents, projects, sessions, gw, lock := agentFixture()
 	p, s := seedProjectAndSession(projects, sessions)
 	ctx := context.Background()
 	agent, _ := agents.Create(ctx, domain.NewAgent(0, p.ID(), s.ID(), "opencode", "old", "%10", true, domain.AgentRunning))
 
-	view, err := usecase.NewRenameAgent(agents, projects, sessions, lock).Execute(ctx, usecase.RenameAgentInput{AgentID: agent.ID(), DisplayName: " new name "})
+	view, err := usecase.NewRenameAgent(agents, projects, sessions, gw, lock, obs.Nop()).Execute(ctx, usecase.RenameAgentInput{AgentID: agent.ID(), DisplayName: " new name "})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -493,22 +535,44 @@ func TestRenameAgent_UpdatesDisplayName(t *testing.T) {
 	if stored.DisplayName() != "new name" {
 		t.Fatalf("stored DisplayName = %q, want new name", stored.DisplayName())
 	}
+	if len(gw.renamedWindows) != 1 || gw.renamedWindows[0].paneID != "%10" || gw.renamedWindows[0].name != "new name" {
+		t.Fatalf("renamedWindows = %#v, want pane %%10 name new name", gw.renamedWindows)
+	}
 	if view.Project.ID() != p.ID() || view.Session.ID() != s.ID() || view.MainSessionName != s.Name() {
 		t.Fatalf("view context = project %d session %d main %q", view.Project.ID(), view.Session.ID(), view.MainSessionName)
 	}
 }
 
+func TestRenameAgent_IgnoresWindowRenameFailure(t *testing.T) {
+	_, agents, projects, sessions, gw, lock := agentFixture()
+	p, s := seedProjectAndSession(projects, sessions)
+	ctx := context.Background()
+	agent, _ := agents.Create(ctx, domain.NewAgent(0, p.ID(), s.ID(), "opencode", "old", "%10", true, domain.AgentRunning))
+	gw.renameErr = errors.New("tmux rename failed")
+
+	view, err := usecase.NewRenameAgent(agents, projects, sessions, gw, lock, obs.Nop()).Execute(ctx, usecase.RenameAgentInput{AgentID: agent.ID(), DisplayName: "new"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if view.Agent.DisplayName() != "new" {
+		t.Fatalf("DisplayName = %q, want new", view.Agent.DisplayName())
+	}
+	if len(gw.renamedWindows) != 1 {
+		t.Fatalf("renamedWindows = %#v, want one best-effort attempt", gw.renamedWindows)
+	}
+}
+
 func TestRenameAgent_NotFound(t *testing.T) {
-	_, agents, projects, sessions, _, lock := agentFixture()
-	_, err := usecase.NewRenameAgent(agents, projects, sessions, lock).Execute(context.Background(), usecase.RenameAgentInput{AgentID: 999, DisplayName: "new"})
+	_, agents, projects, sessions, gw, lock := agentFixture()
+	_, err := usecase.NewRenameAgent(agents, projects, sessions, gw, lock, obs.Nop()).Execute(context.Background(), usecase.RenameAgentInput{AgentID: 999, DisplayName: "new"})
 	if !errors.Is(err, usecase.ErrAgentNotFound) {
 		t.Fatalf("Execute error = %v, want ErrAgentNotFound", err)
 	}
 }
 
 func TestRenameAgent_RejectsEmptyName(t *testing.T) {
-	_, agents, projects, sessions, _, lock := agentFixture()
-	_, err := usecase.NewRenameAgent(agents, projects, sessions, lock).Execute(context.Background(), usecase.RenameAgentInput{AgentID: 1, DisplayName: "  "})
+	_, agents, projects, sessions, gw, lock := agentFixture()
+	_, err := usecase.NewRenameAgent(agents, projects, sessions, gw, lock, obs.Nop()).Execute(context.Background(), usecase.RenameAgentInput{AgentID: 1, DisplayName: "  "})
 	if !errors.Is(err, usecase.ErrValidation) {
 		t.Fatalf("Execute error = %v, want ErrValidation", err)
 	}

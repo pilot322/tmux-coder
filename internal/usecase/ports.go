@@ -110,7 +110,8 @@ type IAgentRepository interface {
 }
 
 type AgentTmuxGateway interface {
-	NewWindow(ctx context.Context, sessionName, workingDir, command string, env []string) (string, error)
+	NewWindow(ctx context.Context, sessionName, windowName, workingDir, command string, env []string) (string, error)
+	RenameWindow(ctx context.Context, paneID, name string) error
 	PaneExists(ctx context.Context, paneID string) (bool, error)
 	KillPane(ctx context.Context, paneID string) error
 	ListPanes(ctx context.Context, sessionName string) ([]string, error)

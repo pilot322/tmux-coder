@@ -58,7 +58,7 @@ func main() {
 	deleteSession := usecase.NewDeleteSessionWithLeases(state.Sessions(), state.Agents(), gateway, git, state, state.Leases(), logger)
 	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), gateway, state, logger)
 	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), gateway, state, logger)
-	renameAgent := usecase.NewRenameAgent(state.Agents(), state.Projects(), state.Sessions(), state)
+	renameAgent := usecase.NewRenameAgent(state.Agents(), state.Projects(), state.Sessions(), gateway, state, logger)
 	agentEvent := usecase.NewAgentEvent(state.Agents(), state.Projects(), state.Sessions(), notifier, state, logger)
 	deleteAgent := usecase.NewDeleteAgent(state.Agents(), gateway, processGw, state, logger)
 	acquirePort := usecase.NewAcquirePort(state.Sessions(), state.Leases(), ports, state, logger)

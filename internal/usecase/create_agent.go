@@ -131,7 +131,7 @@ func (uc *CreateAgent) Execute(ctx context.Context, in CreateAgentInput) (Create
 			})
 			return CreateAgentResult{}, err
 		}
-		resultPaneID, err := uc.tmux.NewWindow(ctx, session.TmuxName(), agentWorkingDir(project, session), cmd, env)
+		resultPaneID, err := uc.tmux.NewWindow(ctx, session.TmuxName(), agent.DisplayName(), agentWorkingDir(project, session), cmd, env)
 		if err != nil {
 			uc.log.Error(ctx, "agent window create failed, deleting agent record", "agent_id", agent.ID(), "kind", in.Kind, "err", err.Error())
 			_ = uc.lock.WithWrite(func() error {
@@ -150,6 +150,8 @@ func (uc *CreateAgent) Execute(ctx context.Context, in CreateAgentInput) (Create
 		}); err != nil {
 			return CreateAgentResult{}, err
 		}
+	} else if err := uc.tmux.RenameWindow(ctx, agent.TmuxPaneID(), agent.DisplayName()); err != nil {
+		uc.log.Warn(ctx, "agent window rename failed", "agent_id", agent.ID(), "pane_id", agent.TmuxPaneID(), "display_name", agent.DisplayName(), "err", err.Error())
 	}
 
 	uc.log.Info(ctx, "agent created", "agent_id", agent.ID(), "kind", in.Kind, "session_id", in.SessionID, "pane_owned", paneOwned)

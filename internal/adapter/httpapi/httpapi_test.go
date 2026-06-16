@@ -104,16 +104,21 @@ func (p *stubPortAvailability) Available(ctx context.Context, port int) bool {
 
 type stubNewWindowCall struct {
 	sessionName string
+	windowName  string
 	workingDir  string
 	command     string
 	env         []string
 }
 
-func (g *stubAgentGateway) NewWindow(ctx context.Context, sessionName, workingDir, command string, env []string) (string, error) {
+func (g *stubAgentGateway) NewWindow(ctx context.Context, sessionName, windowName, workingDir, command string, env []string) (string, error) {
 	paneID := fmt.Sprintf("%%%d", len(g.created)+1)
-	g.created = append(g.created, stubNewWindowCall{sessionName, workingDir, command, env})
+	g.created = append(g.created, stubNewWindowCall{sessionName, windowName, workingDir, command, env})
 	g.panes[paneID] = true
 	return paneID, nil
+}
+
+func (g *stubAgentGateway) RenameWindow(ctx context.Context, paneID, name string) error {
+	return nil
 }
 
 func (g *stubAgentGateway) PaneExists(ctx context.Context, paneID string) (bool, error) {
@@ -151,7 +156,7 @@ func newServerWithGit(git *stubGit) *http.ServeMux {
 	deleteSession := usecase.NewDeleteSession(state.Sessions(), state.Agents(), gw, git, state, obs.Nop())
 	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
 	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
-	renameAgent := usecase.NewRenameAgent(state.Agents(), state.Projects(), state.Sessions(), state)
+	renameAgent := usecase.NewRenameAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
 	agentEvent := usecase.NewAgentEvent(state.Agents(), state.Projects(), state.Sessions(), desktopnotify.NoopNotifier{}, state, obs.Nop())
 	deleteAgent := usecase.NewDeleteAgent(state.Agents(), agentGw, nil, state, obs.Nop())
 
@@ -175,7 +180,7 @@ func newResourceServer(ports *stubPortAvailability) (*http.ServeMux, *memory.Mem
 	deleteSession := usecase.NewDeleteSession(state.Sessions(), state.Agents(), gw, git, state, obs.Nop())
 	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
 	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
-	renameAgent := usecase.NewRenameAgent(state.Agents(), state.Projects(), state.Sessions(), state)
+	renameAgent := usecase.NewRenameAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
 	agentEvent := usecase.NewAgentEvent(state.Agents(), state.Projects(), state.Sessions(), desktopnotify.NoopNotifier{}, state, obs.Nop())
 	deleteAgent := usecase.NewDeleteAgent(state.Agents(), agentGw, nil, state, obs.Nop())
 	acquirePort := usecase.NewAcquirePort(state.Sessions(), state.Leases(), ports, state, obs.Nop())

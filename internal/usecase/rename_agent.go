@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
+	"github.com/pilot322/tmux-coder/internal/obs"
 )
 
 type RenameAgentInput struct {
@@ -17,11 +18,13 @@ type RenameAgent struct {
 	agents   IAgentRepository
 	projects IProjectRepository
 	sessions ISessionRepository
+	tmux     AgentTmuxGateway
 	lock     StateLock
+	log      obs.Logger
 }
 
-func NewRenameAgent(a IAgentRepository, p IProjectRepository, s ISessionRepository, l StateLock) *RenameAgent {
-	return &RenameAgent{agents: a, projects: p, sessions: s, lock: l}
+func NewRenameAgent(a IAgentRepository, p IProjectRepository, s ISessionRepository, tmux AgentTmuxGateway, l StateLock, log obs.Logger) *RenameAgent {
+	return &RenameAgent{agents: a, projects: p, sessions: s, tmux: tmux, lock: l, log: log.With("component", "rename-agent")}
 }
 
 func (uc *RenameAgent) Execute(ctx context.Context, in RenameAgentInput) (AgentView, error) {
@@ -47,6 +50,9 @@ func (uc *RenameAgent) Execute(ctx context.Context, in RenameAgentInput) (AgentV
 		return nil
 	}); err != nil {
 		return AgentView{}, err
+	}
+	if err := uc.tmux.RenameWindow(ctx, agent.TmuxPaneID(), agent.DisplayName()); err != nil {
+		uc.log.Warn(ctx, "agent window rename failed", "agent_id", agent.ID(), "pane_id", agent.TmuxPaneID(), "display_name", agent.DisplayName(), "err", err.Error())
 	}
 
 	var project *domain.Project
