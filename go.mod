@@ -7,6 +7,7 @@ require (
 	github.com/charmbracelet/bubbletea v0.27.1
 	github.com/charmbracelet/lipgloss v0.13.0
 	github.com/pelletier/go-toml/v2 v2.3.1
+	github.com/sahilm/fuzzy v0.1.1-0.20230530133925-c48e322e2a8f
 )
 
 require (

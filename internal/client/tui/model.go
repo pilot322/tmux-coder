@@ -12,6 +12,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 	"github.com/pilot322/tmux-coder/internal/client/httpclient"
+	"github.com/sahilm/fuzzy"
 )
 
 // pollInterval is how often the TUI refreshes its data from the daemon so that
@@ -108,6 +109,13 @@ type Model struct {
 	// state — not persisted and never sent to the daemon.
 	groupAgents bool
 
+	// filtering drives the fuzzy finder ('f'). While on, the active view
+	// collapses to a flat, score-ranked list of its rows matched against
+	// filterQuery, and key input is routed to updateFilter instead of the
+	// normal bindings. Cleared on esc.
+	filtering   bool
+	filterQuery string
+
 	status          string
 	loading         bool
 	confirm         bool
@@ -177,14 +185,16 @@ var (
 		lipgloss.NewStyle().Foreground(lipgloss.Color("21")), // depth 4
 		lipgloss.NewStyle().Foreground(lipgloss.Color("19")), // depth 5+
 	}
+	defaultStyle      = lipgloss.NewStyle()
+	filterPromptStyle = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("13"))
 )
 
 const noProjectsMsg = "No projects yet. Run `tmux-coder open` or `tmux-coder o` in a directory to create and attach it."
 
-const helpText = "Keys: j/k or ctrl+n/ctrl+p or arrows move, g/G jump, 0-3 switch tab, enter attach, X delete, w worktree (off session), W base worktree (off ref), S secondary (Sessions), s group (Agents), r refresh, ? help, q quit"
+const helpText = "Keys: j/k or ctrl+n/ctrl+p or arrows move, g/G jump, 0-3 switch tab, enter attach, X delete, w worktree (off session), W base worktree (off ref), S secondary (Sessions), s group (Agents), f filter, r refresh, ? help, q quit"
 
 var keys = struct {
-	up, down, top, bottom, enter, del, refresh, worktree, worktreeBase, secondary, group, help, quit, tab key.Binding
+	up, down, top, bottom, enter, del, refresh, worktree, worktreeBase, secondary, group, filter, help, quit, tab key.Binding
 }{
 	up:           key.NewBinding(key.WithKeys("up", "k", "ctrl+p")),
 	down:         key.NewBinding(key.WithKeys("down", "j", "ctrl+n")),
@@ -197,6 +207,7 @@ var keys = struct {
 	worktreeBase: key.NewBinding(key.WithKeys("W")),
 	secondary:    key.NewBinding(key.WithKeys("S")),
 	group:        key.NewBinding(key.WithKeys("s")),
+	filter:       key.NewBinding(key.WithKeys("f")),
 	help:         key.NewBinding(key.WithKeys("?")),
 	quit:         key.NewBinding(key.WithKeys("q", "esc", "ctrl+c")),
 	tab:          key.NewBinding(key.WithKeys("0", "1", "2", "3")),
@@ -321,6 +332,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.creatingWorktreeFromBase {
 			return m.updateWorktreeFromBasePrompt(msg)
 		}
+		if m.filtering {
+			return m.updateFilter(msg)
+		}
 
 		if m.confirm {
 			switch msg.String() {
@@ -364,6 +378,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.groupAgents = !m.groupAgents
 				m.normalizeSelection()
 			}
+		case key.Matches(msg, keys.filter):
+			m.startFilter()
 		case key.Matches(msg, keys.up):
 			m.move(-1)
 		case key.Matches(msg, keys.down):
@@ -391,6 +407,8 @@ func (m Model) View() string {
 
 	if m.loading {
 		b.WriteString("Loading...\n")
+	} else if m.filtering {
+		m.writeFilterView(&b)
 	} else {
 		switch m.tab {
 		case tabProjects:
@@ -454,6 +472,8 @@ func (m Model) View() string {
 		b.WriteString("\n" + mutedStyle.Render("enter next/create  esc cancel") + "\n")
 	} else if m.worktreeConflict != "" {
 		b.WriteString("\n" + mutedStyle.Render("y confirm  n cancel") + "\n")
+	} else if m.filtering {
+		b.WriteString("\n" + mutedStyle.Render("ctrl+n/ctrl+p move  enter open  esc cancel") + "\n")
 	} else if m.help {
 		b.WriteString("\n" + helpText + "\n")
 	} else {
@@ -487,7 +507,7 @@ func (m Model) footer() string {
 	default:
 		parts = append(parts, "X delete")
 	}
-	parts = append(parts, "0-3 tabs", "r refresh", "? help", "q quit")
+	parts = append(parts, "f filter", "0-3 tabs", "r refresh", "? help", "q quit")
 	return strings.Join(parts, "  ")
 }
 
@@ -589,19 +609,26 @@ func projectHeaderLine(p httpclient.Project) string {
 }
 
 func styleSession(s httpclient.Session, depth int, content string) string {
+	return sessionStyle(s, depth).Render(content)
+}
+
+// sessionStyle is the color a session row is drawn in: Main red, worktree
+// orange, secondaries shaded by depth. Shared by the tree views and the fuzzy
+// finder so a session keeps its color when filtered.
+func sessionStyle(s httpclient.Session, depth int) lipgloss.Style {
 	switch s.Type {
 	case "main":
-		return mainStyle.Render(content)
+		return mainStyle
 	case "worktree":
-		return worktreeStyle.Render(content)
+		return worktreeStyle
 	case "secondary":
 		d := depth
 		if d >= len(secondaryStyle) {
 			d = len(secondaryStyle) - 1
 		}
-		return secondaryStyle[d].Render(content)
+		return secondaryStyle[d]
 	}
-	return content
+	return defaultStyle
 }
 
 // agentRows is the single source of order for the Agents view: agents are
@@ -931,10 +958,24 @@ func (m Model) updateSecondaryPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// rows returns the selectable rows for a tab in display order. Project header
-// lines in the Overview and Sessions views are not selectable, so they are not
-// included here.
+// rows returns the selectable rows that drive navigation and rendering for a
+// tab. While the fuzzy finder is open on the active tab it returns the matched
+// rows, score-ranked; otherwise it returns the full set in display order. Both
+// the cursor (currentIndex/selectIndex) and the view consume this, so a filtered
+// list can never disagree with what the user sees.
 func (m Model) rows(tab int) []viewRow {
+	base := m.baseRows(tab)
+	if m.filtering && tab == m.tab {
+		filtered, _ := m.fuzzyFilter(base, m.filterQuery)
+		return filtered
+	}
+	return base
+}
+
+// baseRows returns the selectable rows for a tab in display order. Project
+// header lines in the Overview and Sessions views are not selectable, so they
+// are not included here.
+func (m Model) baseRows(tab int) []viewRow {
 	switch tab {
 	case tabProjects:
 		rows := make([]viewRow, 0, len(m.projects))
@@ -1091,6 +1132,189 @@ func (m Model) cursor() (viewRow, bool) {
 		return viewRow{}, false
 	}
 	return rows[i], true
+}
+
+// startFilter opens the fuzzy finder on the active tab. The view collapses to a
+// flat ranked list (writeFilterView) and updateFilter takes over key input.
+func (m *Model) startFilter() {
+	m.filtering = true
+	m.filterQuery = ""
+	m.status = ""
+}
+
+// updateFilter handles key input while the fuzzy finder is open: typing edits
+// the query (and re-resolves the cursor to the best match), ctrl+n/ctrl+p and
+// the arrows move within the matches, enter attaches to the highlighted row,
+// and esc closes the finder and restores the unfiltered view.
+func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.filtering = false
+		m.filterQuery = ""
+		m.status = ""
+		m.normalizeSelection()
+		return m, nil
+	case tea.KeyEnter:
+		if target, ok := m.attachTarget(); ok {
+			m.attach = target
+			return m, tea.Quit
+		}
+		return m, nil
+	case tea.KeyUp, tea.KeyCtrlP:
+		m.move(-1)
+		return m, nil
+	case tea.KeyDown, tea.KeyCtrlN:
+		m.move(1)
+		return m, nil
+	case tea.KeyBackspace, tea.KeyCtrlH:
+		if r := []rune(m.filterQuery); len(r) > 0 {
+			m.filterQuery = string(r[:len(r)-1])
+		}
+		m.filterCursorToTop()
+		return m, nil
+	case tea.KeyRunes, tea.KeySpace:
+		m.filterQuery += string(msg.Runes)
+		m.filterCursorToTop()
+		return m, nil
+	}
+	return m, nil
+}
+
+// filterCursorToTop rests the cursor on the top-ranked match after the query
+// changes, so the highlighted row tracks the best match as the user types.
+func (m *Model) filterCursorToTop() {
+	rows := m.rows(m.tab)
+	if len(rows) > 0 {
+		m.selectIndex(rows, 0)
+	}
+}
+
+// fuzzyFilter ranks base rows against query (best match first) and returns the
+// surviving rows alongside the byte offsets of their matched characters, used by
+// writeFilterView to highlight. An empty query passes the rows through unranked
+// with no highlights.
+func (m Model) fuzzyFilter(base []viewRow, query string) ([]viewRow, [][]int) {
+	if strings.TrimSpace(query) == "" {
+		return base, make([][]int, len(base))
+	}
+	texts := make([]string, len(base))
+	for i, r := range base {
+		texts[i] = m.rowFilterText(r)
+	}
+	matches := fuzzy.Find(query, texts)
+	rows := make([]viewRow, 0, len(matches))
+	idxs := make([][]int, 0, len(matches))
+	for _, match := range matches {
+		rows = append(rows, base[match.Index])
+		idxs = append(idxs, match.MatchedIndexes)
+	}
+	return rows, idxs
+}
+
+// filterSeg is one styled run of a row's fuzzy-finder label. The concatenated
+// segment texts are what the row is matched against, so a match's byte offsets
+// index straight into the rendered runs.
+type filterSeg struct {
+	text  string
+	style lipgloss.Style
+}
+
+// rowFilterSegments builds a row's fuzzy-finder label as styled runs that keep
+// the colors of the normal views: a session in its type color, an agent behind
+// its status icon, with the disambiguating context (project, owning session)
+// muted. It carries enough context to disambiguate a flat list.
+func (m Model) rowFilterSegments(r viewRow) []filterSeg {
+	switch r.kind {
+	case rowProject:
+		return []filterSeg{
+			{r.project.Title, defaultStyle},
+			{"  " + r.project.FullPath, mutedStyle},
+		}
+	case rowSession:
+		name := sessionName(r.session)
+		if r.session.Branch != "" {
+			name += " (" + r.session.Branch + ")"
+		}
+		segs := []filterSeg{{name, sessionStyle(r.session, m.sessionDepth(r.session))}}
+		if r.project.Title != "" {
+			segs = append(segs, filterSeg{"  " + r.project.Title, mutedStyle})
+		}
+		return segs
+	case rowAgent:
+		name := r.agent.DisplayName
+		if name == "" {
+			name = fmt.Sprintf("agent-%d", r.agent.ID)
+		}
+		ctx := ""
+		if r.agent.Status != "" {
+			ctx += "  " + r.agent.Status
+		}
+		ctx += "  " + m.agentSession(r.agent)
+		if r.project.Title != "" {
+			ctx += "  " + r.project.Title
+		}
+		return []filterSeg{
+			{agentStatusIcon(r.agent.Status) + " ", agentStatusStyle(r.agent.Status)},
+			{name, defaultStyle},
+			{ctx, mutedStyle},
+		}
+	}
+	return nil
+}
+
+// rowFilterText is the plain text a row is matched against — the concatenation
+// of its styled segments, so match offsets and rendering stay in lockstep.
+func (m Model) rowFilterText(r viewRow) string {
+	var b strings.Builder
+	for _, seg := range m.rowFilterSegments(r) {
+		b.WriteString(seg.text)
+	}
+	return b.String()
+}
+
+func (m Model) writeFilterView(b *strings.Builder) {
+	b.WriteString(filterPromptStyle.Render("/") + " " + m.filterQuery + "▏\n")
+	rows, matched := m.fuzzyFilter(m.baseRows(m.tab), m.filterQuery)
+	if len(rows) == 0 {
+		b.WriteString("  " + mutedStyle.Render("no matches") + "\n")
+		return
+	}
+	cur, has := m.cursor()
+	for i, r := range rows {
+		text := m.renderFilterLabel(r, matched[i])
+		if has && cur.kind == r.kind && rowID(cur) == rowID(r) {
+			b.WriteString(selectStyle.Render("> ") + text + "\n")
+		} else {
+			b.WriteString("  " + text + "\n")
+		}
+	}
+}
+
+// renderFilterLabel draws a row's styled segments, bolding and underlining the
+// fuzzy-matched characters in place so the match stands out without losing the
+// segment's color. matched holds byte offsets into rowFilterText (as
+// sahilm/fuzzy reports them); the running offset maps each segment's local byte
+// position onto that same space, and ranging a segment yields whole runes.
+func (m Model) renderFilterLabel(r viewRow, matched []int) string {
+	set := make(map[int]bool, len(matched))
+	for _, i := range matched {
+		set[i] = true
+	}
+	var b strings.Builder
+	offset := 0
+	for _, seg := range m.rowFilterSegments(r) {
+		for pos, ch := range seg.text {
+			style := seg.style
+			if set[offset+pos] {
+				style = style.Bold(true).Underline(true)
+			}
+			b.WriteString(style.Render(string(ch)))
+		}
+		offset += len(seg.text)
+	}
+	return b.String()
 }
 
 func (m *Model) selectPendingSession() {
