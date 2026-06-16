@@ -656,6 +656,37 @@ func TestModelWorktreeCreateRefetchesAndSelectsNewSession(t *testing.T) {
 	}
 }
 
+func TestModelWorktreeCreateIgnoresOlderPollRefresh(t *testing.T) {
+	api := &fakeAPI{createdSession: httpclient.Session{ID: 2, ProjectID: 7, SessionName: "api-feature-login", Type: "worktree", Branch: "feature/login"}}
+	m := NewModel(context.Background(), api)
+	initialProjects := []httpclient.Project{{ID: 7, MainSessionName: "api-main"}}
+	initialSessions := []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api-main", Type: "main"}}
+	updated, _ := m.Update(listMsg{seq: 1, projects: initialProjects, sessions: initialSessions})
+	m = updated.(Model)
+
+	updated, cmd := m.Update(createSessionMsg{session: api.createdSession})
+	m = updated.(Model)
+	if cmd == nil {
+		t.Fatal("create should schedule a refresh")
+	}
+
+	api.projects = initialProjects
+	api.sessions = []httpclient.Session{
+		{ID: 1, ProjectID: 7, SessionName: "api-main", Type: "main"},
+		{ID: 2, ParentSessionID: 1, ProjectID: 7, SessionName: "api-feature-login", Type: "worktree", Branch: "feature/login"},
+		{ID: 3, ParentSessionID: 2, ProjectID: 7, SessionName: "backend", Type: "secondary"},
+	}
+	updated, _ = m.Update(cmd().(listMsg))
+	m = updated.(Model)
+
+	updated, _ = m.Update(listMsg{seq: 1, projects: initialProjects, sessions: initialSessions})
+	m = updated.(Model)
+	view := m.View()
+	if !strings.Contains(view, "api-feature-login") || !strings.Contains(view, "backend") {
+		t.Fatalf("stale poll overwrote created worktree tree: %q", view)
+	}
+}
+
 // worktreePromptModel returns a model that has just submitted the branch
 // "feature/login" for project 7's worktree create, with api primed to return
 // createErr on that attempt.
@@ -1400,7 +1431,7 @@ func TestModelListCommandFetchesProjectsAndSessions(t *testing.T) {
 		sessions: []httpclient.Session{{ID: 10, ProjectID: 1, SessionName: "api-main", Type: "main"}},
 	}
 	m := NewModel(context.Background(), api)
-	msg := m.listCmd()().(listMsg)
+	msg := m.listCmd(1)().(listMsg)
 
 	if msg.err != nil || len(msg.projects) != 1 || len(msg.sessions) != 1 {
 		t.Fatalf("msg = %+v", msg)

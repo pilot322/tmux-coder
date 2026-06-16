@@ -130,6 +130,7 @@ type Model struct {
 
 	status          string
 	loading         bool
+	listSeq         int
 	confirm         bool
 	confirmDelete   deleteTarget
 	confirmDeleteID int
@@ -178,6 +179,7 @@ type Model struct {
 }
 
 type listMsg struct {
+	seq      int
 	projects []httpclient.Project
 	sessions []httpclient.Session
 	agents   []httpclient.Agent
@@ -267,7 +269,7 @@ func Run(ctx context.Context, api API, initialSession ...string) (AttachTarget, 
 }
 
 func NewModel(ctx context.Context, api API, initialSession ...string) Model {
-	m := Model{ctx: ctx, api: api, loading: true}
+	m := Model{ctx: ctx, api: api, loading: true, listSeq: 1}
 	if len(initialSession) > 0 {
 		m.initialSession = initialSession[0]
 	}
@@ -275,7 +277,12 @@ func NewModel(ctx context.Context, api API, initialSession ...string) Model {
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.listCmd(), m.tickCmd())
+	return tea.Batch(m.listCmd(1), m.tickCmd())
+}
+
+func (m *Model) nextListCmd() tea.Cmd {
+	m.listSeq++
+	return m.listCmd(m.listSeq)
 }
 
 func (m Model) tickCmd() tea.Cmd {
@@ -294,6 +301,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 	case listMsg:
+		if msg.seq != 0 && msg.seq < m.listSeq {
+			return m, nil
+		}
+		if msg.seq > m.listSeq {
+			m.listSeq = msg.seq
+		}
 		m.loading = false
 		if msg.err != nil {
 			if !m.modalActive() {
@@ -316,7 +329,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.selectPendingSession()
 		m.normalizeSelection()
 	case tickMsg:
-		return m, tea.Batch(m.listCmd(), m.tickCmd())
+		return m, tea.Batch(m.nextListCmd(), m.tickCmd())
 	case deleteMsg:
 		m.loading = false
 		m.confirm = false
@@ -326,7 +339,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = msg.err.Error()
 			return m, nil
 		}
-		return m, m.listCmd()
+		return m, m.nextListCmd()
 	case createSessionMsg:
 		m.loading = false
 		if msg.err != nil {
@@ -361,7 +374,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.pendingSelectSession = sessionName(msg.session)
 		m.tab = tabSessions
 		m.loading = true
-		return m, m.listCmd()
+		return m, m.nextListCmd()
 	case createAgentMsg:
 		m.loading = false
 		if msg.err != nil {
@@ -373,7 +386,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.agentSel = selection{id: msg.agent.ID}
 		m.tab = tabAgents
 		m.loading = true
-		return m, m.listCmd()
+		return m, m.nextListCmd()
 	case renameAgentMsg:
 		m.loading = false
 		if msg.err != nil {
@@ -383,7 +396,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.resetRenamePrompt()
 		m.agentSel = selection{id: msg.agent.ID}
 		m.loading = true
-		return m, m.listCmd()
+		return m, m.nextListCmd()
 	case tea.KeyMsg:
 		if m.worktreeConflict != "" {
 			return m.updateWorktreeConflict(msg)
@@ -436,7 +449,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.help = !m.help
 		case key.Matches(msg, keys.refresh):
 			m.loading = true
-			return m, m.listCmd()
+			return m, m.nextListCmd()
 		case key.Matches(msg, keys.worktree):
 			m.startWorktree()
 		case key.Matches(msg, keys.worktreeBase):
@@ -832,18 +845,18 @@ func pluralize(n int, word string) string {
 	return fmt.Sprintf("%d %ss", n, word)
 }
 
-func (m Model) listCmd() tea.Cmd {
+func (m Model) listCmd(seq int) tea.Cmd {
 	return func() tea.Msg {
 		projects, err := m.api.ListProjects(m.ctx)
 		if err != nil {
-			return listMsg{err: err}
+			return listMsg{seq: seq, err: err}
 		}
 		sessions, err := m.api.ListSessions(m.ctx, httpclient.ListSessionsInput{})
 		if err != nil {
-			return listMsg{projects: projects, err: err}
+			return listMsg{seq: seq, projects: projects, err: err}
 		}
 		agents, err := m.api.ListAgents(m.ctx, httpclient.ListAgentsInput{})
-		return listMsg{projects: projects, sessions: sessions, agents: agents, err: err}
+		return listMsg{seq: seq, projects: projects, sessions: sessions, agents: agents, err: err}
 	}
 }
 
