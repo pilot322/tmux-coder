@@ -108,6 +108,8 @@ type Model struct {
 	projects []httpclient.Project
 	sessions []httpclient.Session
 	agents   []httpclient.Agent
+	width    int
+	height   int
 
 	tab          int
 	projectSel   selection
@@ -253,7 +255,7 @@ var keys = struct {
 
 func Run(ctx context.Context, api API, initialSession ...string) (AttachTarget, bool, error) {
 	m := NewModel(ctx, api, initialSession...)
-	final, err := tea.NewProgram(m).Run()
+	final, err := tea.NewProgram(m, tea.WithAltScreen()).Run()
 	if err != nil {
 		return AttachTarget{}, false, err
 	}
@@ -288,6 +290,9 @@ func (m Model) modalActive() bool {
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		m.width = msg.Width
+		m.height = msg.Height
 	case listMsg:
 		m.loading = false
 		if msg.err != nil {
@@ -563,7 +568,31 @@ func (m Model) View() string {
 	} else {
 		b.WriteString("\n" + mutedStyle.Render(m.footer()) + "\n")
 	}
-	return b.String()
+	return m.padFrame(b.String())
+}
+
+func (m Model) padFrame(view string) string {
+	if m.height <= 0 && m.width <= 0 {
+		return view
+	}
+	lines := strings.Split(view, "\n")
+	if m.width > 0 {
+		for i, line := range lines {
+			if w := lipgloss.Width(line); w < m.width {
+				lines[i] += strings.Repeat(" ", m.width-w)
+			}
+		}
+	}
+	if m.height > 0 {
+		blank := ""
+		if m.width > 0 {
+			blank = strings.Repeat(" ", m.width)
+		}
+		for len(lines) < m.height {
+			lines = append(lines, blank)
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) tabStrip() string {
