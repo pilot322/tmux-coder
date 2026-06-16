@@ -11,3 +11,7 @@ Default label vocabulary (needs-triage, needs-info, ready-for-agent, ready-for-h
 ### Domain docs
 
 Single-context layout — one `CONTEXT.md` + `docs/adr/` at the repo root. See `docs/agents/domain.md`.
+
+### Testing
+
+`go test ./...` for unit tests; build + drive a real isolated instance for end-to-end. **Never run `./dev kill -a`.** See `docs/agents/testing.md`.
