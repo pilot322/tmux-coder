@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
+	"github.com/pilot322/tmux-coder/internal/obs"
 )
 
 type GetAgentsInput struct {
@@ -26,10 +27,11 @@ type GetAgents struct {
 	sessions ISessionRepository
 	tmux     AgentTmuxGateway
 	lock     StateLock
+	log      obs.Logger
 }
 
-func NewGetAgents(a IAgentRepository, p IProjectRepository, s ISessionRepository, tmux AgentTmuxGateway, l StateLock) *GetAgents {
-	return &GetAgents{agents: a, projects: p, sessions: s, tmux: tmux, lock: l}
+func NewGetAgents(a IAgentRepository, p IProjectRepository, s ISessionRepository, tmux AgentTmuxGateway, l StateLock, log obs.Logger) *GetAgents {
+	return &GetAgents{agents: a, projects: p, sessions: s, tmux: tmux, lock: l, log: log.With("component", "get-agents")}
 }
 
 func (uc *GetAgents) Execute(ctx context.Context, in GetAgentsInput) ([]AgentView, error) {
@@ -112,6 +114,7 @@ func (uc *GetAgents) Execute(ctx context.Context, in GetAgentsInput) ([]AgentVie
 	}
 
 	if len(pruned) > 0 {
+		uc.log.Info(ctx, "pruning agents whose panes are gone", "count", len(pruned), "agent_ids", pruned)
 		if err := uc.lock.WithWrite(func() error {
 			for _, id := range pruned {
 				if err := uc.agents.Delete(ctx, id); err != nil {

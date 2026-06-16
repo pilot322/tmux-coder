@@ -11,6 +11,7 @@ import (
 
 	"github.com/pilot322/tmux-coder/internal/config"
 	"github.com/pilot322/tmux-coder/internal/domain"
+	"github.com/pilot322/tmux-coder/internal/obs"
 )
 
 type CreateSessionInput struct {
@@ -39,20 +40,21 @@ type CreateSession struct {
 	lock     StateLock
 	hooks    WorktreeHookRunner
 	leases   ResourceLeaseRepository
+	log      obs.Logger
 }
 
-func NewCreateSession(p IProjectRepository, s ISessionRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock) *CreateSession {
-	return NewCreateSessionWithHooks(p, s, tmux, git, l, nil, nil)
+func NewCreateSession(p IProjectRepository, s ISessionRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock, log obs.Logger) *CreateSession {
+	return NewCreateSessionWithHooks(p, s, tmux, git, l, nil, nil, log)
 }
 
-func NewCreateSessionWithHooks(p IProjectRepository, s ISessionRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock, hooks WorktreeHookRunner, leases ResourceLeaseRepository) *CreateSession {
+func NewCreateSessionWithHooks(p IProjectRepository, s ISessionRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock, hooks WorktreeHookRunner, leases ResourceLeaseRepository, log obs.Logger) *CreateSession {
 	if hooks == nil {
 		hooks = missingWorktreeHookRunner{}
 	}
 	if leases == nil {
 		leases = noopResourceLeaseRepository{}
 	}
-	return &CreateSession{projects: p, sessions: s, tmux: tmux, git: git, lock: l, hooks: hooks, leases: leases}
+	return &CreateSession{projects: p, sessions: s, tmux: tmux, git: git, lock: l, hooks: hooks, leases: leases, log: log.With("component", "create-session")}
 }
 
 func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*domain.Session, error) {
@@ -292,6 +294,7 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 		return nil, err
 	}
 
+	uc.log.Info(ctx, "worktree session created", "session_id", session.ID(), "name", name, "branch", in.Branch, "worktree_path", worktreePath)
 	return session, nil
 }
 
@@ -381,6 +384,7 @@ func (uc *CreateSession) createSecondary(ctx context.Context, in CreateSessionIn
 		_ = uc.tmux.Kill(ctx, tmuxName)
 		return nil, err
 	}
+	uc.log.Info(ctx, "secondary session created", "session_id", session.ID(), "name", name, "parent_id", parent.ID())
 	return session, nil
 }
 

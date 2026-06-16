@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
+	"github.com/pilot322/tmux-coder/internal/obs"
 )
 
 type DeleteSessionInput struct {
@@ -20,17 +21,18 @@ type DeleteSession struct {
 	git      GitWorktreeGateway
 	lock     StateLock
 	leases   ResourceLeaseRepository
+	log      obs.Logger
 }
 
-func NewDeleteSession(s ISessionRepository, a IAgentRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock) *DeleteSession {
-	return NewDeleteSessionWithLeases(s, a, tmux, git, l, nil)
+func NewDeleteSession(s ISessionRepository, a IAgentRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock, log obs.Logger) *DeleteSession {
+	return NewDeleteSessionWithLeases(s, a, tmux, git, l, nil, log)
 }
 
-func NewDeleteSessionWithLeases(s ISessionRepository, a IAgentRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock, leases ResourceLeaseRepository) *DeleteSession {
+func NewDeleteSessionWithLeases(s ISessionRepository, a IAgentRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock, leases ResourceLeaseRepository, log obs.Logger) *DeleteSession {
 	if leases == nil {
 		leases = noopResourceLeaseRepository{}
 	}
-	return &DeleteSession{sessions: s, agents: a, tmux: tmux, git: git, lock: l, leases: leases}
+	return &DeleteSession{sessions: s, agents: a, tmux: tmux, git: git, lock: l, leases: leases, log: log.With("component", "delete-session")}
 }
 
 func (uc *DeleteSession) Execute(ctx context.Context, in DeleteSessionInput) error {
@@ -47,6 +49,7 @@ func (uc *DeleteSession) Execute(ctx context.Context, in DeleteSessionInput) err
 		return err
 	}
 
+	uc.log.Info(ctx, "deleting session", "session_id", session.ID(), "name", session.Name(), "force", in.Force)
 	switch session.Type() {
 	case domain.MainSession:
 		return fmt.Errorf("%w: main sessions cannot be deleted through /sessions", ErrValidation)

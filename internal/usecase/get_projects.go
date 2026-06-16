@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
+	"github.com/pilot322/tmux-coder/internal/obs"
 )
 
 // ProjectView is a Project paired with its resolved main-session name, since
@@ -18,10 +19,11 @@ type GetProjects struct {
 	projects IProjectRepository
 	sessions ISessionRepository
 	lock     StateLock
+	log      obs.Logger
 }
 
-func NewGetProjects(p IProjectRepository, s ISessionRepository, l StateLock) *GetProjects {
-	return &GetProjects{projects: p, sessions: s, lock: l}
+func NewGetProjects(p IProjectRepository, s ISessionRepository, l StateLock, log obs.Logger) *GetProjects {
+	return &GetProjects{projects: p, sessions: s, lock: l, log: log.With("component", "get-projects")}
 }
 
 // Execute returns every Project with its main-session name. It reads both

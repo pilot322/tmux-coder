@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
+	"github.com/pilot322/tmux-coder/internal/obs"
 )
 
 type AgentEventInput struct {
@@ -16,13 +17,15 @@ type AgentEventInput struct {
 type AgentEvent struct {
 	agents IAgentRepository
 	lock   StateLock
+	log    obs.Logger
 }
 
-func NewAgentEvent(a IAgentRepository, l StateLock) *AgentEvent {
-	return &AgentEvent{agents: a, lock: l}
+func NewAgentEvent(a IAgentRepository, l StateLock, log obs.Logger) *AgentEvent {
+	return &AgentEvent{agents: a, lock: l, log: log.With("component", "agent-event")}
 }
 
 func (uc *AgentEvent) Execute(ctx context.Context, in AgentEventInput) error {
+	uc.log.Debug(ctx, "agent event received", "agent_id", in.AgentID, "event", in.Event)
 	switch in.Event {
 	case "started":
 		return uc.handleStarted(ctx, in.AgentID, in.ChildProcessGroupID)
