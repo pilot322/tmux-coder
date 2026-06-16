@@ -60,6 +60,10 @@ _Avoid_: Agent store, agent list
 The single canonical, agent-agnostic state of a **TC Agent** in the **Agent Registry**: `starting`, `running`, `busy`, `idle`, `waiting`, or `exited` (terminal — removes the agent). `starting`/`exited` are the only values implying the process is not confirmed alive; every other value implies a live process. The lifecycle values (`starting`, `running`, `exited`) are owned by the wrapper; the activity values (`busy`, `idle`, `waiting`) are reported by the agent itself. An **Agent Kind** that does not report activity rests at `running`. Each kind's integration translates its native signals into this shared vocabulary; the Daemon never learns kind-specific terms.
 _Avoid_: Agent state, activity, mode
 
+**Agent Status Changed At**:
+The point in time when a **TC Agent**'s canonical **Agent Status** last changed from one value to another. Repeated **Events** that keep the same Agent Status do not move it.
+_Avoid_: Last updated, last event time
+
 **Event**:
 A notification sent to the **Daemon** about a **TC Agent**, carrying an event type, agent ID, and optional payload. Two sources emit them: the `tmux-coder agent-wrapper` subcommand reports lifecycle events (`started`, `exited`) derived from the OS process, and an **Agent Kind**'s own integration reports activity events (`busy`, `idle`, `waiting`) translated from that kind's native signals — the OpenCode plugin POSTs them directly, while Claude Code runs hooks that shell out to `tmux-coder agent-event <status>`. Every event type names a target **Agent Status**; the Daemon applies it under a fixed conflict policy (terminal `exited` wins; `started` records process identity but never downgrades a richer status).
 _Avoid_: Message, signal, notification

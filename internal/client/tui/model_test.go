@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/pilot322/tmux-coder/internal/client/httpclient"
@@ -1556,19 +1557,38 @@ func TestAgentRowsFlatStatusSorted(t *testing.T) {
 	}
 }
 
-func TestAgentRowsTiebreaksByAscendingID(t *testing.T) {
+func TestAgentRowsTiebreaksSameStatusByNewestStatusChangedAt(t *testing.T) {
+	older := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
+	newer := older.Add(time.Minute)
 	m := loaded(t, listMsg{
 		projects: []httpclient.Project{{ID: 1, Title: "API", MainSessionName: "main"}},
 		sessions: []httpclient.Session{{ID: 10, ProjectID: 1, SessionName: "main", Type: "main"}},
 		agents: []httpclient.Agent{
-			{ID: 30, ProjectID: 1, SessionID: 10, Status: "waiting"},
-			{ID: 12, ProjectID: 1, SessionID: 10, Status: "waiting"},
+			{ID: 12, ProjectID: 1, SessionID: 10, Status: "waiting", StatusChangedAt: older},
+			{ID: 30, ProjectID: 1, SessionID: 10, Status: "waiting", StatusChangedAt: newer},
+		},
+	})
+
+	rows := m.agentRows()
+	if len(rows) != 2 || rows[0].agent.ID != 30 || rows[1].agent.ID != 12 {
+		t.Fatalf("within a status, agents should sort by newest statusChangedAt; got %d then %d", rows[0].agent.ID, rows[1].agent.ID)
+	}
+}
+
+func TestAgentRowsTiebreaksEqualStatusChangedAtByAscendingID(t *testing.T) {
+	changedAt := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 1, Title: "API", MainSessionName: "main"}},
+		sessions: []httpclient.Session{{ID: 10, ProjectID: 1, SessionName: "main", Type: "main"}},
+		agents: []httpclient.Agent{
+			{ID: 30, ProjectID: 1, SessionID: 10, Status: "waiting", StatusChangedAt: changedAt},
+			{ID: 12, ProjectID: 1, SessionID: 10, Status: "waiting", StatusChangedAt: changedAt},
 		},
 	})
 
 	rows := m.agentRows()
 	if len(rows) != 2 || rows[0].agent.ID != 12 || rows[1].agent.ID != 30 {
-		t.Fatalf("within a status, agents should sort by ascending id; got %d then %d", rows[0].agent.ID, rows[1].agent.ID)
+		t.Fatalf("equal statusChangedAt should fall back to ascending id; got %d then %d", rows[0].agent.ID, rows[1].agent.ID)
 	}
 }
 

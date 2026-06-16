@@ -2,6 +2,7 @@ package domain_test
 
 import (
 	"testing"
+	"time"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 )
@@ -42,6 +43,25 @@ func TestWithStatus_ReturnsNewAgent(t *testing.T) {
 	}
 	if a.Status() != domain.AgentStarting {
 		t.Errorf("original agent status changed to %q", a.Status())
+	}
+}
+
+func TestAgentStatusChangedAtTracksOnlyStatusChanges(t *testing.T) {
+	createdAt := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
+	runningAt := createdAt.Add(time.Minute)
+	a := domain.NewAgent(1, 10, 20, "opencode", "test", "%5", true, domain.AgentStarting, createdAt)
+
+	if !a.StatusChangedAt().Equal(createdAt) {
+		t.Fatalf("StatusChangedAt = %v, want %v", a.StatusChangedAt(), createdAt)
+	}
+	if renamed := a.WithDisplayName("new-name"); !renamed.StatusChangedAt().Equal(createdAt) {
+		t.Fatalf("display name update moved StatusChangedAt to %v", renamed.StatusChangedAt())
+	}
+	if sameStatus := a.WithStatus(domain.AgentStarting, runningAt); !sameStatus.StatusChangedAt().Equal(createdAt) {
+		t.Fatalf("same status update moved StatusChangedAt to %v", sameStatus.StatusChangedAt())
+	}
+	if running := a.WithStatus(domain.AgentRunning, runningAt); !running.StatusChangedAt().Equal(runningAt) {
+		t.Fatalf("status change StatusChangedAt = %v, want %v", running.StatusChangedAt(), runningAt)
 	}
 }
 

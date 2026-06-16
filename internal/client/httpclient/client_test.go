@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/pilot322/tmux-coder/internal/client/httpclient"
 )
@@ -218,5 +219,27 @@ func TestClientAcquirePort(t *testing.T) {
 	}
 	if port != 8001 {
 		t.Fatalf("port = %d, want 8001", port)
+	}
+}
+
+func TestClientListAgentsDecodesStatusChangedAt(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodGet || r.URL.Path != "/agents" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"agents":[{"id":1,"projectId":2,"sessionId":3,"kind":"opencode","status":"waiting","statusChangedAt":"2026-06-17T10:00:00Z"}]}`))
+	}))
+	defer server.Close()
+
+	c := httpclient.New(server.URL, server.Client())
+	agents, err := c.ListAgents(context.Background(), httpclient.ListAgentsInput{})
+	if err != nil {
+		t.Fatalf("ListAgents: %v", err)
+	}
+	want := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
+	if len(agents) != 1 || !agents[0].StatusChangedAt.Equal(want) {
+		t.Fatalf("agents = %+v, want statusChangedAt %v", agents, want)
 	}
 }

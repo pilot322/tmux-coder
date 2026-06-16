@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pilot322/tmux-coder/internal/adapter/httpapi"
 	"github.com/pilot322/tmux-coder/internal/infra/desktopnotify"
@@ -698,13 +699,14 @@ func TestPostAgents_CreatesAgentInSession(t *testing.T) {
 		t.Fatalf("POST /agents status = %d, want 201 (body: %s)", rec.Code, rec.Body)
 	}
 	var agent struct {
-		ID          int    `json:"id"`
-		ProjectID   int    `json:"projectId"`
-		SessionID   int    `json:"sessionId"`
-		Kind        string `json:"kind"`
-		DisplayName string `json:"displayName"`
-		Status      string `json:"status"`
-		PaneOwned   bool   `json:"paneOwned"`
+		ID              int       `json:"id"`
+		ProjectID       int       `json:"projectId"`
+		SessionID       int       `json:"sessionId"`
+		Kind            string    `json:"kind"`
+		DisplayName     string    `json:"displayName"`
+		Status          string    `json:"status"`
+		StatusChangedAt time.Time `json:"statusChangedAt"`
+		PaneOwned       bool      `json:"paneOwned"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &agent); err != nil {
 		t.Fatalf("decode: %v", err)
@@ -714,6 +716,9 @@ func TestPostAgents_CreatesAgentInSession(t *testing.T) {
 	}
 	if agent.DisplayName == "" {
 		t.Fatal("expected non-empty display name")
+	}
+	if agent.StatusChangedAt.IsZero() {
+		t.Fatal("expected non-zero statusChangedAt")
 	}
 }
 
@@ -737,8 +742,9 @@ func TestGetAgents_ListsAgents(t *testing.T) {
 	}
 	var resp struct {
 		Agents []struct {
-			Kind   string `json:"kind"`
-			Status string `json:"status"`
+			Kind            string    `json:"kind"`
+			Status          string    `json:"status"`
+			StatusChangedAt time.Time `json:"statusChangedAt"`
 		} `json:"agents"`
 	}
 	_ = json.Unmarshal(rec.Body.Bytes(), &resp)
@@ -747,6 +753,9 @@ func TestGetAgents_ListsAgents(t *testing.T) {
 	}
 	if resp.Agents[0].Kind != "opencode" {
 		t.Fatalf("kind = %q, want opencode", resp.Agents[0].Kind)
+	}
+	if resp.Agents[0].StatusChangedAt.IsZero() {
+		t.Fatal("expected non-zero statusChangedAt")
 	}
 }
 

@@ -25,7 +25,7 @@ func NewMemoryAgentRepository() *MemoryAgentRepository {
 func (r *MemoryAgentRepository) Create(ctx context.Context, a *domain.Agent) (*domain.Agent, error) {
 	id := r.nextID
 	r.nextID++
-	stored := domain.NewAgent(id, a.ProjectID(), a.SessionID(), a.Kind(), a.DisplayName(), a.TmuxPaneID(), a.PaneOwned(), a.Status())
+	stored := domain.NewAgent(id, a.ProjectID(), a.SessionID(), a.Kind(), a.DisplayName(), a.TmuxPaneID(), a.PaneOwned(), a.Status(), a.StatusChangedAt())
 	if stored.DisplayName() == "" {
 		stored = stored.WithDisplayName(domain.DefaultAgentDisplayName(id, a.Kind()))
 	}

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"testing"
+	"time"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
@@ -217,5 +218,63 @@ func TestAgentEvent_StatusCommittedBeforeNotifyAndOutsideLock(t *testing.T) {
 	}
 	if inWriteAtNotify {
 		t.Fatalf("notify must run outside the write lock")
+	}
+}
+
+func TestAgentEvent_StatusChangedAtMovesOnlyWhenStatusChanges(t *testing.T) {
+	_, agents, projects, sessions, _, lock := agentFixture()
+	p, s := seedProjectAndSession(projects, sessions)
+	ctx := context.Background()
+	old := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	a, _ := agents.Create(ctx, domain.NewAgent(0, p.ID(), s.ID(), "opencode", "reviewer", "%10", true, domain.AgentBusy, old))
+
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock, obs.Nop())
+	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: a.ID(), Event: "busy"}); err != nil {
+		t.Fatalf("same-status busy event: %v", err)
+	}
+	unchanged, _ := agents.GetByID(ctx, a.ID())
+	if !unchanged.StatusChangedAt().Equal(old) {
+		t.Fatalf("same-status event moved StatusChangedAt to %v", unchanged.StatusChangedAt())
+	}
+
+	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: a.ID(), Event: "waiting"}); err != nil {
+		t.Fatalf("waiting event: %v", err)
+	}
+	changed, _ := agents.GetByID(ctx, a.ID())
+	if !changed.StatusChangedAt().After(old) {
+		t.Fatalf("status change StatusChangedAt = %v, want after %v", changed.StatusChangedAt(), old)
+	}
+}
+
+func TestAgentEvent_StartedStatusChangedAtSemantics(t *testing.T) {
+	_, agents, projects, sessions, _, lock := agentFixture()
+	p, s := seedProjectAndSession(projects, sessions)
+	ctx := context.Background()
+	old := time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
+	running, _ := agents.Create(ctx, domain.NewAgent(0, p.ID(), s.ID(), "opencode", "running", "%10", true, domain.AgentRunning, old))
+	starting, _ := agents.Create(ctx, domain.NewAgent(0, p.ID(), s.ID(), "opencode", "starting", "%11", true, domain.AgentStarting, old))
+	pgid := 1234
+
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock, obs.Nop())
+	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: running.ID(), Event: "started", ChildProcessGroupID: &pgid}); err != nil {
+		t.Fatalf("started running agent: %v", err)
+	}
+	gotRunning, _ := agents.GetByID(ctx, running.ID())
+	if !gotRunning.StatusChangedAt().Equal(old) {
+		t.Fatalf("started event that only records child PGID moved StatusChangedAt to %v", gotRunning.StatusChangedAt())
+	}
+	if gotRunning.ChildProcessGroupID() != pgid {
+		t.Fatalf("ChildProcessGroupID = %d, want %d", gotRunning.ChildProcessGroupID(), pgid)
+	}
+
+	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: starting.ID(), Event: "started"}); err != nil {
+		t.Fatalf("started starting agent: %v", err)
+	}
+	gotStarting, _ := agents.GetByID(ctx, starting.ID())
+	if gotStarting.Status() != domain.AgentRunning {
+		t.Fatalf("Status = %q, want running", gotStarting.Status())
+	}
+	if !gotStarting.StatusChangedAt().After(old) {
+		t.Fatalf("started promotion StatusChangedAt = %v, want after %v", gotStarting.StatusChangedAt(), old)
 	}
 }

@@ -124,6 +124,9 @@ func TestCreateAgent_OwnedPane(t *testing.T) {
 	if result.Agent.Status() != domain.AgentStarting {
 		t.Fatalf("Status = %q, want starting", result.Agent.Status())
 	}
+	if result.Agent.StatusChangedAt().IsZero() {
+		t.Fatal("want non-zero status changed timestamp for initial starting status")
+	}
 	if !result.Agent.PaneOwned() {
 		t.Fatal("PaneOwned = false, want true for daemon-owned pane")
 	}

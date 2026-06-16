@@ -790,13 +790,16 @@ func (m Model) agentRows() []viewRow {
 }
 
 // sortAgentsByStatus orders agents by Agent Status rank (waiting first), then by
-// ascending id as a stable tiebreaker so the order is deterministic across the
-// 1 s poll.
+// newest status change inside each bucket, then by ascending id as the final
+// deterministic fallback across the 1 s poll.
 func sortAgentsByStatus(agents []httpclient.Agent) {
 	sort.SliceStable(agents, func(i, j int) bool {
 		ri, rj := agentStatusRank(agents[i].Status), agentStatusRank(agents[j].Status)
 		if ri != rj {
 			return ri < rj
+		}
+		if !agents[i].StatusChangedAt.Equal(agents[j].StatusChangedAt) {
+			return agents[i].StatusChangedAt.After(agents[j].StatusChangedAt)
 		}
 		return agents[i].ID < agents[j].ID
 	})

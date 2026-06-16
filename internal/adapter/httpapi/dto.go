@@ -3,6 +3,8 @@
 // format out of the usecase layer.
 package httpapi
 
+import "time"
+
 type createProjectRequest struct {
 	FullPath               string  `json:"fullPath"`
 	Title                  *string `json:"title"`
@@ -99,6 +101,7 @@ type agentResponse struct {
 	TmuxPaneID          string          `json:"tmuxPaneId"`
 	PaneOwned           bool            `json:"paneOwned"`
 	Status              string          `json:"status"`
+	StatusChangedAt     time.Time       `json:"statusChangedAt"`
 	ChildProcessGroupID int             `json:"childProcessGroupId,omitempty"`
 	Project             projectResponse `json:"project"`
 	Session             sessionResponse `json:"session"`

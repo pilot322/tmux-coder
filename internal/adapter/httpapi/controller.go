@@ -455,6 +455,7 @@ func agentToDTO(a *domain.Agent) agentResponse {
 		TmuxPaneID:          a.TmuxPaneID(),
 		PaneOwned:           a.PaneOwned(),
 		Status:              string(a.Status()),
+		StatusChangedAt:     a.StatusChangedAt(),
 		ChildProcessGroupID: a.ChildProcessGroupID(),
 	}
 }
@@ -469,6 +470,7 @@ func agentViewToDTO(v usecase.AgentView) agentResponse {
 		TmuxPaneID:          v.Agent.TmuxPaneID(),
 		PaneOwned:           v.Agent.PaneOwned(),
 		Status:              string(v.Agent.Status()),
+		StatusChangedAt:     v.Agent.StatusChangedAt(),
 		ChildProcessGroupID: v.Agent.ChildProcessGroupID(),
 		Project: projectResponse{
 			ID:                  v.Project.ID(),

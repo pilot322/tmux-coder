@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type Project struct {
@@ -42,17 +43,18 @@ type Session struct {
 }
 
 type Agent struct {
-	ID                  int     `json:"id"`
-	ProjectID           int     `json:"projectId"`
-	SessionID           int     `json:"sessionId"`
-	Kind                string  `json:"kind"`
-	DisplayName         string  `json:"displayName"`
-	TmuxPaneID          string  `json:"tmuxPaneId"`
-	PaneOwned           bool    `json:"paneOwned"`
-	Status              string  `json:"status"`
-	ChildProcessGroupID int     `json:"childProcessGroupId,omitempty"`
-	Project             Project `json:"project"`
-	Session             Session `json:"session"`
+	ID                  int       `json:"id"`
+	ProjectID           int       `json:"projectId"`
+	SessionID           int       `json:"sessionId"`
+	Kind                string    `json:"kind"`
+	DisplayName         string    `json:"displayName"`
+	TmuxPaneID          string    `json:"tmuxPaneId"`
+	PaneOwned           bool      `json:"paneOwned"`
+	Status              string    `json:"status"`
+	StatusChangedAt     time.Time `json:"statusChangedAt"`
+	ChildProcessGroupID int       `json:"childProcessGroupId,omitempty"`
+	Project             Project   `json:"project"`
+	Session             Session   `json:"session"`
 }
 
 type CreateAgentInput struct {
