@@ -34,7 +34,7 @@ func (pc *ProjectController) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	res, err := pc.create.Execute(r.Context(), usecase.CreateProjectInput{FullPath: req.FullPath, Title: req.Title})
+	res, err := pc.create.Execute(r.Context(), usecase.CreateProjectInput{FullPath: req.FullPath, Title: req.Title, CreateWorktreeSessions: req.CreateWorktreeSessions})
 	if err != nil {
 		writeUsecaseError(w, err)
 		return

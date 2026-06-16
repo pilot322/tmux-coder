@@ -12,6 +12,12 @@ import (
 type CreateProjectInput struct {
 	FullPath string
 	Title    *string
+	// CreateWorktreeSessions is the tri-state decision for adopting any
+	// un-adopted worktrees the repo has on disk (ADR-0013): nil means "no
+	// decision" and yields a PreconditionRequiredError when such worktrees
+	// exist; true bulk-adopts them as parentless Worktree Sessions; false opens
+	// normally and skips them. It is a no-op when no un-adopted worktrees exist.
+	CreateWorktreeSessions *bool
 }
 
 type CreateProjectResult struct {
@@ -25,12 +31,13 @@ type CreateProject struct {
 	projects IProjectRepository
 	sessions ISessionRepository
 	gateway  SessionGateway
+	git      GitWorktreeGateway
 	lock     StateLock
 	config   domain.DaemonConfig
 }
 
-func NewCreateProject(p IProjectRepository, s ISessionRepository, g SessionGateway, l StateLock, c domain.DaemonConfig) *CreateProject {
-	return &CreateProject{projects: p, sessions: s, gateway: g, lock: l, config: c}
+func NewCreateProject(p IProjectRepository, s ISessionRepository, g SessionGateway, git GitWorktreeGateway, l StateLock, c domain.DaemonConfig) *CreateProject {
+	return &CreateProject{projects: p, sessions: s, gateway: g, git: git, lock: l, config: c}
 }
 
 // Execute creates a Project for fullPath, or reconciles an existing one.
@@ -40,10 +47,24 @@ func NewCreateProject(p IProjectRepository, s ISessionRepository, g SessionGatew
 // lock (ADR-0003) and rolls the records back if that fails. Existing project:
 // it reconciles the project's tmux sessions and returns Created=false.
 func (uc *CreateProject) Execute(ctx context.Context, in CreateProjectInput) (CreateProjectResult, error) {
+	// Detection is read-only and runs before any record is written, so a
+	// rejected open has zero side effects (ADR-0013).
+	detected, err := uc.adoptableWorktrees(ctx, in.FullPath)
+	if err != nil {
+		return CreateProjectResult{}, err
+	}
+	if len(detected) > 0 && in.CreateWorktreeSessions == nil {
+		return CreateProjectResult{}, &PreconditionRequiredError{
+			Code:      CodeWorktreesDetected,
+			Msg:       "worktrees detected that are not managed as worktree sessions",
+			Worktrees: detected,
+		}
+	}
+
 	var existing, project *domain.Project
 	var session *domain.Session
 
-	err := uc.lock.WithWrite(func() error {
+	err = uc.lock.WithWrite(func() error {
 		if p, err := uc.projects.GetByFullPath(ctx, in.FullPath); err == nil {
 			existing = p
 			return nil
@@ -84,6 +105,9 @@ func (uc *CreateProject) Execute(ctx context.Context, in CreateProjectInput) (Cr
 		if err != nil {
 			return CreateProjectResult{}, err
 		}
+		if uc.shouldAdoptWorktrees(in) {
+			uc.adoptWorktrees(ctx, existing, detected)
+		}
 		return CreateProjectResult{Project: existing, MainSessionName: main.Name(), MainTmuxSessionName: main.TmuxName(), Created: false}, nil
 	}
 
@@ -100,7 +124,92 @@ func (uc *CreateProject) Execute(ctx context.Context, in CreateProjectInput) (Cr
 		return CreateProjectResult{}, err
 	}
 
+	if uc.shouldAdoptWorktrees(in) {
+		uc.adoptWorktrees(ctx, project, detected)
+	}
+
 	return CreateProjectResult{Project: project, MainSessionName: session.Name(), MainTmuxSessionName: session.TmuxName(), Created: true}, nil
+}
+
+func (uc *CreateProject) shouldAdoptWorktrees(in CreateProjectInput) bool {
+	return in.CreateWorktreeSessions != nil && *in.CreateWorktreeSessions
+}
+
+func (uc *CreateProject) adoptWorktrees(ctx context.Context, project *domain.Project, refs []WorktreeRef) {
+	used := make(map[string]bool)
+	if err := uc.lock.WithRead(func() error {
+		sessions, err := uc.sessions.GetAll(ctx)
+		if err != nil {
+			return err
+		}
+		for _, s := range sessions {
+			used[s.Name()] = true
+		}
+		return nil
+	}); err != nil {
+		return
+	}
+
+	for _, r := range refs {
+		name := domain.DeriveWorktreeSessionName(project.FullPath(), r.Branch, func(n string) bool { return used[n] })
+		used[name] = true
+		tmuxName := domain.DeriveTmuxSessionName(name)
+		if err := uc.gateway.Create(ctx, tmuxName, r.Path); err != nil {
+			continue
+		}
+		_ = uc.lock.WithWrite(func() error {
+			_, err := uc.sessions.Create(ctx, domain.NewWorktreeSession(0, -1, project.ID(), name, r.Branch, r.Path))
+			return err
+		})
+	}
+}
+
+// adoptableWorktrees returns the repo's worktrees that an open could adopt as
+// Worktree Sessions (ADR-0013): `git worktree list` minus the primary working
+// tree (the project root). A repo-less path (or a transient git failure) has no
+// detectable worktrees, so the open proceeds without offering adoption rather
+// than failing.
+func (uc *CreateProject) adoptableWorktrees(ctx context.Context, fullPath string) ([]WorktreeRef, error) {
+	refs, err := uc.git.ListWorktrees(ctx, fullPath)
+	if err != nil {
+		return nil, nil
+	}
+	root := canonicalPath(fullPath)
+	adopted := make(map[string]bool)
+	if err := uc.lock.WithRead(func() error {
+		project, err := uc.projects.GetByFullPath(ctx, fullPath)
+		if errors.Is(err, ErrProjectNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		sessions, err := uc.sessions.GetByProjectID(ctx, project.ID())
+		if err != nil {
+			return err
+		}
+		for _, s := range sessions {
+			if s.Type() == domain.WorktreeSession {
+				adopted[canonicalPath(s.WorktreePath())] = true
+			}
+		}
+		return nil
+	}); err != nil {
+		return nil, err
+	}
+	var out []WorktreeRef
+	for _, r := range refs {
+		path := canonicalPath(r.Path)
+		if path == root || adopted[path] || r.Detached {
+			continue
+		}
+		exists, err := uc.git.WorktreePathExists(ctx, r.Path)
+		if err != nil || !exists {
+			continue
+		}
+		out = append(out, r)
+	}
+	return out, nil
 }
 
 func (uc *CreateProject) projectTitle(in CreateProjectInput) (string, error) {

@@ -45,7 +45,7 @@ func TestClientListCreateDeleteProjects(t *testing.T) {
 	if len(projects) != 1 || projects[0].Title != "API" || projects[0].MainSessionName != "api.main" || projects[0].MainTmuxSessionName != "api_main" {
 		t.Fatalf("unexpected projects: %+v", projects)
 	}
-	created, err := c.CreateProject(context.Background(), "/work/web", "Web")
+	created, err := c.CreateProject(context.Background(), "/work/web", nil, "Web")
 	if err != nil {
 		t.Fatalf("create: %v", err)
 	}
@@ -68,9 +68,52 @@ func TestClientReturnsAPIErrorMessage(t *testing.T) {
 	defer server.Close()
 
 	c := httpclient.New(server.URL, server.Client())
-	_, err := c.CreateProject(context.Background(), "")
+	_, err := c.CreateProject(context.Background(), "", nil)
 	if err == nil || err.Error() != "400 Bad Request: fullPath is required" {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestClientCreateProjectSendsExplicitFalseWorktreeDecision(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var raw map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&raw); err != nil {
+			t.Fatalf("decode request: %v", err)
+		}
+		decision, ok := raw["createWorktreeSessions"].(bool)
+		if !ok || decision {
+			t.Fatalf("createWorktreeSessions = %#v, want explicit false", raw["createWorktreeSessions"])
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":2,"title":"Web","fullPath":"/work/web","mainSessionName":"web.main","mainTmuxSessionName":"web_main"}`))
+	}))
+	defer server.Close()
+
+	c := httpclient.New(server.URL, server.Client())
+	no := false
+	if _, err := c.CreateProject(context.Background(), "/work/web", &no); err != nil {
+		t.Fatalf("CreateProject: %v", err)
+	}
+}
+
+func TestClientCreateProjectReturnsAPIErrorWithWorktrees(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusPreconditionRequired)
+		_, _ = w.Write([]byte(`{"error":"worktrees detected","code":"worktrees_detected","worktrees":[{"path":"/work/api.feature","branch":"feature"}]}`))
+	}))
+	defer server.Close()
+
+	c := httpclient.New(server.URL, server.Client())
+	_, err := c.CreateProject(context.Background(), "/work/api", nil)
+	var apiErr *httpclient.APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("error = %v, want *httpclient.APIError", err)
+	}
+	if apiErr.Status != http.StatusPreconditionRequired || apiErr.Code != httpclient.CodeWorktreesDetected {
+		t.Fatalf("APIError = %+v, want 428 worktrees_detected", apiErr)
+	}
+	if len(apiErr.Worktrees) != 1 || apiErr.Worktrees[0].Path != "/work/api.feature" || apiErr.Worktrees[0].Branch != "feature" {
+		t.Fatalf("worktrees = %+v, want feature worktree", apiErr.Worktrees)
 	}
 }
 

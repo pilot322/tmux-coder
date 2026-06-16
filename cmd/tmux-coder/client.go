@@ -1,12 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strconv"
+	"strings"
 
 	"github.com/pilot322/tmux-coder/internal/client/daemon"
 	"github.com/pilot322/tmux-coder/internal/client/httpclient"
@@ -23,6 +26,10 @@ type agentAPI interface {
 type acquirePortAPI interface {
 	ListSessions(context.Context, httpclient.ListSessionsInput) ([]httpclient.Session, error)
 	AcquirePort(context.Context, httpclient.AcquirePortInput) (int, error)
+}
+
+type openAPI interface {
+	CreateProject(context.Context, string, *bool, ...string) (httpclient.Project, error)
 }
 
 type agentWrapperExitError struct {
@@ -55,12 +62,10 @@ func runClient(ctx context.Context, args []string, getenv func(string) string, g
 		}
 		return tmuxattach.Run(ctx, target.SessionName, getenv)
 	}
-	if len(args) == 1 && (args[0] == "o" || args[0] == "open") {
-		cwd, err := getwd()
-		if err != nil {
-			return err
-		}
-		project, err := api.CreateProject(ctx, cwd)
+	if len(args) >= 1 && (args[0] == "o" || args[0] == "open") {
+		info, statErr := os.Stdin.Stat()
+		interactive := statErr == nil && info.Mode()&os.ModeCharDevice != 0
+		project, err := runOpen(ctx, args[1:], getwd, api, os.Stdin, os.Stdout, interactive)
 		if err != nil {
 			return err
 		}
@@ -73,6 +78,47 @@ func runClient(ctx context.Context, args []string, getenv func(string) string, g
 		return runAcquirePort(ctx, args[1:], getenv, api, os.Stdout)
 	}
 	return fmt.Errorf("usage: tmux-coder [open|o|new|n|acquire-port|install-claude-hooks]")
+}
+
+func runOpen(ctx context.Context, args []string, getwd func() (string, error), api openAPI, in io.Reader, out io.Writer, interactive bool) (httpclient.Project, error) {
+	var decision *bool
+	for _, arg := range args {
+		switch arg {
+		case "--create-worktree-sessions":
+			v := true
+			decision = &v
+		case "--no-create-worktree-sessions":
+			v := false
+			decision = &v
+		default:
+			return httpclient.Project{}, fmt.Errorf("unexpected argument: %s", arg)
+		}
+	}
+	cwd, err := getwd()
+	if err != nil {
+		return httpclient.Project{}, err
+	}
+	project, err := api.CreateProject(ctx, cwd, decision)
+	if err == nil || decision != nil {
+		return project, err
+	}
+	var apiErr *httpclient.APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != httpclient.CodeWorktreesDetected {
+		return httpclient.Project{}, err
+	}
+
+	adopt := false
+	if interactive {
+		_, _ = fmt.Fprintln(out, "Git worktrees were detected for this project:")
+		for _, wt := range apiErr.Worktrees {
+			_, _ = fmt.Fprintf(out, "  %s (%s)\n", wt.Path, wt.Branch)
+		}
+		_, _ = fmt.Fprint(out, "Create Worktree Sessions for them? [Y/n] ")
+		line, _ := bufio.NewReader(in).ReadString('\n')
+		answer := strings.ToLower(strings.TrimSpace(line))
+		adopt = answer != "n" && answer != "no"
+	}
+	return api.CreateProject(ctx, cwd, &adopt)
 }
 
 func runAcquirePort(ctx context.Context, args []string, getenv func(string) string, api acquirePortAPI, out io.Writer) error {

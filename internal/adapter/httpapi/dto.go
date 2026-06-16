@@ -4,8 +4,14 @@
 package httpapi
 
 type createProjectRequest struct {
-	FullPath string  `json:"fullPath"`
-	Title    *string `json:"title"`
+	FullPath               string  `json:"fullPath"`
+	Title                  *string `json:"title"`
+	CreateWorktreeSessions *bool   `json:"createWorktreeSessions,omitempty"`
+}
+
+type worktreeRef struct {
+	Path   string `json:"path"`
+	Branch string `json:"branch"`
 }
 
 type projectResponse struct {
@@ -54,8 +60,9 @@ type sessionsResponse struct {
 }
 
 type errorResponse struct {
-	Error string `json:"error"`
-	Code  string `json:"code,omitempty"`
+	Error     string        `json:"error"`
+	Code      string        `json:"code,omitempty"`
+	Worktrees []worktreeRef `json:"worktrees,omitempty"`
 }
 
 type acquirePortRequest struct {

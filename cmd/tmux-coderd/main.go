@@ -37,7 +37,7 @@ func main() {
 	processGw := processinfra.NewProcessGateway()
 	notifier := desktopnotify.NewNotifier(desktopnotify.SoundEnabled(os.Getenv))
 
-	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gateway, state, state.Config())
+	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gateway, git, state, state.Config())
 	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state)
 	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), state.Agents(), gateway, state)
 	createSession := usecase.NewCreateSessionWithHooks(state.Projects(), state.Sessions(), gateway, git, state, hooks, state.Leases())

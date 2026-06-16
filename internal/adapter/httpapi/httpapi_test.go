@@ -143,7 +143,7 @@ func newServerWithGit(git *stubGit) *http.ServeMux {
 	gw := &stubGateway{exists: make(map[string]bool)}
 	agentGw := &stubAgentGateway{panes: make(map[string]bool)}
 
-	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gw, state, state.Config())
+	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gw, git, state, state.Config())
 	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state)
 	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), state.Agents(), gw, state)
 	createSession := usecase.NewCreateSession(state.Projects(), state.Sessions(), gw, git, state)
@@ -168,7 +168,7 @@ func newResourceServer(ports *stubPortAvailability) (*http.ServeMux, *memory.Mem
 	git := &stubGit{paths: make(map[string]bool)}
 	agentGw := &stubAgentGateway{panes: make(map[string]bool)}
 
-	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gw, state, state.Config())
+	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gw, git, state, state.Config())
 	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state)
 	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), state.Agents(), gw, state)
 	createSession := usecase.NewCreateSession(state.Projects(), state.Sessions(), gw, git, state)
@@ -222,6 +222,53 @@ func TestPostProjects_CreatesThenReturnsExisting(t *testing.T) {
 	rec = do(t, mux, "POST", "/projects", `{"fullPath":"/work/api"}`)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("second POST status = %d, want 200", rec.Code)
+	}
+}
+
+func TestPostProjects_WorktreesDetectedReturnsPreconditionRequired(t *testing.T) {
+	mux := newServerWithGit(&stubGit{
+		paths: map[string]bool{"/work/api.feature": true},
+		worktrees: []usecase.WorktreeRef{
+			{Path: "/work/api", Branch: "main"},
+			{Path: "/work/api.feature", Branch: "feature"},
+		},
+	})
+
+	rec := do(t, mux, "POST", "/projects", `{"fullPath":"/work/api"}`)
+	if rec.Code != http.StatusPreconditionRequired {
+		t.Fatalf("POST status = %d, want 428 (body: %s)", rec.Code, rec.Body)
+	}
+	var resp struct {
+		Error     string `json:"error"`
+		Code      string `json:"code"`
+		Worktrees []struct {
+			Path   string `json:"path"`
+			Branch string `json:"branch"`
+		} `json:"worktrees"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.Code != usecase.CodeWorktreesDetected {
+		t.Fatalf("code = %q, want %q", resp.Code, usecase.CodeWorktreesDetected)
+	}
+	if len(resp.Worktrees) != 1 || resp.Worktrees[0].Path != "/work/api.feature" || resp.Worktrees[0].Branch != "feature" {
+		t.Fatalf("worktrees = %+v, want feature worktree", resp.Worktrees)
+	}
+}
+
+func TestPostProjects_ExplicitFalseSkipsWorktreeAdoptionPrompt(t *testing.T) {
+	mux := newServerWithGit(&stubGit{
+		paths: map[string]bool{"/work/api.feature": true},
+		worktrees: []usecase.WorktreeRef{
+			{Path: "/work/api", Branch: "main"},
+			{Path: "/work/api.feature", Branch: "feature"},
+		},
+	})
+
+	rec := do(t, mux, "POST", "/projects", `{"fullPath":"/work/api","createWorktreeSessions":false}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST status = %d, want 201 (body: %s)", rec.Code, rec.Body)
 	}
 }
 

@@ -20,6 +20,11 @@ type Project struct {
 	MainTmuxSessionName string `json:"mainTmuxSessionName"`
 }
 
+type WorktreeRef struct {
+	Path   string `json:"path"`
+	Branch string `json:"branch"`
+}
+
 type Session struct {
 	ID                       int     `json:"id"`
 	Parent                   int     `json:"parent"`
@@ -94,19 +99,21 @@ type AcquirePortInput struct {
 // must equal the usecase.Code* strings (ADR-0009); the TUI matches on them to
 // offer the right follow-up prompt.
 const (
-	CodeSessionExists  = "session_exists"
-	CodeWorktreeExists = "worktree_exists"
-	CodePathBlocked    = "path_blocked"
-	CodeBranchExists   = "branch_exists"
+	CodeSessionExists     = "session_exists"
+	CodeWorktreeExists    = "worktree_exists"
+	CodePathBlocked       = "path_blocked"
+	CodeBranchExists      = "branch_exists"
+	CodeWorktreesDetected = "worktrees_detected"
 )
 
 // APIError is a non-2xx response from the Daemon. Code is populated when the
 // body carried a machine-readable conflict code; callers match on it with
 // errors.As to react without parsing Message.
 type APIError struct {
-	Status  int
-	Code    string
-	Message string
+	Status    int
+	Code      string
+	Message   string
+	Worktrees []WorktreeRef
 }
 
 func (e *APIError) Error() string {
@@ -143,15 +150,16 @@ func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
 	return resp.Projects, nil
 }
 
-func (c *Client) CreateProject(ctx context.Context, fullPath string, title ...string) (Project, error) {
+func (c *Client) CreateProject(ctx context.Context, fullPath string, createWorktreeSessions *bool, title ...string) (Project, error) {
 	var projectTitle *string
 	if len(title) > 0 {
 		projectTitle = &title[0]
 	}
 	body, err := json.Marshal(struct {
-		FullPath string  `json:"fullPath"`
-		Title    *string `json:"title,omitempty"`
-	}{FullPath: fullPath, Title: projectTitle})
+		FullPath               string  `json:"fullPath"`
+		Title                  *string `json:"title,omitempty"`
+		CreateWorktreeSessions *bool   `json:"createWorktreeSessions,omitempty"`
+	}{FullPath: fullPath, Title: projectTitle, CreateWorktreeSessions: createWorktreeSessions})
 	if err != nil {
 		return Project{}, err
 	}
@@ -363,9 +371,10 @@ func (c *Client) doJSON(req *http.Request, want int, out any) error {
 func statusError(resp *http.Response) error {
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 	var e struct {
-		Error string `json:"error"`
-		Code  string `json:"code"`
+		Error     string        `json:"error"`
+		Code      string        `json:"code"`
+		Worktrees []WorktreeRef `json:"worktrees"`
 	}
 	_ = json.Unmarshal(body, &e)
-	return &APIError{Status: resp.StatusCode, Code: e.Code, Message: e.Error}
+	return &APIError{Status: resp.StatusCode, Code: e.Code, Message: e.Error, Worktrees: e.Worktrees}
 }

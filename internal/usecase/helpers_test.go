@@ -95,6 +95,7 @@ type fakeGateway struct {
 	killed       []string
 	exists       map[string]bool
 	createErr    error
+	createErrDir map[string]error
 	killErr      error
 	ranUnderLock bool // set if Create was called inside a write critical section
 }
@@ -108,6 +109,9 @@ func (g *fakeGateway) Create(ctx context.Context, name, dir string) error {
 		g.ranUnderLock = true
 	}
 	g.created = append(g.created, gwCall{name, dir})
+	if err := g.createErrDir[dir]; err != nil {
+		return err
+	}
 	if g.createErr != nil {
 		return g.createErr
 	}
@@ -133,12 +137,22 @@ func (g *fakeGateway) SwitchClients(ctx context.Context, from, to string) error 
 }
 
 // createFixture wires a CreateProject against real in-memory repos, the spy
-// lock and the fake gateway, returning all of them for assertions.
+// lock and the fake gateway, returning all of them for assertions. Its Git
+// gateway reports no worktrees, so worktree detection (ADR-0013) is inert;
+// detection tests use createFixtureWithGit to program the repo's worktrees.
 func createFixture() (*usecase.CreateProject, *memory.MemoryProjectRepository, *memory.MemorySessionRepository, *fakeGateway, *spyLock) {
+	uc, projects, sessions, gw, lock, _ := createFixtureWithGit(&fakeWorktreeGit{paths: make(map[string]bool)})
+	return uc, projects, sessions, gw, lock
+}
+
+// createFixtureWithGit is createFixture with a caller-supplied Git gateway, so
+// worktree-detection and bulk-adoption tests can stage the on-disk worktrees an
+// open is validated against. It also returns the Git fake for assertions.
+func createFixtureWithGit(git *fakeWorktreeGit) (*usecase.CreateProject, *memory.MemoryProjectRepository, *memory.MemorySessionRepository, *fakeGateway, *spyLock, *fakeWorktreeGit) {
 	projects := memory.NewMemoryProjectRepository()
 	sessions := memory.NewMemorySessionRepository()
 	lock := &spyLock{}
 	gw := newFakeGateway(lock)
-	uc := usecase.NewCreateProject(projects, sessions, gw, lock, domain.DefaultDaemonConfig())
-	return uc, projects, sessions, gw, lock
+	uc := usecase.NewCreateProject(projects, sessions, gw, git, lock, domain.DefaultDaemonConfig())
+	return uc, projects, sessions, gw, lock, git
 }

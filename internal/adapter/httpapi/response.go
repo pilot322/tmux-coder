@@ -23,6 +23,15 @@ func writeError(w http.ResponseWriter, status int, msg string) {
 func writeUsecaseError(w http.ResponseWriter, err error) {
 	// A StateConflictError is an ErrConflict, so it must be matched before the
 	// generic conflict branch to surface its machine-readable code (ADR-0009).
+	var pre *usecase.PreconditionRequiredError
+	if errors.As(err, &pre) {
+		worktrees := make([]worktreeRef, 0, len(pre.Worktrees))
+		for _, wt := range pre.Worktrees {
+			worktrees = append(worktrees, worktreeRef{Path: wt.Path, Branch: wt.Branch})
+		}
+		writeJSON(w, http.StatusPreconditionRequired, errorResponse{Error: pre.Error(), Code: pre.Code, Worktrees: worktrees})
+		return
+	}
 	var sce *usecase.StateConflictError
 	if errors.As(err, &sce) {
 		writeJSON(w, http.StatusConflict, errorResponse{Error: sce.Error(), Code: sce.Code})

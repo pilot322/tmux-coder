@@ -3,8 +3,11 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pilot322/tmux-coder/internal/client/httpclient"
@@ -27,6 +30,26 @@ type fakeAgentAPI struct {
 	created  httpclient.CreateAgentInput
 	acquired httpclient.AcquirePortInput
 	port     int
+}
+
+type fakeOpenAPI struct {
+	calls     []openCall
+	firstErr  error
+	calledErr bool
+}
+
+type openCall struct {
+	fullPath string
+	decision *bool
+}
+
+func (a *fakeOpenAPI) CreateProject(ctx context.Context, fullPath string, createWorktreeSessions *bool, title ...string) (httpclient.Project, error) {
+	a.calls = append(a.calls, openCall{fullPath: fullPath, decision: createWorktreeSessions})
+	if a.firstErr != nil && !a.calledErr {
+		a.calledErr = true
+		return httpclient.Project{}, a.firstErr
+	}
+	return httpclient.Project{ID: 1, FullPath: fullPath, MainTmuxSessionName: "api_main"}, nil
 }
 
 func (a *fakeAgentAPI) ListSessions(ctx context.Context, in httpclient.ListSessionsInput) ([]httpclient.Session, error) {
@@ -127,6 +150,65 @@ func TestRunAcquirePortMapsCurrentTmuxSession(t *testing.T) {
 	}
 	if out.String() != "8124\n" {
 		t.Fatalf("stdout = %q, want only port number", out.String())
+	}
+}
+
+func TestRunOpenFlagBypassesWorktreePrompt(t *testing.T) {
+	api := &fakeOpenAPI{}
+	var out bytes.Buffer
+
+	_, err := runOpen(context.Background(), []string{"--no-create-worktree-sessions"}, func() (string, error) {
+		return "/work/api", nil
+	}, api, strings.NewReader(""), &out, true)
+	if err != nil {
+		t.Fatalf("runOpen: %v", err)
+	}
+	if len(api.calls) != 1 || api.calls[0].decision == nil || *api.calls[0].decision {
+		t.Fatalf("calls = %#v, want one explicit false decision", api.calls)
+	}
+	if out.Len() != 0 {
+		t.Fatalf("prompt output = %q, want none", out.String())
+	}
+}
+
+func TestRunOpenPromptsAndReissuesYesOnEnter(t *testing.T) {
+	api := &fakeOpenAPI{firstErr: &httpclient.APIError{Status: 428, Code: httpclient.CodeWorktreesDetected, Worktrees: []httpclient.WorktreeRef{{Path: "/work/api.feature", Branch: "feature"}}}}
+	var out bytes.Buffer
+
+	_, err := runOpen(context.Background(), nil, func() (string, error) {
+		return "/work/api", nil
+	}, api, strings.NewReader("\n"), &out, true)
+	if err != nil {
+		t.Fatalf("runOpen: %v", err)
+	}
+	if len(api.calls) != 2 || api.calls[0].decision != nil || api.calls[1].decision == nil || !*api.calls[1].decision {
+		t.Fatalf("calls = %#v, want nil then true decision", api.calls)
+	}
+	if !strings.Contains(out.String(), "Create Worktree Sessions") {
+		t.Fatalf("prompt output = %q", out.String())
+	}
+}
+
+func TestRunOpenNonInteractiveReissuesNo(t *testing.T) {
+	api := &fakeOpenAPI{firstErr: &httpclient.APIError{Status: 428, Code: httpclient.CodeWorktreesDetected}}
+
+	_, err := runOpen(context.Background(), nil, func() (string, error) {
+		return "/work/api", nil
+	}, api, io.Reader(strings.NewReader("")), io.Discard, false)
+	if err != nil {
+		t.Fatalf("runOpen: %v", err)
+	}
+	if len(api.calls) != 2 || api.calls[1].decision == nil || *api.calls[1].decision {
+		t.Fatalf("calls = %#v, want second explicit false decision", api.calls)
+	}
+}
+
+func TestRunOpenReturnsOtherErrors(t *testing.T) {
+	want := errors.New("boom")
+	api := &fakeOpenAPI{firstErr: want}
+	_, err := runOpen(context.Background(), nil, func() (string, error) { return "/work/api", nil }, api, strings.NewReader(""), io.Discard, true)
+	if !errors.Is(err, want) {
+		t.Fatalf("error = %v, want %v", err, want)
 	}
 }
 
