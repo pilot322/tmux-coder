@@ -7,6 +7,7 @@ import (
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -38,7 +39,7 @@ func TestGetSessionsOmitsWorktreeWithMissingWorktreePath(t *testing.T) {
 	var events []string
 	// paths is empty: the worktree directory no longer exists on disk.
 	git := &fakeWorktreeGit{paths: map[string]bool{}, events: &events}
-	uc := usecase.NewGetSessions(projects, sessions, git, lock)
+	uc := usecase.NewGetSessions(projects, sessions, git, lock, obs.Nop())
 	views, err := uc.Execute(ctx, usecase.GetSessionsInput{})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)

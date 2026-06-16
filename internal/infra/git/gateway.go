@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -15,16 +16,18 @@ var _ usecase.GitWorktreeGateway = (*Gateway)(nil)
 
 type Gateway struct {
 	binary string
+	log    obs.Logger
 }
 
-func NewGateway() *Gateway {
-	return &Gateway{binary: "git"}
+func NewGateway(log obs.Logger) *Gateway {
+	return &Gateway{binary: "git", log: log.With("component", "git")}
 }
 
 func (g *Gateway) ValidateBranchName(ctx context.Context, branch string) error {
 	if branch == "" {
 		return fmt.Errorf("%w: branch is required", usecase.ErrValidation)
 	}
+	g.log.Debug(ctx, "git exec", "args", []string{"check-ref-format", "--branch", branch})
 	if err := exec.CommandContext(ctx, g.binary, "check-ref-format", "--branch", branch).Run(); err != nil {
 		if !isExit(err) {
 			return err
@@ -35,6 +38,7 @@ func (g *Gateway) ValidateBranchName(ctx context.Context, branch string) error {
 }
 
 func (g *Gateway) IsWorktreeRoot(ctx context.Context, path string) (bool, error) {
+	g.log.Debug(ctx, "git exec", "args", []string{"rev-parse", "--show-toplevel"}, "repo", path)
 	out, err := exec.CommandContext(ctx, g.binary, "-C", path, "rev-parse", "--show-toplevel").CombinedOutput()
 	if err != nil {
 		if isExit(err) {
@@ -65,6 +69,7 @@ func (g *Gateway) WorktreePathExists(ctx context.Context, path string) (bool, er
 }
 
 func (g *Gateway) ListWorktrees(ctx context.Context, repoPath string) ([]usecase.WorktreeRef, error) {
+	g.log.Debug(ctx, "git exec", "args", []string{"worktree", "list", "--porcelain"}, "repo", repoPath)
 	out, err := exec.CommandContext(ctx, g.binary, "-C", repoPath, "worktree", "list", "--porcelain").CombinedOutput()
 	if err != nil {
 		return nil, fmt.Errorf("git worktree list --porcelain: %w: %s", err, out)
@@ -124,6 +129,7 @@ func (g *Gateway) RemoveWorktree(ctx context.Context, worktreePath string, force
 		args = append(args, "--force")
 	}
 	args = append(args, worktreePath)
+	g.log.Debug(ctx, "git exec", "args", args)
 	out, err := exec.CommandContext(ctx, g.binary, args...).CombinedOutput()
 	if err == nil {
 		return nil
@@ -139,6 +145,7 @@ func (g *Gateway) DeleteBranch(ctx context.Context, repoPath, branch string) err
 }
 
 func (g *Gateway) CurrentBranch(ctx context.Context, repoPath string) (string, error) {
+	g.log.Debug(ctx, "git exec", "args", []string{"branch", "--show-current"}, "repo", repoPath)
 	out, err := exec.CommandContext(ctx, g.binary, "-C", repoPath, "branch", "--show-current").CombinedOutput()
 	if err != nil {
 		return "", fmt.Errorf("git branch --show-current: %w: %s", err, out)
@@ -147,6 +154,7 @@ func (g *Gateway) CurrentBranch(ctx context.Context, repoPath string) (string, e
 }
 
 func (g *Gateway) existsByExit(ctx context.Context, repoPath string, args ...string) (bool, error) {
+	g.log.Debug(ctx, "git exec", "args", args, "repo", repoPath)
 	full := append([]string{"-C", repoPath}, args...)
 	err := exec.CommandContext(ctx, g.binary, full...).Run()
 	if err == nil {
@@ -159,8 +167,10 @@ func (g *Gateway) existsByExit(ctx context.Context, repoPath string, args ...str
 }
 
 func (g *Gateway) run(ctx context.Context, args ...string) error {
+	g.log.Debug(ctx, "git exec", "args", args)
 	out, err := exec.CommandContext(ctx, g.binary, args...).CombinedOutput()
 	if err != nil {
+		g.log.Error(ctx, "git exec failed", "args", args, "err", err.Error(), "output", strings.TrimSpace(string(out)))
 		return fmt.Errorf("git %v: %w: %s", args, err, out)
 	}
 	return nil

@@ -6,6 +6,7 @@ import (
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -16,11 +17,11 @@ func TestGetProjects_ReturnsProjectsWithMainSessionNames(t *testing.T) {
 	gw := newFakeGateway(lock)
 	ctx := context.Background()
 
-	create := usecase.NewCreateProject(projects, sessions, gw, &fakeWorktreeGit{paths: make(map[string]bool)}, lock, domain.DefaultDaemonConfig())
+	create := usecase.NewCreateProject(projects, sessions, gw, &fakeWorktreeGit{paths: make(map[string]bool)}, lock, domain.DefaultDaemonConfig(), obs.Nop())
 	_, _ = create.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api"})
 	_, _ = create.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/web"})
 
-	get := usecase.NewGetProjects(projects, sessions, lock)
+	get := usecase.NewGetProjects(projects, sessions, lock, obs.Nop())
 	views, err := get.Execute(ctx)
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
@@ -40,7 +41,7 @@ func TestGetProjects_EmptyWhenNoProjects(t *testing.T) {
 	sessions := memory.NewMemorySessionRepository()
 	lock := &spyLock{}
 
-	views, err := usecase.NewGetProjects(projects, sessions, lock).Execute(context.Background())
+	views, err := usecase.NewGetProjects(projects, sessions, lock, obs.Nop()).Execute(context.Background())
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

@@ -8,6 +8,7 @@ import (
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -37,7 +38,7 @@ func TestDeleteWorktreeSwitchesAttachedClientsToMainBeforeKill(t *testing.T) {
 	var events []string
 	git := &fakeWorktreeGit{paths: map[string]bool{worktreePath: true}, events: &events}
 	tmux := &eventTmuxGateway{events: &events, exists: map[string]bool{worktree.TmuxName(): true, main.TmuxName(): true}}
-	uc := usecase.NewDeleteSession(sessions, agents, tmux, git, lock)
+	uc := usecase.NewDeleteSession(sessions, agents, tmux, git, lock, obs.Nop())
 	if err := uc.Execute(ctx, usecase.DeleteSessionInput{ID: worktree.ID(), Force: true}); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -84,7 +85,7 @@ func TestDeleteSecondarySwitchesAttachedClientsToMainBeforeKill(t *testing.T) {
 	var events []string
 	git := &fakeWorktreeGit{paths: map[string]bool{}, events: &events}
 	tmux := &eventTmuxGateway{events: &events, exists: map[string]bool{secondary.TmuxName(): true, main.TmuxName(): true}}
-	uc := usecase.NewDeleteSession(sessions, agents, tmux, git, lock)
+	uc := usecase.NewDeleteSession(sessions, agents, tmux, git, lock, obs.Nop())
 	if err := uc.Execute(ctx, usecase.DeleteSessionInput{ID: secondary.ID()}); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -134,7 +135,7 @@ func TestDeleteWorktreeRemovesSessionEvenWhenKillFails(t *testing.T) {
 	// The worktree session is the one the user is attached to, so killing it
 	// tears the connection down and the kill shells out non-zero.
 	tmux := &eventTmuxGateway{events: &events, exists: map[string]bool{worktree.TmuxName(): true, main.TmuxName(): true}, killErr: errors.New("server gone")}
-	uc := usecase.NewDeleteSession(sessions, agents, tmux, git, lock)
+	uc := usecase.NewDeleteSession(sessions, agents, tmux, git, lock, obs.Nop())
 	if err := uc.Execute(ctx, usecase.DeleteSessionInput{ID: worktree.ID(), Force: true}); err != nil {
 		t.Fatalf("Execute should not surface a best-effort kill failure: %v", err)
 	}
@@ -175,7 +176,7 @@ func TestDeleteSecondaryRemovesSessionEvenWhenKillFails(t *testing.T) {
 	var events []string
 	git := &fakeWorktreeGit{paths: map[string]bool{}, events: &events}
 	tmux := &eventTmuxGateway{events: &events, exists: map[string]bool{secondary.TmuxName(): true, main.TmuxName(): true}, killErr: errors.New("server gone")}
-	uc := usecase.NewDeleteSession(sessions, agents, tmux, git, lock)
+	uc := usecase.NewDeleteSession(sessions, agents, tmux, git, lock, obs.Nop())
 	if err := uc.Execute(ctx, usecase.DeleteSessionInput{ID: secondary.ID()}); err != nil {
 		t.Fatalf("Execute should not surface a best-effort kill failure: %v", err)
 	}
@@ -249,7 +250,7 @@ func TestDeleteWorktreeReparentsWorktreeChildrenAndCascadesSecondaries(t *testin
 		main.TmuxName(): true, feat1.TmuxName(): true, backend.TmuxName(): true,
 		frontend.TmuxName(): true, secondary.TmuxName(): true,
 	}}
-	uc := usecase.NewDeleteSession(sessions, agents, tmux, git, lock)
+	uc := usecase.NewDeleteSession(sessions, agents, tmux, git, lock, obs.Nop())
 	if err := uc.Execute(ctx, usecase.DeleteSessionInput{ID: feat1.ID(), Force: true}); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -303,7 +304,7 @@ func TestDeleteSessionReleasesOwnedPortLeases(t *testing.T) {
 	var events []string
 	git := &fakeWorktreeGit{paths: map[string]bool{worktreePath: true}, events: &events}
 	tmux := &eventTmuxGateway{events: &events, exists: map[string]bool{session.TmuxName(): true}}
-	uc := usecase.NewDeleteSessionWithLeases(sessions, agents, tmux, git, lock, leases)
+	uc := usecase.NewDeleteSessionWithLeases(sessions, agents, tmux, git, lock, leases, obs.Nop())
 	if err := uc.Execute(ctx, usecase.DeleteSessionInput{ID: session.ID(), Force: true}); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

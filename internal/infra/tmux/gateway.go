@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"strings"
 
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/tmuxserver"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
@@ -20,10 +21,11 @@ var _ usecase.SessionGateway = (*TmuxGateway)(nil)
 type TmuxGateway struct {
 	binary      string
 	serverLabel string
+	log         obs.Logger
 }
 
-func NewTmuxGateway() *TmuxGateway {
-	return &TmuxGateway{binary: "tmux", serverLabel: tmuxserver.Label(os.Getenv)}
+func NewTmuxGateway(log obs.Logger) *TmuxGateway {
+	return &TmuxGateway{binary: "tmux", serverLabel: tmuxserver.Label(os.Getenv), log: log.With("component", "tmux")}
 }
 
 // Create starts a new detached session named name, rooted at workingDir.
@@ -53,6 +55,7 @@ func (g *TmuxGateway) Kill(ctx context.Context, name string) error {
 // session can be killed without detaching the user's terminal. list-clients
 // exits non-zero when from no longer exists, which we treat as "no clients".
 func (g *TmuxGateway) SwitchClients(ctx context.Context, from, to string) error {
+	g.log.Debug(ctx, "tmux exec", "args", []string{"list-clients", "-t", from})
 	cmd := exec.CommandContext(ctx, g.binary, "-L", g.serverLabel, "list-clients", "-t", from, "-F", "#{client_name}")
 	out, err := cmd.Output()
 	if err != nil {
@@ -77,6 +80,7 @@ func (g *TmuxGateway) SwitchClients(ctx context.Context, from, to string) error 
 // when the session is absent, which is a normal answer (false, nil) rather
 // than an error; only a missing tmux or a cancelled context is a real error.
 func (g *TmuxGateway) Exists(ctx context.Context, name string) (bool, error) {
+	g.log.Debug(ctx, "tmux exec", "args", []string{"has-session", "-t", name})
 	cmd := exec.CommandContext(ctx, g.binary, "-L", g.serverLabel, "has-session", "-t", name)
 	err := cmd.Run()
 	if err == nil {
@@ -90,9 +94,11 @@ func (g *TmuxGateway) Exists(ctx context.Context, name string) (bool, error) {
 }
 
 func (g *TmuxGateway) run(ctx context.Context, args ...string) ([]byte, error) {
+	g.log.Debug(ctx, "tmux exec", "args", args)
 	full := append([]string{"-L", g.serverLabel}, args...)
 	out, err := exec.CommandContext(ctx, g.binary, full...).CombinedOutput()
 	if err != nil {
+		g.log.Error(ctx, "tmux exec failed", "args", args, "err", err.Error(), "output", strings.TrimSpace(string(out)))
 		return out, fmt.Errorf("tmux %v: %w: %s", args, err, out)
 	}
 	return out, nil

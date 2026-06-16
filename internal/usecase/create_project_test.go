@@ -8,8 +8,28 @@ import (
 	"testing"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
+
+func TestCreateProject_LogsCreatedMilestone(t *testing.T) {
+	rec := obs.Recording()
+	uc, _, _, _, _ := createFixtureWithLog(rec)
+
+	if _, err := uc.Execute(context.Background(), usecase.CreateProjectInput{FullPath: "/work/api"}); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+
+	var found bool
+	for _, line := range rec.Records() {
+		if line["msg"] == "project created" && line["component"] == "create-project" && line["level"] == "INFO" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected a 'project created' INFO line tagged component=create-project, got %v", rec.Records())
+	}
+}
 
 func TestCreateProject_MaterializesDeclaredSecondaries(t *testing.T) {
 	uc, _, sessions, gw, _ := createFixture()

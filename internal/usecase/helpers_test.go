@@ -9,6 +9,7 @@ import (
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -149,10 +150,21 @@ func createFixture() (*usecase.CreateProject, *memory.MemoryProjectRepository, *
 // worktree-detection and bulk-adoption tests can stage the on-disk worktrees an
 // open is validated against. It also returns the Git fake for assertions.
 func createFixtureWithGit(git *fakeWorktreeGit) (*usecase.CreateProject, *memory.MemoryProjectRepository, *memory.MemorySessionRepository, *fakeGateway, *spyLock, *fakeWorktreeGit) {
+	return createFixtureWithGitAndLog(git, obs.Nop())
+}
+
+// createFixtureWithLog is createFixture with an explicit logger, so a test can
+// pass obs.Recording() and assert on the milestone lines the usecase emits.
+func createFixtureWithLog(log obs.Logger) (*usecase.CreateProject, *memory.MemoryProjectRepository, *memory.MemorySessionRepository, *fakeGateway, *spyLock) {
+	uc, projects, sessions, gw, lock, _ := createFixtureWithGitAndLog(&fakeWorktreeGit{paths: make(map[string]bool)}, log)
+	return uc, projects, sessions, gw, lock
+}
+
+func createFixtureWithGitAndLog(git *fakeWorktreeGit, log obs.Logger) (*usecase.CreateProject, *memory.MemoryProjectRepository, *memory.MemorySessionRepository, *fakeGateway, *spyLock, *fakeWorktreeGit) {
 	projects := memory.NewMemoryProjectRepository()
 	sessions := memory.NewMemorySessionRepository()
 	lock := &spyLock{}
 	gw := newFakeGateway(lock)
-	uc := usecase.NewCreateProject(projects, sessions, gw, git, lock, domain.DefaultDaemonConfig())
+	uc := usecase.NewCreateProject(projects, sessions, gw, git, lock, domain.DefaultDaemonConfig(), log)
 	return uc, projects, sessions, gw, lock, git
 }

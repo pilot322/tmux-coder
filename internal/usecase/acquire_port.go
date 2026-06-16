@@ -3,6 +3,8 @@ package usecase
 import (
 	"context"
 	"fmt"
+
+	"github.com/pilot322/tmux-coder/internal/obs"
 )
 
 type PortAvailabilityGateway interface {
@@ -27,16 +29,17 @@ type AcquirePort struct {
 	leases   ResourceLeaseRepository
 	ports    PortAvailabilityGateway
 	lock     StateLock
+	log      obs.Logger
 }
 
-func NewAcquirePort(s ISessionRepository, leases ResourceLeaseRepository, ports PortAvailabilityGateway, l StateLock) *AcquirePort {
+func NewAcquirePort(s ISessionRepository, leases ResourceLeaseRepository, ports PortAvailabilityGateway, l StateLock, log obs.Logger) *AcquirePort {
 	if leases == nil {
 		leases = noopResourceLeaseRepository{}
 	}
 	if ports == nil {
 		ports = alwaysAvailablePorts{}
 	}
-	return &AcquirePort{sessions: s, leases: leases, ports: ports, lock: l}
+	return &AcquirePort{sessions: s, leases: leases, ports: ports, lock: l, log: log.With("component", "acquire-port")}
 }
 
 func (uc *AcquirePort) Execute(ctx context.Context, in AcquirePortInput) (AcquirePortOutput, error) {
@@ -81,6 +84,7 @@ func (uc *AcquirePort) Execute(ctx context.Context, in AcquirePortInput) (Acquir
 	if err != nil {
 		return AcquirePortOutput{}, err
 	}
+	uc.log.Info(ctx, "port acquired", "key", in.Key, "port", port, "owner", string(req.OwnerKind))
 	return AcquirePortOutput{Port: port}, nil
 }
 

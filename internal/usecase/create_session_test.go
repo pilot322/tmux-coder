@@ -12,6 +12,7 @@ import (
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -41,7 +42,7 @@ func TestCreateSessionRunsConfiguredHookBeforeTmuxCreate(t *testing.T) {
 	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
 	hooks := &fakeWorktreeHookRunner{events: &events}
 	leases := memory.NewMemoryResourceLeaseRepository()
-	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, leases)
+	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, leases, obs.Nop())
 	var project *domain.Project
 	if err := lock.WithWrite(func() error {
 		var err error
@@ -131,7 +132,7 @@ func TestCreateSessionMaterializesSecondariesUnderWorktreeAfterHook(t *testing.T
 	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
 	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
 	hooks := &fakeWorktreeHookRunner{events: &events}
-	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository())
+	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository(), obs.Nop())
 	var project *domain.Project
 	if err := lock.WithWrite(func() error {
 		var err error
@@ -188,7 +189,7 @@ func TestCreateSessionSecondaryFailureRollsBackWorktreeBranchAndSession(t *testi
 	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
 	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
 	hooks := &fakeWorktreeHookRunner{events: &events}
-	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository())
+	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository(), obs.Nop())
 	var project *domain.Project
 	if err := lock.WithWrite(func() error {
 		var err error
@@ -246,7 +247,7 @@ func TestCreateSessionHookFailureRollsBackWorktreeAndBranch(t *testing.T) {
 	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
 	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
 	hooks := &fakeWorktreeHookRunner{events: &events, err: errors.New("exit status 1")}
-	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository())
+	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository(), obs.Nop())
 	var project *domain.Project
 	if err := lock.WithWrite(func() error {
 		var err error
@@ -311,7 +312,7 @@ func TestCreateSessionRollsBackWorktreeWhenRequestCancelledMidHook(t *testing.T)
 	// The client disconnects mid-hook: cancel the request context, then surface
 	// the error a hook process gets when its context dies.
 	hooks := &fakeWorktreeHookRunner{events: &events, cancel: cancel, err: context.Canceled}
-	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository())
+	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository(), obs.Nop())
 	var project *domain.Project
 	if err := lock.WithWrite(func() error {
 		var err error
@@ -365,7 +366,7 @@ func TestCreateSessionRejectsHookScriptSymlinkEscapingProjectRoot(t *testing.T) 
 	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
 	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
 	hooks := &fakeWorktreeHookRunner{events: &events}
-	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository())
+	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository(), obs.Nop())
 	var project *domain.Project
 	if err := lock.WithWrite(func() error {
 		var err error
@@ -460,7 +461,7 @@ func TestCreateSessionRejectsInvalidConfiguredHookScript(t *testing.T) {
 			git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
 			tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
 			hooks := &fakeWorktreeHookRunner{events: &events}
-			uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository())
+			uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository(), obs.Nop())
 			var project *domain.Project
 			if err := lock.WithWrite(func() error {
 				var err error
@@ -507,7 +508,7 @@ func TestCreateSessionTmuxFailureAfterHookReleasesProvisionalLeases(t *testing.T
 	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
 	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool), createErr: errors.New("tmux failed")}
 	hooks := &fakeWorktreeHookRunner{events: &events, leases: leases, acquirePort: true}
-	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, leases)
+	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, leases, obs.Nop())
 	var project *domain.Project
 	if err := lock.WithWrite(func() error {
 		var err error
@@ -559,7 +560,7 @@ func TestCreateSessionPromotesHookLeasesToCreatedSession(t *testing.T) {
 	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
 	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
 	hooks := &fakeWorktreeHookRunner{events: &events, leases: leases, acquirePort: true}
-	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, leases)
+	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, leases, obs.Nop())
 	var project *domain.Project
 	if err := lock.WithWrite(func() error {
 		var err error
@@ -573,7 +574,7 @@ func TestCreateSessionPromotesHookLeasesToCreatedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	acquire := usecase.NewAcquirePort(sessions, leases, &fakePortAvailability{occupied: map[int]bool{8000: true}}, lock)
+	acquire := usecase.NewAcquirePort(sessions, leases, &fakePortAvailability{occupied: map[int]bool{8000: true}}, lock, obs.Nop())
 	out, err := acquire.Execute(ctx, usecase.AcquirePortInput{ProjectID: project.ID(), SessionID: session.ID(), Key: "web", Start: 8000, End: 8000})
 	if err != nil {
 		t.Fatalf("AcquirePort for created session: %v", err)
@@ -614,7 +615,7 @@ func TestCreateSessionReconciliationReleasesPrunedSessionLeases(t *testing.T) {
 	var events []string
 	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
 	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
-	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, &fakeWorktreeHookRunner{events: &events}, leases)
+	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, &fakeWorktreeHookRunner{events: &events}, leases, obs.Nop())
 	if _, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"}); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -663,7 +664,7 @@ func newWorktreeFixture(t *testing.T) *worktreeFixture {
 	git := &fakeWorktreeGit{paths: make(map[string]bool), branches: make(map[string]bool), events: events}
 	tmux := &eventTmuxGateway{events: events, exists: make(map[string]bool)}
 	hooks := &fakeWorktreeHookRunner{events: events}
-	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository())
+	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository(), obs.Nop())
 	var project *domain.Project
 	if err := lock.WithWrite(func() error {
 		var err error
@@ -925,7 +926,7 @@ func worktreeProvenanceUC(t *testing.T, git *fakeWorktreeGit) (context.Context, 
 	sessions := memory.NewMemorySessionRepository()
 	lock := &spyLock{}
 	tmux := &eventTmuxGateway{events: git.events, exists: make(map[string]bool)}
-	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, &fakeWorktreeHookRunner{events: git.events}, memory.NewMemoryResourceLeaseRepository())
+	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, &fakeWorktreeHookRunner{events: git.events}, memory.NewMemoryResourceLeaseRepository(), obs.Nop())
 	project, err := projects.Create(ctx, domain.NewProject(0, projectRoot, "api"))
 	if err != nil {
 		t.Fatal(err)

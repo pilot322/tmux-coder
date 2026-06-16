@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
+	"github.com/pilot322/tmux-coder/internal/obs"
 )
 
 type CreateProjectInput struct {
@@ -34,10 +35,11 @@ type CreateProject struct {
 	git      GitWorktreeGateway
 	lock     StateLock
 	config   domain.DaemonConfig
+	log      obs.Logger
 }
 
-func NewCreateProject(p IProjectRepository, s ISessionRepository, g SessionGateway, git GitWorktreeGateway, l StateLock, c domain.DaemonConfig) *CreateProject {
-	return &CreateProject{projects: p, sessions: s, gateway: g, git: git, lock: l, config: c}
+func NewCreateProject(p IProjectRepository, s ISessionRepository, g SessionGateway, git GitWorktreeGateway, l StateLock, c domain.DaemonConfig, log obs.Logger) *CreateProject {
+	return &CreateProject{projects: p, sessions: s, gateway: g, git: git, lock: l, config: c, log: log.With("component", "create-project")}
 }
 
 // Execute creates a Project for fullPath, or reconciles an existing one.
@@ -112,6 +114,7 @@ func (uc *CreateProject) Execute(ctx context.Context, in CreateProjectInput) (Cr
 	}
 
 	if err := uc.gateway.Create(ctx, session.TmuxName(), project.FullPath()); err != nil {
+		uc.log.Error(ctx, "main tmux session create failed, rolling back project", "project_id", project.ID(), "tmux_session", session.TmuxName(), "err", err.Error())
 		uc.rollback(ctx, project.ID(), session.ID(), session.TmuxName())
 		return CreateProjectResult{}, fmt.Errorf("%w: %v", ErrGateway, err)
 	}
@@ -128,6 +131,7 @@ func (uc *CreateProject) Execute(ctx context.Context, in CreateProjectInput) (Cr
 		uc.adoptWorktrees(ctx, project, detected)
 	}
 
+	uc.log.Info(ctx, "project created", "project_id", project.ID(), "title", project.Title(), "main_session", session.Name())
 	return CreateProjectResult{Project: project, MainSessionName: session.Name(), MainTmuxSessionName: session.TmuxName(), Created: true}, nil
 }
 

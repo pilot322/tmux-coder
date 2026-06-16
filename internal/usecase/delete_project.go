@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
+	"github.com/pilot322/tmux-coder/internal/obs"
 )
 
 type DeleteProject struct {
@@ -13,10 +14,11 @@ type DeleteProject struct {
 	agents   IAgentRepository
 	gateway  SessionGateway
 	lock     StateLock
+	log      obs.Logger
 }
 
-func NewDeleteProject(p IProjectRepository, s ISessionRepository, a IAgentRepository, g SessionGateway, l StateLock) *DeleteProject {
-	return &DeleteProject{projects: p, sessions: s, agents: a, gateway: g, lock: l}
+func NewDeleteProject(p IProjectRepository, s ISessionRepository, a IAgentRepository, g SessionGateway, l StateLock, log obs.Logger) *DeleteProject {
+	return &DeleteProject{projects: p, sessions: s, agents: a, gateway: g, lock: l, log: log.With("component", "delete-project")}
 }
 
 // Execute removes a Project and its Sessions. It returns ErrProjectNotFound
@@ -49,6 +51,7 @@ func (uc *DeleteProject) Execute(ctx context.Context, id int) error {
 		}
 	}
 
+	uc.log.Info(ctx, "deleting project", "project_id", id, "sessions", len(sessions))
 	return uc.lock.WithWrite(func() error {
 		if err := uc.agents.DeleteByProjectID(ctx, id); err != nil {
 			return err

@@ -8,6 +8,7 @@ import (
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -47,7 +48,7 @@ func TestAgentEvent_NotifiesOnBusyToWaiting(t *testing.T) {
 	agent := seedBusyAgent(t, agents, p.ID(), s.ID(), "reviewer")
 
 	notifier := &fakeNotifier{}
-	eventUc := usecase.NewAgentEvent(agents, projects, sessions, notifier, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, notifier, lock, obs.Nop())
 	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: agent.ID(), Event: "waiting"}); err != nil {
 		t.Fatalf("waiting event: %v", err)
 	}
@@ -77,7 +78,7 @@ func TestAgentEvent_NotifiesOnBusyToIdle(t *testing.T) {
 	agent := seedBusyAgent(t, agents, p.ID(), s.ID(), "reviewer")
 
 	notifier := &fakeNotifier{}
-	eventUc := usecase.NewAgentEvent(agents, projects, sessions, notifier, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, notifier, lock, obs.Nop())
 	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: agent.ID(), Event: "idle"}); err != nil {
 		t.Fatalf("idle event: %v", err)
 	}
@@ -112,7 +113,7 @@ func TestAgentEvent_NotificationNameFallsBackToAgentID(t *testing.T) {
 	}
 
 	notifier := &fakeNotifier{}
-	eventUc := usecase.NewAgentEvent(agents, projects, sessions, notifier, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, notifier, lock, obs.Nop())
 	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: agent.ID(), Event: "waiting"}); err != nil {
 		t.Fatalf("waiting event: %v", err)
 	}
@@ -145,7 +146,7 @@ func TestAgentEvent_DoesNotNotifyOnNonBusyDepartures(t *testing.T) {
 			a, _ := agents.Create(ctx, domain.NewAgent(0, p.ID(), s.ID(), "opencode", "reviewer", "%10", true, tc.start))
 
 			notifier := &fakeNotifier{}
-			eventUc := usecase.NewAgentEvent(agents, projects, sessions, notifier, lock)
+			eventUc := usecase.NewAgentEvent(agents, projects, sessions, notifier, lock, obs.Nop())
 			if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: a.ID(), Event: tc.event}); err != nil {
 				t.Fatalf("%s event: %v", tc.event, err)
 			}
@@ -163,7 +164,7 @@ func TestAgentEvent_StartedAndExitedNeverNotify(t *testing.T) {
 	a := seedBusyAgent(t, agents, p.ID(), s.ID(), "reviewer")
 
 	notifier := &fakeNotifier{}
-	eventUc := usecase.NewAgentEvent(agents, projects, sessions, notifier, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, notifier, lock, obs.Nop())
 	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: a.ID(), Event: "started"}); err != nil {
 		t.Fatalf("started: %v", err)
 	}
@@ -182,7 +183,7 @@ func TestAgentEvent_NotifyFailureIsSwallowed(t *testing.T) {
 	a := seedBusyAgent(t, agents, p.ID(), s.ID(), "reviewer")
 
 	notifier := &fakeNotifier{err: errors.New("no session bus")}
-	eventUc := usecase.NewAgentEvent(agents, projects, sessions, notifier, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, notifier, lock, obs.Nop())
 	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: a.ID(), Event: "waiting"}); err != nil {
 		t.Fatalf("notify failure must not fail the event: %v", err)
 	}
@@ -206,7 +207,7 @@ func TestAgentEvent_StatusCommittedBeforeNotifyAndOutsideLock(t *testing.T) {
 		got, _ := agents.GetByID(ctx, a.ID())
 		statusAtNotify = got.Status()
 	}}
-	eventUc := usecase.NewAgentEvent(agents, projects, sessions, notifier, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, notifier, lock, obs.Nop())
 	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: a.ID(), Event: "waiting"}); err != nil {
 		t.Fatalf("waiting event: %v", err)
 	}

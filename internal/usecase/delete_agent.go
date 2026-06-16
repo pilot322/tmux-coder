@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
+	"github.com/pilot322/tmux-coder/internal/obs"
 )
 
 const defaultSigtermTimeout = 5 * time.Second
@@ -15,10 +16,11 @@ type DeleteAgent struct {
 	tmux    AgentTmuxGateway
 	process AgentProcessGateway
 	lock    StateLock
+	log     obs.Logger
 }
 
-func NewDeleteAgent(a IAgentRepository, tmux AgentTmuxGateway, process AgentProcessGateway, l StateLock) *DeleteAgent {
-	return &DeleteAgent{agents: a, tmux: tmux, process: process, lock: l}
+func NewDeleteAgent(a IAgentRepository, tmux AgentTmuxGateway, process AgentProcessGateway, l StateLock, log obs.Logger) *DeleteAgent {
+	return &DeleteAgent{agents: a, tmux: tmux, process: process, lock: l, log: log.With("component", "delete-agent")}
 }
 
 func (uc *DeleteAgent) Execute(ctx context.Context, id int) error {
@@ -54,6 +56,7 @@ func (uc *DeleteAgent) Execute(ctx context.Context, id int) error {
 		}
 	}
 
+	uc.log.Info(ctx, "deleting agent", "agent_id", id, "pane_owned", agent.PaneOwned())
 	return uc.lock.WithWrite(func() error {
 		return uc.agents.Delete(ctx, id)
 	})

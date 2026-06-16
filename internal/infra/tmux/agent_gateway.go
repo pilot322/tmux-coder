@@ -60,6 +60,7 @@ func (g *TmuxGateway) ListPanes(ctx context.Context, sessionName string) ([]stri
 }
 
 func (g *TmuxGateway) cmd(ctx context.Context, args ...string) *exec.Cmd {
+	g.log.Debug(ctx, "tmux exec", "args", args)
 	full := append([]string{"-L", g.serverLabel}, args...)
 	return exec.CommandContext(ctx, g.binary, full...)
 }

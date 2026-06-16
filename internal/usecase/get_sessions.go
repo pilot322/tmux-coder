@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
+	"github.com/pilot322/tmux-coder/internal/obs"
 )
 
 type SessionTypeFilter int
@@ -33,10 +34,11 @@ type GetSessions struct {
 	sessions ISessionRepository
 	git      GitWorktreeGateway
 	lock     StateLock
+	log      obs.Logger
 }
 
-func NewGetSessions(p IProjectRepository, s ISessionRepository, g GitWorktreeGateway, l StateLock) *GetSessions {
-	return &GetSessions{projects: p, sessions: s, git: g, lock: l}
+func NewGetSessions(p IProjectRepository, s ISessionRepository, g GitWorktreeGateway, l StateLock, log obs.Logger) *GetSessions {
+	return &GetSessions{projects: p, sessions: s, git: g, lock: l, log: log.With("component", "get-sessions")}
 }
 
 func (uc *GetSessions) Execute(ctx context.Context, in GetSessionsInput) ([]SessionView, error) {

@@ -9,6 +9,7 @@ import (
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -73,7 +74,7 @@ func agentFixture() (*usecase.CreateAgent, *memory.MemoryAgentRepository, *memor
 	agents := memory.NewMemoryAgentRepository()
 	lock := &spyLock{}
 	gw := &fakeAgentGateway{panes: make(map[string]bool)}
-	uc := usecase.NewCreateAgent(agents, projects, sessions, gw, lock)
+	uc := usecase.NewCreateAgent(agents, projects, sessions, gw, lock, obs.Nop())
 	return uc, agents, projects, sessions, gw, lock
 }
 
@@ -260,7 +261,7 @@ func TestAgentEvent_StartedAndExited(t *testing.T) {
 		DaemonAddr: "127.0.0.1:64357",
 	})
 
-	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock, obs.Nop())
 	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "started"}); err != nil {
 		t.Fatalf("started event: %v", err)
 	}
@@ -290,7 +291,7 @@ func TestAgentEvent_BusySetsStatus(t *testing.T) {
 		DaemonAddr: "127.0.0.1:64357",
 	})
 
-	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock, obs.Nop())
 	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "busy"}); err != nil {
 		t.Fatalf("busy event: %v", err)
 	}
@@ -312,7 +313,7 @@ func TestAgentEvent_IdleSetsStatus(t *testing.T) {
 		DaemonAddr: "127.0.0.1:64357",
 	})
 
-	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock, obs.Nop())
 	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "idle"}); err != nil {
 		t.Fatalf("idle event: %v", err)
 	}
@@ -334,7 +335,7 @@ func TestAgentEvent_WaitingSetsStatus(t *testing.T) {
 		DaemonAddr: "127.0.0.1:64357",
 	})
 
-	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock, obs.Nop())
 	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "waiting"}); err != nil {
 		t.Fatalf("waiting event: %v", err)
 	}
@@ -356,7 +357,7 @@ func TestAgentEvent_StartedDoesNotDowngradeActivityButRecordsPGID(t *testing.T) 
 		DaemonAddr: "127.0.0.1:64357",
 	})
 
-	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock, obs.Nop())
 	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "busy"}); err != nil {
 		t.Fatalf("busy event: %v", err)
 	}
@@ -387,7 +388,7 @@ func TestAgentEvent_StartedFromStartingPromotesToRunningAndRecordsPGID(t *testin
 		DaemonAddr: "127.0.0.1:64357",
 	})
 
-	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock, obs.Nop())
 	pgid := 9001
 	if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "started", ChildProcessGroupID: &pgid}); err != nil {
 		t.Fatalf("started event: %v", err)
@@ -414,7 +415,7 @@ func TestAgentEvent_InvalidEvent(t *testing.T) {
 		DaemonAddr: "127.0.0.1:64357",
 	})
 
-	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock)
+	eventUc := usecase.NewAgentEvent(agents, projects, sessions, &fakeNotifier{}, lock, obs.Nop())
 	err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: result.Agent.ID(), Event: "unknown"})
 	if err == nil {
 		t.Fatal("want error for unknown event type")
@@ -436,7 +437,7 @@ func TestGetAgents_PrunesMissingPanesAndFilters(t *testing.T) {
 	gw.panes["%12"] = true
 	_, _ = agents.Create(ctx, domain.NewAgent(0, otherProject.ID(), otherSession.ID(), "opencode", "", "%12", true, domain.AgentRunning))
 
-	views, err := usecase.NewGetAgents(agents, projects, sessions, gw, lock).Execute(ctx, usecase.GetAgentsInput{ProjectID: ptrInt(p.ID())})
+	views, err := usecase.NewGetAgents(agents, projects, sessions, gw, lock, obs.Nop()).Execute(ctx, usecase.GetAgentsInput{ProjectID: ptrInt(p.ID())})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -495,7 +496,7 @@ func TestDeleteAgent_KillsOwnedPaneAndDeletesRecord(t *testing.T) {
 	gw.panes["%10"] = true
 	agent, _ := agents.Create(ctx, domain.NewAgent(0, 1, 2, "opencode", "", "%10", true, domain.AgentRunning))
 
-	if err := usecase.NewDeleteAgent(agents, gw, nil, lock).Execute(ctx, agent.ID()); err != nil {
+	if err := usecase.NewDeleteAgent(agents, gw, nil, lock, obs.Nop()).Execute(ctx, agent.ID()); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if gw.panes["%10"] {
@@ -513,7 +514,7 @@ func TestDeleteAgent_TerminatesBorrowedPaneProcessGroup(t *testing.T) {
 	agent, _ = agents.Update(ctx, agent.WithChildProcessGroupID(4242))
 	process := &fakeProcessGateway{}
 
-	if err := usecase.NewDeleteAgent(agents, gw, process, lock).Execute(ctx, agent.ID()); err != nil {
+	if err := usecase.NewDeleteAgent(agents, gw, process, lock, obs.Nop()).Execute(ctx, agent.ID()); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 	if process.pgid != 4242 {

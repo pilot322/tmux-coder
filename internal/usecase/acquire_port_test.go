@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -16,7 +17,7 @@ func TestAcquirePortDuringHookSkipsOccupiedAndIsIdempotent(t *testing.T) {
 		t.Fatal(err)
 	}
 	ports := &fakePortAvailability{occupied: map[int]bool{8000: true}}
-	uc := usecase.NewAcquirePort(nil, leases, ports, &spyLock{})
+	uc := usecase.NewAcquirePort(nil, leases, ports, &spyLock{}, obs.Nop())
 
 	first, err := uc.Execute(ctx, usecase.AcquirePortInput{HookToken: "hook-token", Key: "web", Start: 8000, End: 8002})
 	if err != nil {
@@ -45,7 +46,7 @@ func TestAcquirePortUniquenessIsPerProject(t *testing.T) {
 	if err := leases.BeginHook(ctx, "project-two", usecase.HookLeaseOwner{ProjectID: 2}); err != nil {
 		t.Fatal(err)
 	}
-	uc := usecase.NewAcquirePort(nil, leases, &fakePortAvailability{occupied: map[int]bool{}}, &spyLock{})
+	uc := usecase.NewAcquirePort(nil, leases, &fakePortAvailability{occupied: map[int]bool{}}, &spyLock{}, obs.Nop())
 
 	first, err := uc.Execute(ctx, usecase.AcquirePortInput{HookToken: "project-one", Key: "web", Start: 9000, End: 9000})
 	if err != nil {
@@ -69,7 +70,7 @@ func TestAcquirePortConcurrentHooksInSameProjectDoNotSharePort(t *testing.T) {
 	if err := leases.BeginHook(ctx, "hook-two", usecase.HookLeaseOwner{ProjectID: 7}); err != nil {
 		t.Fatal(err)
 	}
-	uc := usecase.NewAcquirePort(nil, leases, &fakePortAvailability{occupied: map[int]bool{}}, &spyLock{})
+	uc := usecase.NewAcquirePort(nil, leases, &fakePortAvailability{occupied: map[int]bool{}}, &spyLock{}, obs.Nop())
 
 	var wg sync.WaitGroup
 	ports := make(chan int, 2)

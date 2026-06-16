@@ -9,6 +9,7 @@ import (
 
 	"github.com/pilot322/tmux-coder/internal/binresolve"
 	"github.com/pilot322/tmux-coder/internal/domain"
+	"github.com/pilot322/tmux-coder/internal/obs"
 )
 
 type CreateAgentInput struct {
@@ -34,10 +35,11 @@ type CreateAgent struct {
 	sessions ISessionRepository
 	tmux     AgentTmuxGateway
 	lock     StateLock
+	log      obs.Logger
 }
 
-func NewCreateAgent(a IAgentRepository, p IProjectRepository, s ISessionRepository, tmux AgentTmuxGateway, l StateLock) *CreateAgent {
-	return &CreateAgent{agents: a, projects: p, sessions: s, tmux: tmux, lock: l}
+func NewCreateAgent(a IAgentRepository, p IProjectRepository, s ISessionRepository, tmux AgentTmuxGateway, l StateLock, log obs.Logger) *CreateAgent {
+	return &CreateAgent{agents: a, projects: p, sessions: s, tmux: tmux, lock: l, log: log.With("component", "create-agent")}
 }
 
 func (uc *CreateAgent) Execute(ctx context.Context, in CreateAgentInput) (CreateAgentResult, error) {
@@ -130,6 +132,7 @@ func (uc *CreateAgent) Execute(ctx context.Context, in CreateAgentInput) (Create
 		}
 		resultPaneID, err := uc.tmux.NewWindow(ctx, session.TmuxName(), project.FullPath(), cmd, env)
 		if err != nil {
+			uc.log.Error(ctx, "agent window create failed, deleting agent record", "agent_id", agent.ID(), "kind", in.Kind, "err", err.Error())
 			_ = uc.lock.WithWrite(func() error {
 				return uc.agents.Delete(ctx, agent.ID())
 			})
@@ -148,6 +151,7 @@ func (uc *CreateAgent) Execute(ctx context.Context, in CreateAgentInput) (Create
 		}
 	}
 
+	uc.log.Info(ctx, "agent created", "agent_id", agent.ID(), "kind", in.Kind, "session_id", in.SessionID, "pane_owned", paneOwned)
 	res := CreateAgentResult{Agent: agent, Project: project, Session: session}
 	for _, s := range sessions {
 		if s.ProjectID() == project.ID() && s.Type() == domain.MainSession {

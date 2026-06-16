@@ -8,15 +8,18 @@ import (
 	"sort"
 	"time"
 
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
 var _ usecase.WorktreeHookRunner = (*Runner)(nil)
 
-type Runner struct{}
+type Runner struct {
+	log obs.Logger
+}
 
-func NewRunner() *Runner {
-	return &Runner{}
+func NewRunner(log obs.Logger) *Runner {
+	return &Runner{log: log.With("component", "hookexec")}
 }
 
 func (r *Runner) Run(ctx context.Context, req usecase.WorktreeHookRequest) (usecase.WorktreeHookResult, error) {
@@ -27,13 +30,18 @@ func (r *Runner) Run(ctx context.Context, req usecase.WorktreeHookRequest) (usec
 	runCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
+	r.log.Debug(ctx, "running worktree hook", "script", req.ScriptPath, "dir", req.WorkingDir, "timeout", timeout.String())
 	cmd := exec.CommandContext(runCtx, req.ScriptPath)
 	cmd.Dir = req.WorkingDir
 	cmd.Env = append(os.Environ(), envMapToList(req.Env)...)
 	output, err := cmd.CombinedOutput()
 	result := usecase.WorktreeHookResult{Output: string(output)}
 	if runCtx.Err() == context.DeadlineExceeded {
+		r.log.Error(ctx, "worktree hook timed out", "script", req.ScriptPath, "timeout", timeout.String())
 		return result, fmt.Errorf("hook timed out after %s", timeout)
+	}
+	if err != nil {
+		r.log.Error(ctx, "worktree hook failed", "script", req.ScriptPath, "err", err.Error())
 	}
 	return result, err
 }
