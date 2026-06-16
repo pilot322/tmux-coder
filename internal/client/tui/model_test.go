@@ -480,9 +480,14 @@ func TestModelAgentsViewRendersAgentRows(t *testing.T) {
 	})
 	m = press(m, runes("3"))
 	view := m.View()
-	for _, want := range []string{"claude · reviewer", "[running]", "API / api-main"} {
+	for _, want := range []string{"● reviewer · api-main"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("agents view missing %q: %q", want, view)
+		}
+	}
+	for _, notWant := range []string{"claude ·", "[running]", "API /"} {
+		if strings.Contains(view, notWant) {
+			t.Fatalf("agents view should not contain %q: %q", notWant, view)
 		}
 	}
 }

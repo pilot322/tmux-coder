@@ -589,25 +589,15 @@ func (m Model) agentRowLabel(a httpclient.Agent) string {
 	if name == "" {
 		name = fmt.Sprintf("agent-%d", a.ID)
 	}
-	label := a.Kind + " · " + name
-	if a.Status != "" {
-		label += " " + agentStatusStyle(a.Status).Render("["+a.Status+"]")
-	}
-	return label + "  " + mutedStyle.Render(m.agentContext(a))
+	icon := agentStatusStyle(a.Status).Render(agentStatusIcon(a.Status))
+	return icon + " " + name + mutedStyle.Render(" · "+m.agentSession(a))
 }
 
-func (m Model) agentContext(a httpclient.Agent) string {
-	project := m.projectByID(a.ProjectID).Title
-	if project == "" {
-		project = a.Project.Title
-	}
-	session := ""
+func (m Model) agentSession(a httpclient.Agent) string {
 	if s, ok := m.sessionByID(a.SessionID); ok {
-		session = sessionName(s)
-	} else {
-		session = sessionName(a.Session)
+		return sessionName(s)
 	}
-	return project + " / " + session
+	return sessionName(a.Session)
 }
 
 func pluralize(n int, word string) string {
@@ -1388,6 +1378,26 @@ func agentLabel(a httpclient.Agent) string {
 		return name
 	}
 	return agentStatusStyle(a.Status).Render(fmt.Sprintf("%s [%s]", name, a.Status))
+}
+
+// agentStatusIcon maps an agent status to a compact glyph shown at the start of
+// its row. The glyphs share one geometric family so they read as a set; color
+// (via agentStatusStyle) carries the urgency.
+func agentStatusIcon(status string) string {
+	switch status {
+	case "waiting":
+		return "◆"
+	case "busy":
+		return "◐"
+	case "idle":
+		return "○"
+	case "running":
+		return "●"
+	case "starting":
+		return "◌"
+	default:
+		return "·"
+	}
 }
 
 // agentStatusStyle colors an agent label by status. Activity that wants the
