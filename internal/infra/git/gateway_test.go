@@ -1,11 +1,37 @@
 package git
 
 import (
+	"context"
+	"os/exec"
 	"reflect"
 	"testing"
 
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
+
+func TestGatewayLogsDebugLinePerCommand(t *testing.T) {
+	repo := t.TempDir()
+	if out, err := exec.Command("git", "-C", repo, "init").CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v: %s", err, out)
+	}
+
+	rec := obs.Recording()
+	g := NewGateway(rec)
+	if _, err := g.ListWorktrees(context.Background(), repo); err != nil {
+		t.Fatal(err)
+	}
+
+	var logged bool
+	for _, line := range rec.Records() {
+		if line["level"] == "DEBUG" && line["msg"] == "git exec" && line["component"] == "git" {
+			logged = true
+		}
+	}
+	if !logged {
+		t.Fatalf("expected a DEBUG git exec line tagged component=git, got %v", rec.Records())
+	}
+}
 
 func TestParseWorktreePorcelain(t *testing.T) {
 	out := "" +

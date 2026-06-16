@@ -8,10 +8,11 @@ import (
 	"time"
 
 	"github.com/pilot322/tmux-coder/internal/infra/process"
+	"github.com/pilot322/tmux-coder/internal/obs"
 )
 
 func TestTerminateProcessGroupIgnoresInvalidPGID(t *testing.T) {
-	if err := process.NewProcessGateway().TerminateProcessGroup(context.Background(), 0, time.Millisecond); err != nil {
+	if err := process.NewProcessGateway(obs.Nop()).TerminateProcessGroup(context.Background(), 0, time.Millisecond); err != nil {
 		t.Fatalf("TerminateProcessGroup: %v", err)
 	}
 }
@@ -28,7 +29,7 @@ func TestTerminateProcessGroupTerminatesChildGroup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if err := process.NewProcessGateway().TerminateProcessGroup(context.Background(), pgid, 50*time.Millisecond); err != nil {
+	if err := process.NewProcessGateway(obs.Nop()).TerminateProcessGroup(context.Background(), pgid, 50*time.Millisecond); err != nil {
 		_ = cmd.Process.Kill()
 		t.Fatalf("TerminateProcessGroup: %v", err)
 	}

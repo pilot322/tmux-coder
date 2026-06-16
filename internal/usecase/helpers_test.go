@@ -9,6 +9,7 @@ import (
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -135,10 +136,16 @@ func (g *fakeGateway) SwitchClients(ctx context.Context, from, to string) error 
 // createFixture wires a CreateProject against real in-memory repos, the spy
 // lock and the fake gateway, returning all of them for assertions.
 func createFixture() (*usecase.CreateProject, *memory.MemoryProjectRepository, *memory.MemorySessionRepository, *fakeGateway, *spyLock) {
+	return createFixtureWithLog(obs.Nop())
+}
+
+// createFixtureWithLog is createFixture with an explicit logger, so a test can
+// pass obs.Recording() and assert on the milestone lines the usecase emits.
+func createFixtureWithLog(log obs.Logger) (*usecase.CreateProject, *memory.MemoryProjectRepository, *memory.MemorySessionRepository, *fakeGateway, *spyLock) {
 	projects := memory.NewMemoryProjectRepository()
 	sessions := memory.NewMemorySessionRepository()
 	lock := &spyLock{}
 	gw := newFakeGateway(lock)
-	uc := usecase.NewCreateProject(projects, sessions, gw, lock, domain.DefaultDaemonConfig())
+	uc := usecase.NewCreateProject(projects, sessions, gw, lock, domain.DefaultDaemonConfig(), log)
 	return uc, projects, sessions, gw, lock
 }

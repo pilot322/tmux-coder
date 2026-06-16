@@ -8,6 +8,7 @@ import (
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -32,7 +33,7 @@ func TestReconcilePruneReparentsWorktreeChildrenAndCascadesSecondaries(t *testin
 	frontendPath := filepath.Join(base, "api.feat1-frontend")
 	git := &fakeWorktreeGit{paths: map[string]bool{backendPath: true, frontendPath: true}, events: &events}
 	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
-	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, &fakeWorktreeHookRunner{events: &events}, memory.NewMemoryResourceLeaseRepository())
+	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, &fakeWorktreeHookRunner{events: &events}, memory.NewMemoryResourceLeaseRepository(), obs.Nop())
 
 	var projectID int
 	var main, feat1, backend, frontend, secondary *domain.Session

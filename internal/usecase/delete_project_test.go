@@ -7,6 +7,7 @@ import (
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -19,10 +20,10 @@ func deleteFixture(ctx context.Context) (*usecase.DeleteProject, *memory.MemoryP
 	lock := &spyLock{}
 	gw := newFakeGateway(lock)
 
-	create := usecase.NewCreateProject(projects, sessions, gw, lock, domain.DefaultDaemonConfig())
+	create := usecase.NewCreateProject(projects, sessions, gw, lock, domain.DefaultDaemonConfig(), obs.Nop())
 	res, _ := create.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api"})
 
-	del := usecase.NewDeleteProject(projects, sessions, agents, gw, lock)
+	del := usecase.NewDeleteProject(projects, sessions, agents, gw, lock, obs.Nop())
 	return del, projects, agents, gw, res.Project.ID(), res.MainTmuxSessionName
 }
 

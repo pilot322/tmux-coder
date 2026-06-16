@@ -14,6 +14,7 @@ import (
 
 	"github.com/pilot322/tmux-coder/internal/adapter/httpapi"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -142,16 +143,16 @@ func newServerWithGit(git *stubGit) *http.ServeMux {
 	gw := &stubGateway{exists: make(map[string]bool)}
 	agentGw := &stubAgentGateway{panes: make(map[string]bool)}
 
-	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gw, state, state.Config())
-	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state)
-	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), state.Agents(), gw, state)
-	createSession := usecase.NewCreateSession(state.Projects(), state.Sessions(), gw, git, state)
-	listSessions := usecase.NewGetSessions(state.Projects(), state.Sessions(), git, state)
-	deleteSession := usecase.NewDeleteSession(state.Sessions(), state.Agents(), gw, git, state)
-	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state)
-	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), agentGw, state)
-	agentEvent := usecase.NewAgentEvent(state.Agents(), state)
-	deleteAgent := usecase.NewDeleteAgent(state.Agents(), agentGw, nil, state)
+	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gw, state, state.Config(), obs.Nop())
+	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state, obs.Nop())
+	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), state.Agents(), gw, state, obs.Nop())
+	createSession := usecase.NewCreateSession(state.Projects(), state.Sessions(), gw, git, state, obs.Nop())
+	listSessions := usecase.NewGetSessions(state.Projects(), state.Sessions(), git, state, obs.Nop())
+	deleteSession := usecase.NewDeleteSession(state.Sessions(), state.Agents(), gw, git, state, obs.Nop())
+	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
+	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
+	agentEvent := usecase.NewAgentEvent(state.Agents(), state, obs.Nop())
+	deleteAgent := usecase.NewDeleteAgent(state.Agents(), agentGw, nil, state, obs.Nop())
 
 	return httpapi.NewRouter(
 		httpapi.NewProjectController(create, list, del),
@@ -166,17 +167,17 @@ func newResourceServer(ports *stubPortAvailability) (*http.ServeMux, *memory.Mem
 	git := &stubGit{paths: make(map[string]bool)}
 	agentGw := &stubAgentGateway{panes: make(map[string]bool)}
 
-	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gw, state, state.Config())
-	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state)
-	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), state.Agents(), gw, state)
-	createSession := usecase.NewCreateSession(state.Projects(), state.Sessions(), gw, git, state)
-	listSessions := usecase.NewGetSessions(state.Projects(), state.Sessions(), git, state)
-	deleteSession := usecase.NewDeleteSession(state.Sessions(), state.Agents(), gw, git, state)
-	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state)
-	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), agentGw, state)
-	agentEvent := usecase.NewAgentEvent(state.Agents(), state)
-	deleteAgent := usecase.NewDeleteAgent(state.Agents(), agentGw, nil, state)
-	acquirePort := usecase.NewAcquirePort(state.Sessions(), state.Leases(), ports, state)
+	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gw, state, state.Config(), obs.Nop())
+	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state, obs.Nop())
+	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), state.Agents(), gw, state, obs.Nop())
+	createSession := usecase.NewCreateSession(state.Projects(), state.Sessions(), gw, git, state, obs.Nop())
+	listSessions := usecase.NewGetSessions(state.Projects(), state.Sessions(), git, state, obs.Nop())
+	deleteSession := usecase.NewDeleteSession(state.Sessions(), state.Agents(), gw, git, state, obs.Nop())
+	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
+	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
+	agentEvent := usecase.NewAgentEvent(state.Agents(), state, obs.Nop())
+	deleteAgent := usecase.NewDeleteAgent(state.Agents(), agentGw, nil, state, obs.Nop())
+	acquirePort := usecase.NewAcquirePort(state.Sessions(), state.Leases(), ports, state, obs.Nop())
 
 	return httpapi.NewRouter(
 		httpapi.NewProjectController(create, list, del),

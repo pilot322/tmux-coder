@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/pilot322/tmux-coder/internal/infra/hookexec"
+	"github.com/pilot322/tmux-coder/internal/obs"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -25,7 +26,7 @@ func TestRunnerInvokesExecutableWithWorkingDirAndEnv(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	result, err := hookexec.NewRunner().Run(context.Background(), usecase.WorktreeHookRequest{
+	result, err := hookexec.NewRunner(obs.Nop()).Run(context.Background(), usecase.WorktreeHookRequest{
 		ScriptPath: scriptPath,
 		WorkingDir: worktree,
 		Timeout:    time.Second,
