@@ -78,3 +78,5 @@ opencode_plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugin"
 mkdir -p "$opencode_plugin_dir"
 cp "$root_dir/integrations/opencode/tmux-coder.js" "$opencode_plugin_dir/tmux-coder.js"
 echo "installed OpenCode plugin → ${opencode_plugin_dir}/tmux-coder.js"
+
+"${gobin}/tmux-coder" install-claude-hooks

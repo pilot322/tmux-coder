@@ -72,7 +72,7 @@ func runClient(ctx context.Context, args []string, getenv func(string) string, g
 	if len(args) >= 1 && args[0] == "acquire-port" {
 		return runAcquirePort(ctx, args[1:], getenv, api, os.Stdout)
 	}
-	return fmt.Errorf("usage: tmux-coder [open|o|new|n|acquire-port]")
+	return fmt.Errorf("usage: tmux-coder [open|o|new|n|acquire-port|install-claude-hooks]")
 }
 
 func runAcquirePort(ctx context.Context, args []string, getenv func(string) string, api acquirePortAPI, out io.Writer) error {

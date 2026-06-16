@@ -61,7 +61,7 @@ The single canonical, agent-agnostic state of a **TC Agent** in the **Agent Regi
 _Avoid_: Agent state, activity, mode
 
 **Event**:
-A notification sent to the **Daemon** about a **TC Agent**, carrying an event type, agent ID, and optional payload. Two sources emit them: the `tmux-coder agent-wrapper` subcommand reports lifecycle events (`started`, `exited`) derived from the OS process, and an **Agent Kind**'s own integration (e.g. the OpenCode plugin) reports activity events (`busy`, `idle`, `waiting`) translated from that kind's native signals. Every event type names a target **Agent Status**; the Daemon applies it under a fixed conflict policy (terminal `exited` wins; `started` records process identity but never downgrades a richer status).
+A notification sent to the **Daemon** about a **TC Agent**, carrying an event type, agent ID, and optional payload. Two sources emit them: the `tmux-coder agent-wrapper` subcommand reports lifecycle events (`started`, `exited`) derived from the OS process, and an **Agent Kind**'s own integration reports activity events (`busy`, `idle`, `waiting`) translated from that kind's native signals — the OpenCode plugin POSTs them directly, while Claude Code runs hooks that shell out to `tmux-coder agent-event <status>`. Every event type names a target **Agent Status**; the Daemon applies it under a fixed conflict policy (terminal `exited` wins; `started` records process identity but never downgrades a richer status).
 _Avoid_: Message, signal, notification
 
 **Reconciliation**:
