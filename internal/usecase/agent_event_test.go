@@ -65,6 +65,9 @@ func TestAgentEvent_NotifiesOnBusyToWaiting(t *testing.T) {
 	if got.Body != "api · api.main" {
 		t.Fatalf("body = %q, want %q", got.Body, "api · api.main")
 	}
+	if !got.Sound {
+		t.Fatalf("expected the notification to request a sound")
+	}
 }
 
 func TestAgentEvent_NotifiesOnBusyToIdle(t *testing.T) {
@@ -91,6 +94,9 @@ func TestAgentEvent_NotifiesOnBusyToIdle(t *testing.T) {
 	}
 	if got.Body != "api · api.main" {
 		t.Fatalf("body = %q, want %q", got.Body, "api · api.main")
+	}
+	if !got.Sound {
+		t.Fatalf("expected the notification to request a sound")
 	}
 }
 

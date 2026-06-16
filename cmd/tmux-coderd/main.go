@@ -35,7 +35,7 @@ func main() {
 	hooks := hookexec.NewRunner()
 	ports := netport.NewChecker()
 	processGw := processinfra.NewProcessGateway()
-	notifier := desktopnotify.NewNotifier()
+	notifier := desktopnotify.NewNotifier(desktopnotify.SoundEnabled(os.Getenv))
 
 	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gateway, state, state.Config())
 	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state)

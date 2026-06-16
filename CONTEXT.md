@@ -65,7 +65,7 @@ A notification sent to the **Daemon** about a **TC Agent**, carrying an event ty
 _Avoid_: Message, signal, notification
 
 **Desktop Notification**:
-An outbound, user-facing OS alert the **Daemon** raises to the host desktop when a **TC Agent** leaves `busy` for `waiting` or `idle`. It is the mirror image of an **Event**: an Event flows *in* to the Daemon, a Desktop Notification flows *out* to the user. Platform-specific and best-effort — delivered only where the host supports it, and never allowed to block or fail the handling of the **Event** that triggered it.
+An outbound, user-facing OS alert the **Daemon** raises to the host desktop when a **TC Agent** leaves `busy` for `waiting` or `idle`. It is the mirror image of an **Event**: an Event flows *in* to the Daemon, a Desktop Notification flows *out* to the user. Platform-specific and best-effort — delivered only where the host supports it, and never allowed to block or fail the handling of the **Event** that triggered it. Optionally carries an audible cue (on by default, muted by `TMUX_CODER_NOTIFY_SOUND=0`), itself best-effort and Linux-only.
 _Avoid_: Event, alert, toast, message
 
 **Reconciliation**:
