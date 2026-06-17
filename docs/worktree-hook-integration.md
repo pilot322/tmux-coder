@@ -47,8 +47,8 @@ Add a `[worktree]` section:
 
 ```toml
 [worktree]
-on-create-script  = "scripts/tmux-coder-setup.sh"   # relative to project root
-on-create-timeout = "60s"                            # optional; default 2m
+on-create-script  = ".tmux-coder/setup-worktree.sh"   # relative to project root
+on-create-timeout = "60s"                             # optional; default 2m
 ```
 
 Rules enforced by tmux-coder (a violation fails worktree creation loudly):
@@ -184,8 +184,9 @@ api_port=$(tmux-coder acquire-port api --start 4000 --end 4099)
 
 ## Step 5 — Write the hook
 
-Putting it together. The hook lives at the path you declared (here
-`scripts/tmux-coder-setup.sh`), is executable, and runs in the new worktree:
+Putting it together. Keep the hook with the rest of your tmux-coder project
+configuration (here `.tmux-coder/setup-worktree.sh`), make it executable, and it
+runs in the new worktree:
 
 ```sh
 #!/usr/bin/env bash
@@ -251,7 +252,8 @@ If you provision external state in the hook, plan its teardown:
 
 ## Summary
 
-1. Declare `[worktree].on-create-script` in `.tmux-coder/.tmux-coder.toml`.
+1. Declare `[worktree].on-create-script` in `.tmux-coder/.tmux-coder.toml`, and
+   keep the setup script under `./.tmux-coder`.
 2. **Make every shared resource configurable from `.env`** — database name/schema,
    ports, cache prefixes, queue/topic names, compose project name — and ensure
    *all* tooling reads those same values.
