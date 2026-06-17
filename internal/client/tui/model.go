@@ -720,7 +720,7 @@ func (m Model) writeSessionLine(b *strings.Builder, rows []httpclient.Session, s
 	} else {
 		line = "  " + prefix + content
 	}
-	b.WriteString("  " + line + "\n")
+	b.WriteString(line + "\n")
 }
 
 func (m Model) writeAgentUnderSession(b *strings.Builder, rows []httpclient.Session, s httpclient.Session, a httpclient.Agent, selected, isLastChild bool) {
@@ -730,7 +730,7 @@ func (m Model) writeAgentUnderSession(b *strings.Builder, rows []httpclient.Sess
 	} else {
 		line = "  " + line
 	}
-	b.WriteString("  " + line + "\n")
+	b.WriteString(line + "\n")
 }
 
 func projectHeaderLine(p httpclient.Project) string {
@@ -1916,7 +1916,7 @@ func (m Model) sessionTreePrefix(rows []httpclient.Session, s httpclient.Session
 	} else {
 		b.WriteString("└─ ")
 	}
-	b.WriteString(sessionIcon(s) + " ")
+	b.WriteString(sessionIcon(s) + "  ")
 	return b.String()
 }
 
@@ -1935,7 +1935,7 @@ func (m Model) agentTreePrefix(rows []httpclient.Session, session httpclient.Ses
 	} else {
 		b.WriteString("├─ ")
 	}
-	b.WriteString(" ")
+	b.WriteString("  ")
 	return b.String()
 }
 

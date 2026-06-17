@@ -5,10 +5,10 @@ root_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 module="github.com/pilot322/tmux-coder"
 
 usage() {
-  echo "usage: ./dev build client|daemon" >&2
+  echo "usage: ./dev build [client|daemon]" >&2
 }
 
-if [[ $# -ne 1 ]]; then
+if [[ $# -gt 1 ]]; then
   usage
   exit 2
 fi
@@ -32,12 +32,26 @@ echo "  bin/ dev build → port ${dev_port}, tmux server ${dev_label}" >&2
 
 mkdir -p "$root_dir/bin"
 
-case "$1" in
+build_client() {
+  go build -ldflags "$ldflags" -o "$root_dir/bin/tmux-coder" "$root_dir/cmd/tmux-coder"
+  printf '%s\n' "$root_dir/bin/tmux-coder"
+}
+
+build_daemon() {
+  go build -ldflags "$ldflags" -o "$root_dir/bin/tmux-coderd" "$root_dir/cmd/tmux-coderd"
+  printf '%s\n' "$root_dir/bin/tmux-coderd"
+}
+
+case "${1:-all}" in
+  all)
+    build_client
+    build_daemon
+    ;;
   client)
-    go build -ldflags "$ldflags" -o "$root_dir/bin/tmux-coder" "$root_dir/cmd/tmux-coder"
+    build_client
     ;;
   daemon)
-    go build -ldflags "$ldflags" -o "$root_dir/bin/tmux-coderd" "$root_dir/cmd/tmux-coderd"
+    build_daemon
     ;;
   *)
     usage

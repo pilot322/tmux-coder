@@ -7,7 +7,7 @@ usage() {
   cat <<'USAGE'
 usage:
   ./dev install
-  ./dev build client|daemon
+  ./dev build [client|daemon]
   ./dev path client|daemon
   ./dev kill [-a]
   ./dev completion bash
