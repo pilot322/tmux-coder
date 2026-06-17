@@ -7,7 +7,9 @@ package desktopnotify
 
 import (
 	"context"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -32,10 +34,14 @@ const notifyTimeout = 2 * time.Second
 // where notify-send's own sound hints are commonly ignored.
 const soundPlayer = "paplay"
 
-// soundFile is the audible cue. It is part of the freedesktop sound theme
+// defaultSoundFile is the fallback audible cue. It is part of the freedesktop sound theme
 // (sound-theme-freedesktop), present on most desktops; if absent, paplay fails
 // and the error is swallowed like any other delivery failure.
-const soundFile = "/usr/share/sounds/freedesktop/stereo/message.oga"
+const defaultSoundFile = "/usr/share/sounds/freedesktop/stereo/message.oga"
+
+const defaultSoundName = "notification"
+
+var soundExtensions = []string{".oga", ".ogg", ".wav", ".flac", ".aiff", ".aif", ".au", ".mp3"}
 
 // EnvSound toggles the audible cue that accompanies a Desktop Notification.
 // Sound is on by default; set TMUX_CODER_NOTIFY_SOUND to 0/false/off/no to mute
@@ -63,6 +69,7 @@ type Notifier struct {
 	// config or no player resolved on PATH, in which case Notify only shows the
 	// visual notification.
 	soundEnabled bool
+	soundFiles   map[string]string
 }
 
 // NewNotifier returns a notify-send-backed Notifier when running on Linux with
@@ -71,10 +78,10 @@ type Notifier struct {
 // covers a Linux host without libnotify installed. soundEnabled requests the
 // audible cue; it is honoured only when paplay also resolves on PATH.
 func NewNotifier(soundEnabled bool) usecase.Notifier {
-	return newNotifier(runtime.GOOS, exec.LookPath, exec.CommandContext, soundEnabled)
+	return newNotifier(runtime.GOOS, exec.LookPath, exec.CommandContext, soundEnabled, SoundFiles(os.Getenv, fileExists))
 }
 
-func newNotifier(goos string, lookPath func(string) (string, error), commandContext func(ctx context.Context, name string, args ...string) *exec.Cmd, soundEnabled bool) usecase.Notifier {
+func newNotifier(goos string, lookPath func(string) (string, error), commandContext func(ctx context.Context, name string, args ...string) *exec.Cmd, soundEnabled bool, soundFiles map[string]string) usecase.Notifier {
 	if goos != "linux" {
 		return NoopNotifier{}
 	}
@@ -89,7 +96,40 @@ func newNotifier(goos string, lookPath func(string) (string, error), commandCont
 			sound = false
 		}
 	}
-	return &Notifier{CommandContext: commandContext, soundEnabled: sound}
+	return &Notifier{CommandContext: commandContext, soundEnabled: sound, soundFiles: soundFiles}
+}
+
+func fileExists(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && !info.IsDir()
+}
+
+// SoundFiles discovers user-configured sound cues in ~/.tmux-coder/sounds. A
+// cue named "agent-idle" may be supplied as agent-idle.oga, agent-idle.wav, etc.
+// "notification" is the generic fallback for any named cue without its own file.
+func SoundFiles(getenv func(string) string, exists func(string) bool) map[string]string {
+	home := strings.TrimSpace(getenv("HOME"))
+	if home == "" {
+		return nil
+	}
+	dir := filepath.Join(home, ".tmux-coder", "sounds")
+	files := make(map[string]string)
+	for _, name := range []string{"agent-idle", "agent-waiting", defaultSoundName} {
+		if path := firstExistingSound(dir, name, exists); path != "" {
+			files[name] = path
+		}
+	}
+	return files
+}
+
+func firstExistingSound(dir, name string, exists func(string) bool) string {
+	for _, ext := range soundExtensions {
+		path := filepath.Join(dir, name+ext)
+		if exists(path) {
+			return path
+		}
+	}
+	return ""
 }
 
 // Notify shells out to notify-send and, when the message requests it and sound
@@ -108,6 +148,7 @@ func (n *Notifier) Notify(ctx context.Context, msg usecase.Notification) error {
 	defer cancel()
 
 	if msg.Sound && n.soundEnabled {
+		soundFile := n.soundFile(msg.SoundName)
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {
@@ -121,6 +162,19 @@ func (n *Notifier) Notify(ctx context.Context, msg usecase.Notification) error {
 
 	cmd := n.CommandContext(ctx, "notify-send", "-u", urgencyFlag(msg.Urgency), "-a", "tmux-coder", msg.Title, msg.Body)
 	return cmd.Run()
+}
+
+func (n *Notifier) soundFile(name string) string {
+	if name == "" {
+		name = defaultSoundName
+	}
+	if path := n.soundFiles[name]; path != "" {
+		return path
+	}
+	if path := n.soundFiles[defaultSoundName]; path != "" {
+		return path
+	}
+	return defaultSoundFile
 }
 
 func urgencyFlag(u usecase.NotificationUrgency) string {

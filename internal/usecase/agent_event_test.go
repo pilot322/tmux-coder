@@ -70,6 +70,9 @@ func TestAgentEvent_NotifiesOnBusyToWaiting(t *testing.T) {
 	if !got.Sound {
 		t.Fatalf("expected the notification to request a sound")
 	}
+	if got.SoundName != "agent-waiting" {
+		t.Fatalf("sound name = %q, want agent-waiting", got.SoundName)
+	}
 }
 
 func TestAgentEvent_NotifiesOnBusyToIdle(t *testing.T) {
@@ -99,6 +102,9 @@ func TestAgentEvent_NotifiesOnBusyToIdle(t *testing.T) {
 	}
 	if !got.Sound {
 		t.Fatalf("expected the notification to request a sound")
+	}
+	if got.SoundName != "agent-idle" {
+		t.Fatalf("sound name = %q, want agent-idle", got.SoundName)
 	}
 }
 

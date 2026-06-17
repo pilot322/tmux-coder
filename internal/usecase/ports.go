@@ -138,7 +138,8 @@ type Notification struct {
 	// hint, not a guarantee: the mechanism plays it best-effort, only where a
 	// player is available and sound is enabled, and never fails delivery if it
 	// cannot.
-	Sound bool
+	Sound     bool
+	SoundName string
 }
 
 // Notifier delivers a Desktop Notification to the host. It is generic — the

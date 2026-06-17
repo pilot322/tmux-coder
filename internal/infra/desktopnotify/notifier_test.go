@@ -71,11 +71,39 @@ func TestNotifierPlaysSoundWhenRequestedAndEnabled(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected the sound player to be invoked, argvs = %v", rec.argvs)
 	}
-	if want := []string{soundPlayer, soundFile}; !reflect.DeepEqual(got, want) {
+	if want := []string{soundPlayer, defaultSoundFile}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sound argv = %v, want %v", got, want)
 	}
 	if _, ok := rec.find("notify-send"); !ok {
 		t.Fatalf("expected notify-send to still be invoked alongside the sound")
+	}
+}
+
+func TestNotifierUsesConfiguredNamedSound(t *testing.T) {
+	rec := &recorder{}
+	n := &Notifier{CommandContext: rec.commandContext, soundEnabled: true, soundFiles: map[string]string{"agent-idle": "/home/me/.tmux-coder/sounds/agent-idle.oga"}}
+	n.Notify(context.Background(), usecase.Notification{Title: "t", Body: "b", Sound: true, SoundName: "agent-idle"})
+
+	got, ok := rec.find(soundPlayer)
+	if !ok {
+		t.Fatalf("expected the sound player to be invoked, argvs = %v", rec.argvs)
+	}
+	if want := []string{soundPlayer, "/home/me/.tmux-coder/sounds/agent-idle.oga"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sound argv = %v, want %v", got, want)
+	}
+}
+
+func TestNotifierFallsBackToConfiguredNotificationSound(t *testing.T) {
+	rec := &recorder{}
+	n := &Notifier{CommandContext: rec.commandContext, soundEnabled: true, soundFiles: map[string]string{defaultSoundName: "/home/me/.tmux-coder/sounds/notification.wav"}}
+	n.Notify(context.Background(), usecase.Notification{Title: "t", Body: "b", Sound: true, SoundName: "missing"})
+
+	got, ok := rec.find(soundPlayer)
+	if !ok {
+		t.Fatalf("expected the sound player to be invoked, argvs = %v", rec.argvs)
+	}
+	if want := []string{soundPlayer, "/home/me/.tmux-coder/sounds/notification.wav"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sound argv = %v, want %v", got, want)
 	}
 }
 
@@ -115,14 +143,14 @@ func TestNewNotifierSelection(t *testing.T) {
 		return "/usr/bin/" + name, nil
 	}
 
-	if _, isNoop := newNotifier("linux", missing, exec.CommandContext, true).(NoopNotifier); !isNoop {
+	if _, isNoop := newNotifier("linux", missing, exec.CommandContext, true, nil).(NoopNotifier); !isNoop {
 		t.Fatalf("missing notify-send should select the noop notifier")
 	}
-	if _, isNoop := newNotifier("darwin", ok, exec.CommandContext, true).(NoopNotifier); !isNoop {
+	if _, isNoop := newNotifier("darwin", ok, exec.CommandContext, true, nil).(NoopNotifier); !isNoop {
 		t.Fatalf("non-linux host should select the noop notifier")
 	}
 
-	n, isReal := newNotifier("linux", ok, exec.CommandContext, true).(*Notifier)
+	n, isReal := newNotifier("linux", ok, exec.CommandContext, true, nil).(*Notifier)
 	if !isReal {
 		t.Fatalf("linux with notify-send present should select the real notifier")
 	}
@@ -130,14 +158,36 @@ func TestNewNotifierSelection(t *testing.T) {
 		t.Fatalf("sound requested with a player present should be enabled")
 	}
 
-	muted, _ := newNotifier("linux", onlyNotifySend, exec.CommandContext, true).(*Notifier)
+	muted, _ := newNotifier("linux", onlyNotifySend, exec.CommandContext, true, nil).(*Notifier)
 	if muted == nil || muted.soundEnabled {
 		t.Fatalf("a missing sound player should mute sound but keep the real notifier")
 	}
 
-	off, _ := newNotifier("linux", ok, exec.CommandContext, false).(*Notifier)
+	off, _ := newNotifier("linux", ok, exec.CommandContext, false, nil).(*Notifier)
 	if off == nil || off.soundEnabled {
 		t.Fatalf("sound disabled by config should not be enabled even with a player present")
+	}
+}
+
+func TestSoundFilesDiscoversConfiguredSounds(t *testing.T) {
+	home := "/home/me"
+	existing := map[string]bool{
+		"/home/me/.tmux-coder/sounds/agent-idle.oga":   true,
+		"/home/me/.tmux-coder/sounds/notification.wav": true,
+	}
+	got := SoundFiles(func(key string) string {
+		if key == "HOME" {
+			return home
+		}
+		return ""
+	}, func(path string) bool { return existing[path] })
+
+	want := map[string]string{
+		"agent-idle":     "/home/me/.tmux-coder/sounds/agent-idle.oga",
+		defaultSoundName: "/home/me/.tmux-coder/sounds/notification.wav",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SoundFiles() = %v, want %v", got, want)
 	}
 }
 

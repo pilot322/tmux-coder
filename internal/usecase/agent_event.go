@@ -135,9 +135,9 @@ func notificationFor(old, new domain.AgentStatus, name, project, session string)
 	// audible is the mechanism's call (player present, sound enabled).
 	switch new {
 	case domain.AgentWaiting:
-		return Notification{Title: name + " needs input", Body: body, Urgency: UrgencyCritical, Sound: true}, true
+		return Notification{Title: name + " needs input", Body: body, Urgency: UrgencyCritical, Sound: true, SoundName: "agent-waiting"}, true
 	case domain.AgentIdle:
-		return Notification{Title: name + " is idle", Body: body, Urgency: UrgencyNormal, Sound: true}, true
+		return Notification{Title: name + " is idle", Body: body, Urgency: UrgencyNormal, Sound: true, SoundName: "agent-idle"}, true
 	default:
 		return Notification{}, false
 	}
