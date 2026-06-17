@@ -489,114 +489,137 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) View() string {
-	var b strings.Builder
-	b.WriteString(m.tabStrip())
-	b.WriteString("\n")
+	var body strings.Builder
 
 	if m.loading {
-		b.WriteString("Loading...\n")
+		body.WriteString("Loading...\n")
 	} else if m.filtering {
-		m.writeFilterView(&b)
+		m.writeFilterView(&body)
 	} else {
 		switch m.tab {
 		case tabProjects:
-			m.writeProjectsView(&b)
+			m.writeProjectsView(&body)
 		case tabSessions:
-			m.writeSessionsView(&b, false)
+			m.writeSessionsView(&body, false)
 		case tabAgents:
-			m.writeAgentsView(&b)
+			m.writeAgentsView(&body)
 		default:
-			m.writeSessionsView(&b, true)
+			m.writeSessionsView(&body, true)
 		}
 	}
 
+	var footer strings.Builder
 	if m.confirm {
 		switch m.confirmDelete {
 		case deleteProject:
-			b.WriteString("\nDelete project? y/n\n")
+			footer.WriteString("Delete project? y/n\n")
 		case deleteWorktreeSession:
-			b.WriteString("\nDestroy worktree session and worktree? y/n\n")
+			footer.WriteString("Destroy worktree session and worktree? y/n\n")
 		case deleteAgent:
-			b.WriteString("\nDelete agent? y/n\n")
+			footer.WriteString("Delete agent? y/n\n")
 		case deleteSecondarySession:
 			policy := "cascade"
 			if s, ok := m.sessionByID(m.confirmDeleteID); ok && s.OnDelete != "" {
 				policy = s.OnDelete
 			}
-			b.WriteString("\nDelete secondary session using " + policy + " policy? y/n\n")
+			footer.WriteString("Delete secondary session using " + policy + " policy? y/n\n")
 		}
 	}
 	if m.creatingSecondary {
 		if m.secondaryStep == secondaryPromptPreferredName {
-			b.WriteString("\nPreferred name (optional): " + m.secondaryName + "\n")
+			footer.WriteString("Preferred name (optional): " + m.secondaryName + "\n")
 		} else {
-			b.WriteString("\nRelative working directory: " + m.secondaryRelwd + "\n")
+			footer.WriteString("Relative working directory: " + m.secondaryRelwd + "\n")
 		}
 	}
 	if m.creatingWorktree {
-		b.WriteString("\nNew worktree branch: " + m.worktreeBranch + "\n")
+		footer.WriteString("New worktree branch: " + m.worktreeBranch + "\n")
 	}
 	if m.creatingWorktreeFromBase {
 		if m.worktreeFromBaseStep == worktreeBaseStepBaseRef {
-			b.WriteString("\nBase ref: " + m.worktreeFromBaseRef + "\n")
+			footer.WriteString("Base ref: " + m.worktreeFromBaseRef + "\n")
 		} else {
-			b.WriteString("\nNew worktree branch: " + m.worktreeFromBaseBranch + "\n")
+			footer.WriteString("New worktree branch: " + m.worktreeFromBaseBranch + "\n")
 		}
 	}
 	if m.creatingAgent {
 		if m.agentStep == agentPromptName {
-			b.WriteString("\nAgent name (optional): " + m.agentName + "\n")
+			footer.WriteString("Agent name (optional): " + m.agentName + "\n")
 		} else {
-			b.WriteString("\nAgent executable (default " + defaultAgentExecutable + "): " + m.agentExecutable + "\n")
+			footer.WriteString("Agent executable (default " + defaultAgentExecutable + "): " + m.agentExecutable + "\n")
 		}
 	}
 	if m.renamingAgent {
-		b.WriteString("\nAgent name: " + m.renameValue + "\n")
+		footer.WriteString("Agent name: " + m.renameValue + "\n")
 	}
 	switch m.worktreeConflict {
 	case httpclient.CodeBranchExists:
-		b.WriteString("\nbranch already exists. Create a worktree for it? y/n\n")
+		footer.WriteString("branch already exists. Create a worktree for it? y/n\n")
 	case httpclient.CodeWorktreeExists:
-		b.WriteString("\nworktree already exists. Create a session? y/n\n")
+		footer.WriteString("worktree already exists. Create a session? y/n\n")
 	}
 	if m.status != "" {
-		b.WriteString("\n" + errorStyle.Render(m.status) + "\n")
+		footer.WriteString(errorStyle.Render(m.status) + "\n")
 	}
 	if m.creatingSecondary {
-		b.WriteString("\n" + mutedStyle.Render("enter next/create  esc cancel") + "\n")
+		footer.WriteString(mutedStyle.Render("enter next/create  esc cancel") + "\n")
 	} else if m.creatingWorktree {
-		b.WriteString("\n" + mutedStyle.Render("enter create  esc cancel") + "\n")
+		footer.WriteString(mutedStyle.Render("enter create  esc cancel") + "\n")
 	} else if m.creatingWorktreeFromBase {
-		b.WriteString("\n" + mutedStyle.Render("enter next/create  esc cancel") + "\n")
+		footer.WriteString(mutedStyle.Render("enter next/create  esc cancel") + "\n")
 	} else if m.creatingAgent {
-		b.WriteString("\n" + mutedStyle.Render("enter next/create  esc cancel") + "\n")
+		footer.WriteString(mutedStyle.Render("enter next/create  esc cancel") + "\n")
 	} else if m.renamingAgent {
-		b.WriteString("\n" + mutedStyle.Render("enter rename  esc cancel") + "\n")
+		footer.WriteString(mutedStyle.Render("enter rename  esc cancel") + "\n")
 	} else if m.worktreeConflict != "" {
-		b.WriteString("\n" + mutedStyle.Render("y confirm  n cancel") + "\n")
+		footer.WriteString(mutedStyle.Render("y confirm  n cancel") + "\n")
 	} else if m.filtering {
-		b.WriteString("\n" + mutedStyle.Render("ctrl+n/ctrl+p move  enter open  esc cancel") + "\n")
+		footer.WriteString(mutedStyle.Render("ctrl+n/ctrl+p move  enter open  esc cancel") + "\n")
 	} else if m.help {
-		b.WriteString("\n" + helpText + "\n")
+		footer.WriteString(helpText + "\n")
 	} else {
-		b.WriteString("\n" + mutedStyle.Render(m.footer()) + "\n")
+		footer.WriteString(mutedStyle.Render(m.footer()) + "\n")
 	}
-	return m.padFrame(b.String())
+	return m.padFrame(m.tabStrip(), body.String(), footer.String())
 }
 
-func (m Model) padFrame(view string) string {
+func (m Model) padFrame(header, body, footer string) string {
 	if m.height <= 0 && m.width <= 0 {
-		return view
+		return header + "\n" + body + "\n" + footer
 	}
-	lines := strings.Split(view, "\n")
+	headerLines := splitFrameLines(header)
+	bodyLines := splitFrameLines(body)
+	footerLines := splitFrameLines(footer)
+	if len(footerLines) > 0 {
+		footerLines = append([]string{""}, footerLines...)
+	}
+
+	bodyHeight := len(bodyLines)
+	if m.height > 0 {
+		bodyHeight = m.height - len(headerLines) - len(footerLines)
+		if bodyHeight < 0 {
+			bodyHeight = 0
+		}
+	}
+	bodyLines = scrollLines(bodyLines, bodyHeight, selectedLineIndex(bodyLines))
+
+	lines := make([]string, 0, len(headerLines)+len(bodyLines)+len(footerLines))
+	lines = append(lines, headerLines...)
+	lines = append(lines, bodyLines...)
+	lines = append(lines, footerLines...)
 	if m.width > 0 {
 		for i, line := range lines {
+			line = lipgloss.NewStyle().MaxWidth(m.width).Render(line)
 			if w := lipgloss.Width(line); w < m.width {
-				lines[i] += strings.Repeat(" ", m.width-w)
+				line += strings.Repeat(" ", m.width-w)
 			}
+			lines[i] = line
 		}
 	}
 	if m.height > 0 {
+		if len(lines) > m.height {
+			lines = lines[:m.height]
+		}
 		blank := ""
 		if m.width > 0 {
 			blank = strings.Repeat(" ", m.width)
@@ -606,6 +629,37 @@ func (m Model) padFrame(view string) string {
 		}
 	}
 	return strings.Join(lines, "\n")
+}
+
+func splitFrameLines(s string) []string {
+	s = strings.TrimSuffix(s, "\n")
+	if s == "" {
+		return nil
+	}
+	return strings.Split(s, "\n")
+}
+
+func selectedLineIndex(lines []string) int {
+	for i, line := range lines {
+		if strings.Contains(line, "> ") {
+			return i
+		}
+	}
+	return -1
+}
+
+func scrollLines(lines []string, height, selected int) []string {
+	if height <= 0 || len(lines) <= height {
+		return lines
+	}
+	start := 0
+	if selected >= height {
+		start = selected - height + 1
+	}
+	if maxStart := len(lines) - height; start > maxStart {
+		start = maxStart
+	}
+	return lines[start : start+height]
 }
 
 func (m Model) tabStrip() string {

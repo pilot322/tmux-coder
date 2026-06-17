@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"github.com/pilot322/tmux-coder/internal/client/httpclient"
 )
 
@@ -558,6 +559,63 @@ func TestModelFooterShowsPerViewKeys(t *testing.T) {
 		// The removed toggle keys must be gone from every view.
 		if strings.Contains(view, "s sessions") || strings.Contains(view, "a agents") {
 			t.Fatalf("tab %s footer still advertises removed toggles: %q", tc.tab, view)
+		}
+	}
+}
+
+func TestModelViewClipsToViewportHeight(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 1, Title: "API", MainSessionName: "main"}},
+		sessions: []httpclient.Session{
+			{ID: 10, ProjectID: 1, SessionName: "main", Type: "main"},
+			{ID: 11, ProjectID: 1, SessionName: "wt-1", Type: "worktree"},
+			{ID: 12, ProjectID: 1, SessionName: "wt-2", Type: "worktree"},
+			{ID: 13, ProjectID: 1, SessionName: "wt-3", Type: "worktree"},
+			{ID: 14, ProjectID: 1, SessionName: "wt-4", Type: "worktree"},
+		},
+	})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 6})
+	m = updated.(Model)
+
+	lines := strings.Split(m.View(), "\n")
+	if len(lines) != 6 {
+		t.Fatalf("view height = %d, want 6: %q", len(lines), m.View())
+	}
+}
+
+func TestModelViewScrollsSelectedRowIntoSmallViewport(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 1, Title: "API", MainSessionName: "main"}},
+		sessions: []httpclient.Session{
+			{ID: 10, ProjectID: 1, SessionName: "main", Type: "main"},
+			{ID: 11, ProjectID: 1, SessionName: "wt-1", Type: "worktree"},
+			{ID: 12, ProjectID: 1, SessionName: "wt-2", Type: "worktree"},
+			{ID: 13, ProjectID: 1, SessionName: "wt-3", Type: "worktree"},
+			{ID: 14, ProjectID: 1, SessionName: "wt-4", Type: "worktree"},
+		},
+	})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 80, Height: 6})
+	m = updated.(Model)
+	m = press(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
+
+	view := m.View()
+	if !strings.Contains(view, "> └─   wt-4") {
+		t.Fatalf("selected bottom row should be visible in small viewport: %q", view)
+	}
+	if !strings.Contains(view, "j/k move") {
+		t.Fatalf("footer should remain visible in small viewport: %q", view)
+	}
+}
+
+func TestModelViewTruncatesLinesToViewportWidth(t *testing.T) {
+	m := loaded(t, listMsg{projects: []httpclient.Project{{ID: 1, Title: "API", FullPath: "/very/long/path/that/would/wrap/in/a/narrow/pane", MainSessionName: "main"}}})
+	m = press(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("1")})
+	updated, _ := m.Update(tea.WindowSizeMsg{Width: 20, Height: 8})
+	m = updated.(Model)
+
+	for _, line := range strings.Split(m.View(), "\n") {
+		if w := lipgloss.Width(line); w > 20 {
+			t.Fatalf("line width = %d, want <= 20: %q in view %q", w, line, m.View())
 		}
 	}
 }
