@@ -490,9 +490,9 @@ func TestPostSessions_WorktreeProvenanceParentRoundTrips(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &project)
 	mainID := getSessionID(t, mux, project.ID)
 
-	// A 'w' creation is a fresh worktree (createWorktree+createBranch) that
-	// carries parentSessionId; the controller forwards it and the response
-	// reports the stored Provenance parent (ADR-0010).
+	// A 'w' creation from Main is accepted for compatibility and still branches
+	// off the main checkout, but the resulting Worktree Session is stored
+	// parentless; it no longer "belongs" to Main.
 	body := `{"projectId":` + strconv.Itoa(project.ID) + `,"type":"worktree","branch":"feature/login","createWorktree":true,"createBranch":true,"parentSessionId":` + strconv.Itoa(mainID) + `}`
 	rec = do(t, mux, "POST", "/sessions", body)
 	if rec.Code != http.StatusCreated {
@@ -507,8 +507,8 @@ func TestPostSessions_WorktreeProvenanceParentRoundTrips(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &session); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if session.Type != "worktree" || session.Parent != mainID || session.ParentSessionID != mainID {
-		t.Fatalf("worktree provenance not wired: %+v (want parent %d)", session, mainID)
+	if session.Type != "worktree" || session.Parent != -1 || session.ParentSessionID != -1 {
+		t.Fatalf("worktree from main should be parentless: %+v", session)
 	}
 
 	rec = do(t, mux, "GET", "/sessions?type=worktree&projectId="+strconv.Itoa(project.ID), "")
@@ -521,8 +521,8 @@ func TestPostSessions_WorktreeProvenanceParentRoundTrips(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &listed); err != nil {
 		t.Fatalf("decode list: %v", err)
 	}
-	if len(listed.Sessions) != 1 || listed.Sessions[0].ID != session.ID || listed.Sessions[0].ParentSessionID != mainID {
-		t.Fatalf("listed worktree provenance = %+v, want parent %d", listed.Sessions, mainID)
+	if len(listed.Sessions) != 1 || listed.Sessions[0].ID != session.ID || listed.Sessions[0].ParentSessionID != -1 {
+		t.Fatalf("listed worktree provenance = %+v, want parentless", listed.Sessions)
 	}
 }
 

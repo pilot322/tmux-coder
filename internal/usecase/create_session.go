@@ -90,12 +90,15 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 	}
 
 	// parent records the new Worktree Session's Provenance (ADR-0010). A 'w'
-	// creation (ParentSessionID set) parents to and branches off a source
-	// Session; a 'W' creation (no parent) branches off in.BaseBranch and stays
+	// creation (ParentSessionID set) branches off a source Session. When that
+	// source is another Worktree Session the new Session is parented to it;
+	// when the source is the Main Session the new Session stays Project-level
+	// (parentless), since a worktree created from main should not "belong" to
+	// main. A 'W' creation (no parent) branches off in.BaseBranch and is also
 	// Project-level. Provenance is recorded for every creation mode, so an
-	// existing-branch or adopt re-issue that carries the source keeps it as
-	// parent. baseBranch is the ref a new branch is cut from; for a Main source
-	// it is the checkout's current branch, resolved under CreateBranch below.
+	// existing-branch or adopt re-issue that carries a Worktree source keeps it
+	// as parent. baseBranch is the ref a new branch is cut from; for a Main
+	// source it is the checkout's current branch, resolved under CreateBranch below.
 	var project *domain.Project
 	var name string
 	var worktreePath string
@@ -130,12 +133,12 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 			switch src.Type() {
 			case domain.WorktreeSession:
 				baseBranch = src.Branch()
+				parent = in.ParentSessionID
 			case domain.MainSession:
 				mainSource = true
 			default:
 				return fmt.Errorf("%w: a worktree cannot be branched from a secondary session", ErrValidation)
 			}
-			parent = in.ParentSessionID
 		}
 		name = domain.DeriveWorktreeSessionName(project.FullPath(), in.Branch, func(n string) bool { return used[n] })
 		worktreePath = filepath.Join(filepath.Dir(project.FullPath()), name)

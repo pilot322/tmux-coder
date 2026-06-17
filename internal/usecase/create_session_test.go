@@ -966,7 +966,7 @@ func TestCreateSessionWorktreeFromWorktreeParentsToSourceAndBranchesOffItsBranch
 	}
 }
 
-func TestCreateSessionWorktreeFromMainParentsToMainAndBranchesOffCurrentBranch(t *testing.T) {
+func TestCreateSessionWorktreeFromMainIsParentlessAndBranchesOffCurrentBranch(t *testing.T) {
 	var events []string
 	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events, currentBranch: "develop"}
 	ctx, uc, sessions, project := worktreeProvenanceUC(t, git)
@@ -987,8 +987,8 @@ func TestCreateSessionWorktreeFromMainParentsToMainAndBranchesOffCurrentBranch(t
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if child.Parent() != main.ID() {
-		t.Errorf("child parent = %d, want main %d", child.Parent(), main.ID())
+	if child.Parent() != -1 {
+		t.Errorf("child parent = %d, want -1 (parentless when branched from main)", child.Parent())
 	}
 	if len(git.addCalls) != 1 || git.addCalls[0].baseBranch != "develop" {
 		t.Errorf("AddWorktree = %+v, want baseBranch=develop (main's current branch)", git.addCalls)
@@ -1105,13 +1105,13 @@ func TestCreateSecondaryDepthBudgetResetsAtWorktreeRoot(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Four nested worktrees: main -> wt1 -> wt2 -> wt3 -> wt4. Measured from the
-	// root the chain spans five levels, so without the depth-budget reset it
-	// would exhaust the Secondary depth-5 cap and reject any secondary under wt4.
+	// Five nested worktrees: wt1 (parentless) -> wt2 -> wt3 -> wt4 -> wt5. Measured
+	// from the root the chain spans five levels, so without the depth-budget reset
+	// it would exhaust the Secondary depth-5 cap and reject any secondary under wt5.
 	base := filepath.Dir(project.FullPath())
-	parentID := main.ID()
+	parentID := -1
 	var deepest *domain.Session
-	for i := 1; i <= 4; i++ {
+	for i := 1; i <= 5; i++ {
 		wtPath := filepath.Join(base, fmt.Sprintf("api.wt%d", i))
 		if err := os.Mkdir(wtPath, 0o755); err != nil {
 			t.Fatal(err)
@@ -1123,6 +1123,7 @@ func TestCreateSecondaryDepthBudgetResetsAtWorktreeRoot(t *testing.T) {
 		parentID = wt.ID()
 		deepest = wt
 	}
+	_ = main
 
 	// A secondary directly under the deepest worktree must be allowed: the
 	// worktree root resets the budget, so the secondary sits at depth 2.
@@ -1144,15 +1145,11 @@ func TestCreateSecondaryDepthCapStillEnforcedFromWorktreeRoot(t *testing.T) {
 	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
 	ctx, uc, sessions, project := worktreeProvenanceUC(t, git)
 
-	main, err := sessions.Create(ctx, domain.NewSession(0, -1, project.ID(), "api.main", domain.MainSession))
-	if err != nil {
-		t.Fatal(err)
-	}
 	wtPath := filepath.Join(filepath.Dir(project.FullPath()), "api.feature")
 	if err := os.Mkdir(wtPath, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	wt, err := sessions.Create(ctx, domain.NewWorktreeSession(0, main.ID(), project.ID(), "api.feature", "feature", wtPath))
+	wt, err := sessions.Create(ctx, domain.NewWorktreeSession(0, -1, project.ID(), "api.feature", "feature", wtPath))
 	if err != nil {
 		t.Fatal(err)
 	}

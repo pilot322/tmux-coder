@@ -36,18 +36,18 @@ func TestReconcilePruneReparentsWorktreeChildrenAndCascadesSecondaries(t *testin
 	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, &fakeWorktreeHookRunner{events: &events}, memory.NewMemoryResourceLeaseRepository(), obs.Nop())
 
 	var projectID int
-	var main, feat1, backend, frontend, secondary *domain.Session
+	var feat1, backend, frontend, secondary *domain.Session
 	if err := lock.WithWrite(func() error {
 		project, err := projects.Create(ctx, domain.NewProject(0, projectRoot, "api"))
 		if err != nil {
 			return err
 		}
 		projectID = project.ID()
-		main, err = sessions.Create(ctx, domain.NewSession(0, -1, projectID, "api.main", domain.MainSession))
+		_, err = sessions.Create(ctx, domain.NewSession(0, -1, projectID, "api.main", domain.MainSession))
 		if err != nil {
 			return err
 		}
-		feat1, err = sessions.Create(ctx, domain.NewWorktreeSession(0, main.ID(), projectID, "api.feat1", "feat1", feat1Path))
+		feat1, err = sessions.Create(ctx, domain.NewWorktreeSession(0, -1, projectID, "api.feat1", "feat1", feat1Path))
 		if err != nil {
 			return err
 		}
@@ -78,8 +78,8 @@ func TestReconcilePruneReparentsWorktreeChildrenAndCascadesSecondaries(t *testin
 		if got == nil {
 			t.Fatalf("worktree child %q should survive a prune", child.Name())
 		}
-		if got.Parent() != main.ID() {
-			t.Errorf("child %q parent = %d, want main %d after prune-reparent", got.Name(), got.Parent(), main.ID())
+		if got.Parent() != -1 {
+			t.Errorf("child %q parent = %d, want -1 (parentless after prune-reparent)", got.Name(), got.Parent())
 		}
 	}
 	if got := getSession(t, lock, sessions, secondary.ID()); got != nil {

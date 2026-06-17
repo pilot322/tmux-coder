@@ -226,7 +226,7 @@ func TestDeleteWorktreeReparentsWorktreeChildrenAndCascadesSecondaries(t *testin
 		if err != nil {
 			return err
 		}
-		feat1, err = sessions.Create(ctx, domain.NewWorktreeSession(0, main.ID(), project.ID(), "api.feat1", "feat1", feat1Path))
+		feat1, err = sessions.Create(ctx, domain.NewWorktreeSession(0, -1, project.ID(), "api.feat1", "feat1", feat1Path))
 		if err != nil {
 			return err
 		}
@@ -256,7 +256,8 @@ func TestDeleteWorktreeReparentsWorktreeChildrenAndCascadesSecondaries(t *testin
 	}
 
 	// The deleted worktree is gone; its worktree children are promoted to its
-	// parent (the grandparent, main); its secondary cascades.
+	// parent (now parentless, since feat1 itself was branched from main); its
+	// secondary cascades.
 	if got := getSession(t, lock, sessions, feat1.ID()); got != nil {
 		t.Errorf("feat1 should be deleted, still present")
 	}
@@ -265,8 +266,8 @@ func TestDeleteWorktreeReparentsWorktreeChildrenAndCascadesSecondaries(t *testin
 		if got == nil {
 			t.Fatalf("worktree child %q should survive", child.Name())
 		}
-		if got.Parent() != main.ID() {
-			t.Errorf("child %q parent = %d, want main %d", got.Name(), got.Parent(), main.ID())
+		if got.Parent() != -1 {
+			t.Errorf("child %q parent = %d, want -1 (parentless after reparent)", got.Name(), got.Parent())
 		}
 	}
 	if got := getSession(t, lock, sessions, secondary.ID()); got != nil {
