@@ -888,7 +888,28 @@ func (m Model) agentRowLabel(a httpclient.Agent) string {
 		name = fmt.Sprintf("agent-%d", a.ID)
 	}
 	icon := agentStatusStyle(a.Status).Render(agentStatusIcon(a.Status))
-	return icon + " " + name + mutedStyle.Render(" · "+m.agentSession(a))
+	meta := m.agentSession(a)
+	if age := agentUpdatedAge(time.Now(), a.StatusChangedAt); age != "" {
+		meta += " · " + age
+	}
+	return icon + " " + name + mutedStyle.Render(" · "+meta)
+}
+
+func agentUpdatedAge(now, updatedAt time.Time) string {
+	if updatedAt.IsZero() {
+		return ""
+	}
+	elapsed := now.Sub(updatedAt)
+	if elapsed < time.Minute {
+		return "<1m"
+	}
+	if elapsed < time.Hour {
+		return fmt.Sprintf("%dm", int(elapsed/time.Minute))
+	}
+	if elapsed < 24*time.Hour {
+		return fmt.Sprintf("%dh", int(elapsed/time.Hour))
+	}
+	return fmt.Sprintf("%dd", int(elapsed/(24*time.Hour)))
 }
 
 func (m Model) agentSession(a httpclient.Agent) string {

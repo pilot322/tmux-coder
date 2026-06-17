@@ -513,6 +513,47 @@ func TestModelAgentsViewRendersAgentRows(t *testing.T) {
 	}
 }
 
+func TestModelAgentsViewRendersUpdatedAge(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 1, Title: "API", MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{{ID: 10, ProjectID: 1, SessionName: "api-main", Type: "main"}},
+		agents: []httpclient.Agent{{
+			ID:              20,
+			ProjectID:       1,
+			SessionID:       10,
+			DisplayName:     "reviewer",
+			Status:          "running",
+			StatusChangedAt: time.Now().Add(-32 * time.Minute),
+		}},
+	})
+	m = press(m, runes("3"))
+	if view := m.View(); !strings.Contains(view, "● reviewer · api-main · 32m") {
+		t.Fatalf("agents view missing updated age: %q", view)
+	}
+}
+
+func TestAgentUpdatedAge(t *testing.T) {
+	now := time.Date(2026, 6, 17, 12, 0, 0, 0, time.UTC)
+	cases := []struct {
+		name string
+		at   time.Time
+		want string
+	}{
+		{"zero", time.Time{}, ""},
+		{"future", now.Add(time.Minute), "<1m"},
+		{"less than one minute", now.Add(-59 * time.Second), "<1m"},
+		{"minutes", now.Add(-(32*time.Minute + 59*time.Second)), "32m"},
+		{"one hour", now.Add(-time.Hour), "1h"},
+		{"hours", now.Add(-(2*time.Hour + 59*time.Minute)), "2h"},
+		{"days", now.Add(-(2*24*time.Hour + 23*time.Hour)), "2d"},
+	}
+	for _, tc := range cases {
+		if got := agentUpdatedAge(now, tc.at); got != tc.want {
+			t.Fatalf("%s: agentUpdatedAge() = %q, want %q", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestModelAgentsViewEmptyPlaceholder(t *testing.T) {
 	m := loaded(t, listMsg{
 		projects: []httpclient.Project{{ID: 1, Title: "API", MainSessionName: "main"}},
