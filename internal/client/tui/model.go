@@ -121,6 +121,11 @@ type Model struct {
 	// state — not persisted and never sent to the daemon.
 	groupAgents bool
 
+	// foldedSessions is client-only view state. It starts with foldable Secondary
+	// Session subtrees folded, survives refreshes, and resets when the TUI exits.
+	foldedSessions     map[int]bool
+	initialFoldsLoaded bool
+
 	// filtering drives the fuzzy finder ('f'). While on, the active view
 	// collapses to a flat, score-ranked list of its rows matched against
 	// filterQuery, and key input is routed to updateFilter instead of the
@@ -231,10 +236,10 @@ const noProjectsMsg = "No projects yet. Run `tmux-coder open` or `tmux-coder o` 
 
 const defaultAgentExecutable = "opencode"
 
-const helpText = "Keys: j/k or ctrl+n/ctrl+p or arrows move, g/G jump, 0-3 switch tab, enter attach, a agent, u rename (Agents), X delete, w worktree (off session), W base worktree (off ref), S secondary (Sessions), s group (Agents), f filter, r refresh, ? help, q quit"
+const helpText = "Keys: j/k or ctrl+n/ctrl+p or arrows move, g/G jump, 0-3 switch tab, enter attach, a agent, u rename (Agents), X delete, w worktree (off session), W base worktree (off ref), s secondary (Sessions), S fold all, space fold, o group (Agents), f filter, r refresh, ? help, q quit"
 
 var keys = struct {
-	up, down, top, bottom, enter, del, refresh, worktree, worktreeBase, secondary, agent, rename, group, filter, help, quit, tab key.Binding
+	up, down, top, bottom, enter, del, refresh, worktree, worktreeBase, secondary, foldAll, fold, agent, rename, group, filter, help, quit, tab key.Binding
 }{
 	up:           key.NewBinding(key.WithKeys("up", "k", "ctrl+p")),
 	down:         key.NewBinding(key.WithKeys("down", "j", "ctrl+n")),
@@ -245,10 +250,12 @@ var keys = struct {
 	refresh:      key.NewBinding(key.WithKeys("r")),
 	worktree:     key.NewBinding(key.WithKeys("w")),
 	worktreeBase: key.NewBinding(key.WithKeys("W")),
-	secondary:    key.NewBinding(key.WithKeys("S")),
+	secondary:    key.NewBinding(key.WithKeys("s")),
+	foldAll:      key.NewBinding(key.WithKeys("S")),
+	fold:         key.NewBinding(key.WithKeys(" ")),
 	agent:        key.NewBinding(key.WithKeys("a")),
 	rename:       key.NewBinding(key.WithKeys("u")),
-	group:        key.NewBinding(key.WithKeys("s")),
+	group:        key.NewBinding(key.WithKeys("o")),
 	filter:       key.NewBinding(key.WithKeys("f")),
 	help:         key.NewBinding(key.WithKeys("?")),
 	quit:         key.NewBinding(key.WithKeys("q", "esc", "ctrl+c")),
@@ -317,6 +324,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.projects = msg.projects
 		m.sessions = msg.sessions
 		m.agents = msg.agents
+		m.ensureInitialFolds()
 		// A refresh may arrive from background polling while a confirm or
 		// text-entry prompt is open; it must not clear that interaction state.
 		if !m.modalActive() {
@@ -367,6 +375,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.worktreeFromBaseBranch = ""
 		m.worktreeFromBaseRef = ""
 		m.creatingSecondary = false
+		if parent := parentID(msg.session); parent > 0 {
+			m.setSessionFolded(parent, false)
+		} else if m.secondaryParentID > 0 {
+			m.setSessionFolded(m.secondaryParentID, false)
+		}
 		m.secondaryStep = secondaryPromptNone
 		m.secondaryParentID = 0
 		m.secondaryRelwd = ""
@@ -456,6 +469,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.startWorktreeFromBase()
 		case key.Matches(msg, keys.secondary):
 			m.startSecondary()
+		case key.Matches(msg, keys.foldAll):
+			m.toggleAllFolds()
+		case key.Matches(msg, keys.fold):
+			m.toggleCursorFold()
 		case key.Matches(msg, keys.agent):
 			m.startAgent()
 		case key.Matches(msg, keys.rename):
@@ -678,14 +695,14 @@ func (m Model) tabStrip() string {
 }
 
 func (m Model) footer() string {
-	parts := []string{"j/k move", "enter attach", "a agent"}
+	parts := []string{"j/k move", "enter attach", "a agent", "S fold", "space toggle"}
 	switch m.tab {
 	case tabOverview, tabProjects:
 		parts = append(parts, "w worktree", "W base worktree", "X delete")
 	case tabSessions:
-		parts = append(parts, "w worktree", "W base worktree", "S secondary", "X delete")
+		parts = append(parts, "w worktree", "W base worktree", "s secondary", "X delete")
 	default:
-		parts = append(parts, "u rename", "X delete")
+		parts = append(parts, "u rename", "o group", "X delete")
 	}
 	parts = append(parts, "f filter", "0-3 tabs", "r refresh", "? help", "q quit")
 	return strings.Join(parts, "  ")
@@ -717,7 +734,7 @@ func (m Model) writeSessionsView(b *strings.Builder, withAgents bool) {
 	cur, has := m.cursor()
 	for _, p := range m.projects {
 		b.WriteString("  " + projectHeaderLine(p) + "\n")
-		projectSessions := m.projectSessionRows(p.ID)
+		projectSessions := m.visibleProjectSessionRows(p.ID)
 		for _, s := range projectSessions {
 			if s.ProjectID != p.ID {
 				continue
@@ -1278,17 +1295,43 @@ func (m Model) updateRenamePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // rows returns the selectable rows that drive navigation and rendering for a
-// tab. While the fuzzy finder is open on the active tab it returns the matched
-// rows, score-ranked; otherwise it returns the full set in display order. Both
-// the cursor (currentIndex/selectIndex) and the view consume this, so a filtered
-// list can never disagree with what the user sees.
+// tab. While the fuzzy finder is open on the active tab it returns the full-tree
+// matches, score-ranked; otherwise it returns rows visible after fold state.
+// Both the cursor (currentIndex/selectIndex) and the view consume this, so the
+// cursor can never disagree with what the user sees.
 func (m Model) rows(tab int) []viewRow {
 	base := m.baseRows(tab)
 	if m.filtering && tab == m.tab {
 		filtered, _ := m.fuzzyFilter(base, m.filterQuery)
 		return filtered
 	}
-	return base
+	return m.visibleRows(tab)
+}
+
+func (m Model) visibleRows(tab int) []viewRow {
+	switch tab {
+	case tabSessions:
+		rows := make([]viewRow, 0, len(m.sessions))
+		for _, p := range m.projects {
+			for _, s := range m.visibleProjectSessionRows(p.ID) {
+				rows = append(rows, viewRow{kind: rowSession, project: p, session: s})
+			}
+		}
+		return rows
+	case tabOverview:
+		rows := make([]viewRow, 0, len(m.sessions)+len(m.agents))
+		for _, p := range m.projects {
+			for _, s := range m.visibleProjectSessionRows(p.ID) {
+				rows = append(rows, viewRow{kind: rowSession, project: p, session: s})
+				for _, a := range m.agentsForSession(s.ID) {
+					rows = append(rows, viewRow{kind: rowAgent, project: p, session: s, agent: a})
+				}
+			}
+		}
+		return rows
+	default:
+		return m.baseRows(tab)
+	}
 }
 
 // baseRows returns the selectable rows for a tab in display order. Project
@@ -1977,6 +2020,194 @@ func (m Model) projectSessionRows(projectID int) []httpclient.Session {
 	return rows
 }
 
+func (m Model) visibleProjectSessionRows(projectID int) []httpclient.Session {
+	all := m.projectSessionRows(projectID)
+	rows := make([]httpclient.Session, 0, len(all))
+	for _, s := range all {
+		if s.Type == "secondary" && m.hasFoldedAncestor(s) {
+			continue
+		}
+		rows = append(rows, s)
+	}
+	return rows
+}
+
+func (m *Model) ensureInitialFolds() {
+	if m.initialFoldsLoaded {
+		return
+	}
+	m.initialFoldsLoaded = true
+	for _, id := range m.foldableSessionIDs() {
+		m.setSessionFolded(id, true)
+	}
+}
+
+func (m *Model) setSessionFolded(id int, folded bool) {
+	if m.foldedSessions == nil {
+		m.foldedSessions = make(map[int]bool)
+	}
+	m.foldedSessions[id] = folded
+}
+
+func (m Model) foldableSessionIDs() []int {
+	ids := make([]int, 0)
+	for _, s := range m.sessions {
+		if m.hasSecondaryDescendants(s.ID) {
+			ids = append(ids, s.ID)
+		}
+	}
+	return ids
+}
+
+func (m Model) hasSecondaryDescendants(sessionID int) bool {
+	for _, s := range m.sessions {
+		if parentID(s) != sessionID {
+			continue
+		}
+		if s.Type == "secondary" || m.hasSecondaryDescendants(s.ID) {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) hasFoldedAncestor(s httpclient.Session) bool {
+	for id := parentID(s); id > 0; {
+		if m.foldedSessions[id] {
+			return true
+		}
+		parent, ok := m.sessionByID(id)
+		if !ok {
+			break
+		}
+		id = parentID(parent)
+	}
+	return false
+}
+
+func (m Model) sessionFoldMarker(s httpclient.Session) string {
+	if !m.hasSecondaryDescendants(s.ID) {
+		return "  "
+	}
+	if m.foldedSessions[s.ID] {
+		return "▸ "
+	}
+	return "▾ "
+}
+
+func (m *Model) toggleAllFolds() {
+	ids := m.foldableSessionIDs()
+	if len(ids) == 0 {
+		m.status = "no secondary sessions to fold"
+		return
+	}
+	allFolded := true
+	for _, id := range ids {
+		if !m.foldedSessions[id] {
+			allFolded = false
+			break
+		}
+	}
+	fold := !allFolded
+	for _, id := range ids {
+		m.setSessionFolded(id, fold)
+	}
+	m.status = ""
+	m.normalizeFoldedSelection()
+}
+
+func (m *Model) toggleCursorFold() {
+	target, ok := m.cursorFoldTarget()
+	if !ok {
+		m.status = "no secondary sessions to fold"
+		return
+	}
+	m.setSessionFolded(target.ID, !m.foldedSessions[target.ID])
+	m.status = ""
+	m.normalizeFoldedSelection()
+}
+
+func (m Model) cursorFoldTarget() (httpclient.Session, bool) {
+	row, ok := m.cursor()
+	if !ok {
+		return httpclient.Session{}, false
+	}
+	var target httpclient.Session
+	switch row.kind {
+	case rowSession:
+		target = row.session
+	case rowAgent:
+		var found bool
+		target, found = m.sessionByID(row.agent.SessionID)
+		if !found {
+			return httpclient.Session{}, false
+		}
+	case rowProject:
+		var found bool
+		target, found = m.mainSessionOf(row.project.ID)
+		if !found {
+			return httpclient.Session{}, false
+		}
+	}
+	if !m.hasSecondaryDescendants(target.ID) {
+		return httpclient.Session{}, false
+	}
+	return target, true
+}
+
+func (m *Model) normalizeFoldedSelection() {
+	if m.selectionVisible() {
+		m.normalizeSelection()
+		return
+	}
+	if m.sessionSel.id == 0 {
+		m.normalizeSelection()
+		return
+	}
+	if ancestor, ok := m.nearestVisibleAncestor(m.sessionSel.id); ok {
+		m.sessionSel = selection{id: ancestor.ID}
+		m.overviewKind = rowSession
+	}
+	m.normalizeSelection()
+}
+
+func (m Model) selectionVisible() bool {
+	kind, sel := m.activeSelection()
+	if sel.id == 0 {
+		return true
+	}
+	for _, r := range m.rows(m.tab) {
+		if r.kind == kind && rowID(r) == sel.id {
+			return true
+		}
+	}
+	return false
+}
+
+func (m Model) nearestVisibleAncestor(sessionID int) (httpclient.Session, bool) {
+	s, ok := m.sessionByID(sessionID)
+	if !ok {
+		return httpclient.Session{}, false
+	}
+	visible := make(map[int]bool)
+	for _, row := range m.visibleRows(tabSessions) {
+		if row.kind == rowSession {
+			visible[row.session.ID] = true
+		}
+	}
+	for id := parentID(s); id > 0; {
+		parent, found := m.sessionByID(id)
+		if !found {
+			break
+		}
+		if visible[parent.ID] {
+			return parent, true
+		}
+		id = parentID(parent)
+	}
+	return httpclient.Session{}, false
+}
+
 func (m Model) sessionTreePrefix(rows []httpclient.Session, s httpclient.Session) string {
 	var b strings.Builder
 	for _, ancestor := range m.sessionAncestors(s) {
@@ -1991,7 +2222,7 @@ func (m Model) sessionTreePrefix(rows []httpclient.Session, s httpclient.Session
 	} else {
 		b.WriteString("└─ ")
 	}
-	b.WriteString(sessionIcon(s) + "  ")
+	b.WriteString(m.sessionFoldMarker(s) + sessionIcon(s) + "  ")
 	return b.String()
 }
 

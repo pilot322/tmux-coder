@@ -126,6 +126,25 @@ func TestModelFilterEscRestoresUnfilteredView(t *testing.T) {
 	}
 }
 
+func TestModelFilterFindsFoldedSecondarySessions(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 1, Title: "api", MainSessionName: "main"}},
+		sessions: []httpclient.Session{
+			{ID: 10, ProjectID: 1, SessionName: "main", Type: "main"},
+			{ID: 11, ParentSessionID: 10, ProjectID: 1, SessionName: "hidden-tools", Type: "secondary"},
+		},
+	})
+	if strings.Contains(m.View(), "hidden-tools") {
+		t.Fatalf("precondition: secondary should be folded in normal view: %q", m.View())
+	}
+
+	m = press(m, runes("f"))
+	m = press(m, runes("hidden"))
+	if view := m.View(); !strings.Contains(view, "hidden-tools") {
+		t.Fatalf("filter should search folded secondary sessions: %q", view)
+	}
+}
+
 // While filtering, keys that are bindings in normal mode (w, q, s, digits) must
 // be typed into the query instead of triggering their actions.
 func TestModelFilterCapturesActionKeysAsText(t *testing.T) {

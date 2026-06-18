@@ -365,7 +365,7 @@ func TestModelOverviewRendersSessionsUnderProject(t *testing.T) {
 		},
 	})
 	view := m.View()
-	if !strings.Contains(view, "Backend API") || !strings.Contains(view, "├─ 󰊢  api-main") || !strings.Contains(view, "└─   api-work (feature/api)") {
+	if !strings.Contains(view, "Backend API") || !strings.Contains(view, "├─   󰊢  api-main") || !strings.Contains(view, "└─     api-work (feature/api)") {
 		t.Fatalf("view missing overview rows: %q", view)
 	}
 }
@@ -377,7 +377,7 @@ func TestModelOverviewRendersAgentsUnderSessions(t *testing.T) {
 		agents:   []httpclient.Agent{{ID: 20, ProjectID: 1, SessionID: 10, DisplayName: "reviewer", TmuxPaneID: "%7", Status: "running"}},
 	})
 	view := m.View()
-	if !strings.Contains(view, "└─ 󰊢  api-main") || !strings.Contains(view, "└─   reviewer [running]") {
+	if !strings.Contains(view, "└─   󰊢  api-main") || !strings.Contains(view, "└─   reviewer [running]") {
 		t.Fatalf("view missing session agent rows: %q", view)
 	}
 }
@@ -392,8 +392,11 @@ func TestModelOverviewIndentsAgentsUnderSecondarySessions(t *testing.T) {
 		},
 		agents: []httpclient.Agent{{ID: 20, ProjectID: 1, SessionID: 12, DisplayName: "reviewer", TmuxPaneID: "%7", Status: "running"}},
 	})
+	m = press(m, tea.KeyMsg{Type: tea.KeySpace})
+	m = press(m, runes("j"))
+	m = press(m, tea.KeyMsg{Type: tea.KeySpace})
 	view := m.View()
-	secondary := strings.Index(view, "└─   inner")
+	secondary := strings.Index(view, "└─     inner")
 	agent := strings.Index(view, "└─   reviewer [running]")
 	if secondary < 0 || agent < 0 || secondary > agent {
 		t.Fatalf("agent under secondary not indented below secondary session: %q", view)
@@ -409,12 +412,85 @@ func TestModelSessionRowsRenderSecondaryTreeIndented(t *testing.T) {
 			{ID: 2, ParentSessionID: 1, ProjectID: 7, SessionName: "pkg", Type: "secondary"},
 		},
 	})
+	m = press(m, tea.KeyMsg{Type: tea.KeySpace})
+	m = press(m, runes("j"))
+	m = press(m, tea.KeyMsg{Type: tea.KeySpace})
 	view := m.View()
 	main := strings.Index(view, "󰊢  api.main")
 	parent := strings.Index(view, "  pkg")
 	child := strings.Index(view, "  inner")
 	if main < 0 || parent < 0 || child < 0 || !(main < parent && parent < child) {
 		t.Fatalf("secondary tree not rendered in order/indentation: %q", view)
+	}
+}
+
+func TestModelStartsWithSecondarySessionsFolded(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 7, Title: "API", FullPath: "/work/api", MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{
+			{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"},
+			{ID: 2, ParentSessionID: 1, ProjectID: 7, SessionName: "pkg", Type: "secondary"},
+		},
+	})
+
+	view := m.View()
+	if !strings.Contains(view, "└─ ▸ 󰊢  api.main") || strings.Contains(view, "pkg") {
+		t.Fatalf("secondary sessions should start folded under a marker: %q", view)
+	}
+}
+
+func TestModelSpaceTogglesSelectedSessionFold(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 7, Title: "API", FullPath: "/work/api", MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{
+			{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"},
+			{ID: 2, ParentSessionID: 1, ProjectID: 7, SessionName: "pkg", Type: "secondary"},
+		},
+	})
+
+	m = press(m, tea.KeyMsg{Type: tea.KeySpace})
+	view := m.View()
+	if !strings.Contains(view, "└─ ▾ 󰊢  api.main") || !strings.Contains(view, "pkg") {
+		t.Fatalf("space should unfold selected session subtree: %q", view)
+	}
+}
+
+func TestModelGlobalFoldToggleFoldsAndUnfoldsAllFoldableSessions(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 7, Title: "API", FullPath: "/work/api", MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{
+			{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"},
+			{ID: 2, ParentSessionID: 1, ProjectID: 7, SessionName: "pkg", Type: "secondary"},
+		},
+	})
+
+	m = press(m, runes("S"))
+	if view := m.View(); !strings.Contains(view, "pkg") || !strings.Contains(view, "└─ ▾ 󰊢  api.main") {
+		t.Fatalf("S should unfold all when all foldable sessions are folded: %q", view)
+	}
+	m = press(m, runes("S"))
+	if view := m.View(); strings.Contains(view, "pkg") || !strings.Contains(view, "└─ ▸ 󰊢  api.main") {
+		t.Fatalf("S should fold all when any foldable session is unfolded: %q", view)
+	}
+}
+
+func TestModelFoldMovesSelectionToVisibleAncestor(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 7, Title: "API", FullPath: "/work/api", MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{
+			{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"},
+			{ID: 2, ParentSessionID: 1, ProjectID: 7, SessionName: "pkg", Type: "secondary"},
+		},
+	})
+	m = press(m, tea.KeyMsg{Type: tea.KeySpace})
+	m = press(m, runes("j"))
+	if cur, _ := m.cursor(); cur.session.ID != 2 {
+		t.Fatalf("setup should select secondary, got %d", cur.session.ID)
+	}
+
+	m = press(m, runes("S"))
+	if cur, _ := m.cursor(); cur.session.ID != 1 {
+		t.Fatalf("folding hidden selection should move to ancestor, got %d", cur.session.ID)
 	}
 }
 
@@ -447,13 +523,13 @@ func TestModelSessionRowsNestWorktreesByProvenance(t *testing.T) {
 
 	// Nesting is shown by rooted-tree lanes: feat one level under main,
 	// feat-backend under feat, while the base-ref worktree sits at the Project level.
-	if !strings.Contains(view, "│  └─   api.feat (feat)") {
+	if !strings.Contains(view, "│  └─     api.feat (feat)") {
 		t.Fatalf("feat should be indented one level under main:\n%q", view)
 	}
-	if !strings.Contains(view, "│     └─   api.feat-backend (feat-backend)") {
+	if !strings.Contains(view, "│     └─     api.feat-backend (feat-backend)") {
 		t.Fatalf("feat-backend should be indented under feat:\n%q", view)
 	}
-	if !strings.Contains(view, "└─   api.standalone (standalone)") || strings.Contains(view, "│  └─   api.standalone (standalone)") {
+	if !strings.Contains(view, "└─     api.standalone (standalone)") || strings.Contains(view, "│  └─     api.standalone (standalone)") {
 		t.Fatalf("base-ref worktree should sit at the project level (same indent as main):\n%q", view)
 	}
 }
@@ -466,7 +542,7 @@ func TestModelSessionsViewOmitsAgents(t *testing.T) {
 	})
 	m = press(m, runes("2"))
 	view := m.View()
-	if !strings.Contains(view, "└─ 󰊢  main") {
+	if !strings.Contains(view, "└─   󰊢  main") {
 		t.Fatalf("sessions view missing session row: %q", view)
 	}
 	if strings.Contains(view, "reviewer") {
@@ -580,8 +656,8 @@ func TestModelFooterShowsPerViewKeys(t *testing.T) {
 	}{
 		{"0", []string{"w worktree", "W base worktree", "X delete"}, []string{"S secondary"}},
 		{"1", []string{"w worktree", "W base worktree", "X delete"}, []string{"S secondary"}},
-		{"2", []string{"w worktree", "W base worktree", "S secondary", "X delete"}, nil},
-		{"3", []string{"X delete"}, []string{"w worktree", "W base worktree", "S secondary"}},
+		{"2", []string{"w worktree", "W base worktree", "s secondary", "X delete"}, nil},
+		{"3", []string{"o group", "X delete"}, []string{"w worktree", "W base worktree", "s secondary"}},
 	}
 	for _, tc := range cases {
 		m := loaded(t, base)
@@ -640,7 +716,7 @@ func TestModelViewScrollsSelectedRowIntoSmallViewport(t *testing.T) {
 	m = press(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
 
 	view := m.View()
-	if !strings.Contains(view, "> └─   wt-4") {
+	if !strings.Contains(view, "> └─     wt-4") {
 		t.Fatalf("selected bottom row should be visible in small viewport: %q", view)
 	}
 	if !strings.Contains(view, "j/k move") {
@@ -991,6 +1067,7 @@ func TestModelWorktreeFromSecondaryIsRejected(t *testing.T) {
 	})
 	m = updated.(Model)
 	m = press(m, runes("2")) // sessions tab
+	m = press(m, tea.KeyMsg{Type: tea.KeySpace})
 	m = press(m, runes("j")) // select the secondary session
 	m = press(m, runes("w"))
 	if m.creatingWorktree {
@@ -1130,7 +1207,7 @@ func TestModelSecondaryPromptCreatesSessionFromSelectedSession(t *testing.T) {
 	})
 	m = updated.(Model)
 	m = press(m, runes("2"))
-	m = press(m, runes("S"))
+	m = press(m, runes("s"))
 	if !m.creatingSecondary || m.secondaryParentID != 1 {
 		t.Fatalf("creatingSecondary=%v secondaryParentID=%d", m.creatingSecondary, m.secondaryParentID)
 	}
@@ -1152,13 +1229,42 @@ func TestModelSecondaryPromptCreatesSessionFromSelectedSession(t *testing.T) {
 	}
 }
 
+func TestModelSecondaryCreateUnfoldsParentForNewSession(t *testing.T) {
+	api := &fakeAPI{createdSession: httpclient.Session{ID: 2, ParentSessionID: 1, ProjectID: 7, SessionName: "pkg", Type: "secondary"}}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+	})
+	m = updated.(Model)
+	m.setSessionFolded(1, true)
+	m.secondaryParentID = 1
+
+	updated, cmd := m.Update(createSessionMsg{session: api.createdSession})
+	m = updated.(Model)
+	if cmd == nil || !m.loading || m.foldedSessions[1] {
+		t.Fatalf("create should refetch and unfold parent: loading=%v cmd nil=%v folded=%v", m.loading, cmd == nil, m.foldedSessions[1])
+	}
+
+	api.projects = []httpclient.Project{{ID: 7, MainSessionName: "api.main"}}
+	api.sessions = []httpclient.Session{
+		{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"},
+		{ID: 2, ParentSessionID: 1, ProjectID: 7, SessionName: "pkg", Type: "secondary"},
+	}
+	updated, _ = m.Update(cmd().(listMsg))
+	m = updated.(Model)
+	if cur, _ := m.cursor(); cur.session.ID != 2 {
+		t.Fatalf("new secondary should be visible and selected, got %d", cur.session.ID)
+	}
+}
+
 func TestModelSecondaryIgnoredOutsideSessionsTab(t *testing.T) {
 	m := loaded(t, listMsg{
 		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
 		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
 	})
 	m = press(m, runes("1")) // projects tab
-	m = press(m, runes("S"))
+	m = press(m, runes("s"))
 	if m.creatingSecondary {
 		t.Fatalf("S should be ignored outside the sessions tab")
 	}
@@ -1413,6 +1519,7 @@ func TestModelDeleteConfirmationDestroysSelectedWorktreeSession(t *testing.T) {
 		},
 	})
 	m = updated.(Model)
+	m = press(m, tea.KeyMsg{Type: tea.KeySpace})
 	m = press(m, runes("j"))
 	m = press(m, runes("X"))
 
@@ -1443,6 +1550,7 @@ func TestModelDeleteConfirmationDeletesSelectedAgent(t *testing.T) {
 		agents:   []httpclient.Agent{{ID: 12, ProjectID: 7, SessionID: 1, DisplayName: "reviewer", TmuxPaneID: "%12", Status: "running"}},
 	})
 	m = updated.(Model)
+	m = press(m, tea.KeyMsg{Type: tea.KeySpace})
 	m = press(m, runes("j"))
 	m = press(m, runes("X"))
 
@@ -1507,6 +1615,7 @@ func TestModelDeleteConfirmationDeletesSelectedSecondarySession(t *testing.T) {
 		},
 	})
 	m = updated.(Model)
+	m = press(m, tea.KeyMsg{Type: tea.KeySpace})
 	m = press(m, runes("j"))
 	m = press(m, runes("X"))
 	if !m.confirm || m.confirmDelete != deleteSecondarySession || m.confirmDeleteID != 2 || !strings.Contains(m.View(), "Delete secondary session using cascade policy? y/n") {
@@ -1698,24 +1807,24 @@ func TestModelGroupToggleOnlyAffectsAgentsTab(t *testing.T) {
 		agents:   []httpclient.Agent{{ID: 1, ProjectID: 1, SessionID: 10, Status: "running"}},
 	}
 
-	// On the Agents tab, 's' toggles grouping on and off.
+	// On the Agents tab, 'o' toggles grouping on and off.
 	m := loaded(t, base)
 	m = press(m, runes("3"))
-	m = press(m, runes("s"))
+	m = press(m, runes("o"))
 	if !m.groupAgents {
-		t.Fatalf("'s' on agents tab should turn grouping on")
+		t.Fatalf("'o' on agents tab should turn grouping on")
 	}
-	m = press(m, runes("s"))
+	m = press(m, runes("o"))
 	if m.groupAgents {
-		t.Fatalf("'s' on agents tab should toggle grouping back off")
+		t.Fatalf("'o' on agents tab should toggle grouping back off")
 	}
 
-	// On any other tab, 's' is a no-op.
+	// On any other tab, 'o' is a no-op.
 	m = loaded(t, base)
 	m = press(m, runes("2")) // sessions tab
-	m = press(m, runes("s"))
+	m = press(m, runes("o"))
 	if m.groupAgents {
-		t.Fatalf("'s' outside the agents tab should not toggle grouping")
+		t.Fatalf("'o' outside the agents tab should not toggle grouping")
 	}
 }
 
@@ -1737,7 +1846,7 @@ func TestAgentRowsGroupedByProject(t *testing.T) {
 		},
 	})
 	m = press(m, runes("3"))
-	m = press(m, runes("s")) // group on
+	m = press(m, runes("o")) // group on
 
 	// Agents bucket by project (existing project order), status-sorted within
 	// each bucket: project 1 [waiting 2, running 1], then project 2 [waiting 4, busy 3].
@@ -1810,12 +1919,12 @@ func TestModelJumpToTopAndBottomWorkInAgentsView(t *testing.T) {
 		},
 	}
 	// g/G keep their jump-to-top / jump-to-bottom meaning in the Agents view,
-	// both flat and grouped — s (group) does not shadow them.
+	// both flat and grouped — o (group) does not shadow them.
 	for _, grouped := range []bool{false, true} {
 		m := loaded(t, base)
 		m = press(m, runes("3"))
 		if grouped {
-			m = press(m, runes("s"))
+			m = press(m, runes("o"))
 		}
 		rows := m.agentRows()
 		last := rows[len(rows)-1].agent.ID
