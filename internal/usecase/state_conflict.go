@@ -4,10 +4,11 @@ package usecase
 // the HTTP adapter copies them onto the 409 body and the Client matches on them
 // to offer the right follow-up prompt, so these strings must not drift.
 const (
-	CodeSessionExists  = "session_exists"
-	CodeWorktreeExists = "worktree_exists"
-	CodePathBlocked    = "path_blocked"
-	CodeBranchExists   = "branch_exists"
+	CodeSessionExists   = "session_exists"
+	CodeSessionCreating = "session_creating"
+	CodeWorktreeExists  = "worktree_exists"
+	CodePathBlocked     = "path_blocked"
+	CodeBranchExists    = "branch_exists"
 )
 
 // CodeWorktreesDetected is carried on a PreconditionRequiredError when an open

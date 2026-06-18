@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"sync"
 	"testing"
 	"time"
 
@@ -177,8 +178,13 @@ func TestCreateSessionSecondaryFailureRollsBackWorktreeBranchAndSession(t *testi
 	if err := os.Mkdir(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// The declared subdir is never scaffolded, so materialization fails.
-	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[[secondary-sessions]]\nsubdir = \"backend\"\n"), 0o644); err != nil {
+	// The first secondary can be materialized, then the second fails. Rollback
+	// must clean up the already-created secondary as well as the worktree root.
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[[secondary-sessions]]\nsubdir = \"backend\"\n\n[[secondary-sessions]]\nsubdir = \"missing\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	worktreePath := filepath.Join(parent, "api.feature-login")
+	if err := os.MkdirAll(filepath.Join(worktreePath, "backend"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -203,7 +209,6 @@ func TestCreateSessionSecondaryFailureRollsBackWorktreeBranchAndSession(t *testi
 	if !errors.Is(err, usecase.ErrValidation) {
 		t.Fatalf("Execute error = %v, want ErrValidation", err)
 	}
-	worktreePath := filepath.Join(parent, "api.feature-login")
 	if git.paths[worktreePath] {
 		t.Errorf("worktree path still exists after rollback")
 	}
@@ -219,6 +224,9 @@ func TestCreateSessionSecondaryFailureRollsBackWorktreeBranchAndSession(t *testi
 	// The worktree tmux session was killed during rollback.
 	if tmux.exists["api_feature-login"] {
 		t.Errorf("worktree tmux survived rollback")
+	}
+	if tmux.exists["api_feature-login_backend"] {
+		t.Errorf("secondary tmux survived rollback")
 	}
 }
 
@@ -276,6 +284,64 @@ func TestCreateSessionHookFailureRollsBackWorktreeAndBranch(t *testing.T) {
 	}
 	if all, _ := sessions.GetAll(ctx); len(all) != 0 {
 		t.Fatalf("sessions stored after failed hook = %d, want 0", len(all))
+	}
+}
+
+func TestCreateSessionRejectsDuplicateWhileCreateInProgress(t *testing.T) {
+	ctx := context.Background()
+	parent := t.TempDir()
+	projectRoot := filepath.Join(parent, "api")
+	if err := os.Mkdir(projectRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non-create-script = \"hook.sh\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "hook.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	projects := memory.NewMemoryProjectRepository()
+	sessions := memory.NewMemorySessionRepository()
+	lock := &spyLock{}
+	var events []string
+	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
+	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
+	hooks := &fakeWorktreeHookRunner{events: &events, started: make(chan struct{}), release: make(chan struct{})}
+	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository(), obs.Nop())
+	project, err := projects.Create(ctx, domain.NewProject(0, projectRoot, "api"))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	firstErr := make(chan error, 1)
+	go func() {
+		_, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
+		firstErr <- err
+	}()
+	<-hooks.started
+
+	_, err = uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
+	if !errors.Is(err, usecase.ErrConflict) {
+		close(hooks.release)
+		t.Fatalf("duplicate Execute error = %v, want ErrConflict", err)
+	}
+	var conflict *usecase.StateConflictError
+	if !errors.As(err, &conflict) || conflict.Code != usecase.CodeSessionCreating {
+		close(hooks.release)
+		t.Fatalf("duplicate conflict = %#v, want code %q", err, usecase.CodeSessionCreating)
+	}
+	if len(git.addCalls) != 1 {
+		close(hooks.release)
+		t.Fatalf("AddWorktree calls = %d, want 1 while duplicate is rejected before side effects", len(git.addCalls))
+	}
+
+	close(hooks.release)
+	if err := <-firstErr; err != nil {
+		t.Fatalf("first Execute: %v", err)
 	}
 }
 
@@ -1184,6 +1250,9 @@ type fakeWorktreeHookRunner struct {
 	cancel      context.CancelFunc // models a client disconnecting while the hook runs
 	leases      usecase.ResourceLeaseRepository
 	acquirePort bool
+	started     chan struct{}
+	release     chan struct{}
+	startOnce   sync.Once
 }
 
 func (r *fakeWorktreeHookRunner) Run(ctx context.Context, req usecase.WorktreeHookRequest) (usecase.WorktreeHookResult, error) {
@@ -1191,6 +1260,16 @@ func (r *fakeWorktreeHookRunner) Run(ctx context.Context, req usecase.WorktreeHo
 	r.calls = append(r.calls, req)
 	if r.cancel != nil {
 		r.cancel()
+	}
+	if r.started != nil {
+		r.startOnce.Do(func() { close(r.started) })
+	}
+	if r.release != nil {
+		select {
+		case <-r.release:
+		case <-ctx.Done():
+			return usecase.WorktreeHookResult{Output: "hook cancelled"}, ctx.Err()
+		}
 	}
 	if r.acquirePort {
 		if _, err := r.leases.AcquirePort(ctx, usecase.PortLeaseRequest{OwnerKind: usecase.ResourceLeaseOwnerHook, HookToken: req.Env["TMUX_CODER_HOOK_TOKEN"], Key: "web", Start: 8000, End: 8000}, func(int) bool { return true }); err != nil {

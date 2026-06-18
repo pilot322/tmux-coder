@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pilot322/tmux-coder/internal/config"
@@ -41,6 +42,9 @@ type CreateSession struct {
 	hooks    WorktreeHookRunner
 	leases   ResourceLeaseRepository
 	log      obs.Logger
+
+	creatingMu sync.Mutex
+	creating   map[string]struct{}
 }
 
 func NewCreateSession(p IProjectRepository, s ISessionRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock, log obs.Logger) *CreateSession {
@@ -54,7 +58,7 @@ func NewCreateSessionWithHooks(p IProjectRepository, s ISessionRepository, tmux 
 	if leases == nil {
 		leases = noopResourceLeaseRepository{}
 	}
-	return &CreateSession{projects: p, sessions: s, tmux: tmux, git: git, lock: l, hooks: hooks, leases: leases, log: log.With("component", "create-session")}
+	return &CreateSession{projects: p, sessions: s, tmux: tmux, git: git, lock: l, hooks: hooks, leases: leases, log: log.With("component", "create-session"), creating: make(map[string]struct{})}
 }
 
 func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*domain.Session, error) {
@@ -146,6 +150,11 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 	}); err != nil {
 		return nil, err
 	}
+	releaseCreate, err := uc.reserveCreate(in.ProjectID, name)
+	if err != nil {
+		return nil, err
+	}
+	defer releaseCreate()
 
 	root, err := uc.git.IsWorktreeRoot(ctx, project.FullPath())
 	if err != nil {
@@ -472,6 +481,21 @@ func (uc *CreateSession) rollbackCreatedSessionRecord(ctx context.Context, sessi
 		_ = uc.leases.ReleaseSessionLeases(ctx, sessionID)
 		return uc.sessions.Delete(ctx, sessionID)
 	})
+}
+
+func (uc *CreateSession) reserveCreate(projectID int, sessionName string) (func(), error) {
+	key := fmt.Sprintf("%d/%s", projectID, sessionName)
+	uc.creatingMu.Lock()
+	defer uc.creatingMu.Unlock()
+	if _, ok := uc.creating[key]; ok {
+		return nil, &StateConflictError{Code: CodeSessionCreating, Msg: fmt.Sprintf("session creation already in progress for %s", sessionName)}
+	}
+	uc.creating[key] = struct{}{}
+	return func() {
+		uc.creatingMu.Lock()
+		defer uc.creatingMu.Unlock()
+		delete(uc.creating, key)
+	}, nil
 }
 
 func (uc *CreateSession) runConfiguredWorktreeHook(ctx context.Context, project *domain.Project, worktreePath, sessionName, tmuxName, branch string) (string, error) {

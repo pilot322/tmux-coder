@@ -42,10 +42,12 @@ func materializeSecondarySessions(ctx context.Context, sessions ISessionReposito
 	var created []*domain.Session
 
 	unwind := func() {
+		cleanupCtx, cancel := detachedCleanupContext(ctx)
+		defer cancel()
 		for i := len(created) - 1; i >= 0; i-- {
-			_ = tmux.Kill(ctx, created[i].TmuxName())
+			_ = tmux.Kill(cleanupCtx, created[i].TmuxName())
 			id := created[i].ID()
-			_ = lock.WithWrite(func() error { return sessions.Delete(ctx, id) })
+			_ = lock.WithWrite(func() error { return sessions.Delete(cleanupCtx, id) })
 		}
 	}
 
@@ -98,7 +100,9 @@ func materializeSecondarySessions(ctx context.Context, sessions ISessionReposito
 			session = s
 			return err
 		}); err != nil {
-			_ = tmux.Kill(ctx, tmuxName)
+			cleanupCtx, cancel := detachedCleanupContext(ctx)
+			_ = tmux.Kill(cleanupCtx, tmuxName)
+			cancel()
 			unwind()
 			return err
 		}
