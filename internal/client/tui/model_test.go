@@ -434,7 +434,7 @@ func TestModelStartsWithSecondarySessionsFolded(t *testing.T) {
 	})
 
 	view := m.View()
-	if !strings.Contains(view, "└─ ▸ 󰊢  api.main") || strings.Contains(view, "pkg") {
+	if !strings.Contains(view, "└▸   󰊢  api.main") || strings.Contains(view, "pkg") {
 		t.Fatalf("secondary sessions should start folded under a marker: %q", view)
 	}
 }
@@ -450,7 +450,7 @@ func TestModelSpaceTogglesSelectedSessionFold(t *testing.T) {
 
 	m = press(m, tea.KeyMsg{Type: tea.KeySpace})
 	view := m.View()
-	if !strings.Contains(view, "└─ ▾ 󰊢  api.main") || !strings.Contains(view, "pkg") {
+	if !strings.Contains(view, "└─   󰊢  api.main") || !strings.Contains(view, "pkg") {
 		t.Fatalf("space should unfold selected session subtree: %q", view)
 	}
 }
@@ -465,11 +465,11 @@ func TestModelGlobalFoldToggleFoldsAndUnfoldsAllFoldableSessions(t *testing.T) {
 	})
 
 	m = press(m, runes("S"))
-	if view := m.View(); !strings.Contains(view, "pkg") || !strings.Contains(view, "└─ ▾ 󰊢  api.main") {
+	if view := m.View(); !strings.Contains(view, "pkg") || !strings.Contains(view, "└─   󰊢  api.main") {
 		t.Fatalf("S should unfold all when all foldable sessions are folded: %q", view)
 	}
 	m = press(m, runes("S"))
-	if view := m.View(); strings.Contains(view, "pkg") || !strings.Contains(view, "└─ ▸ 󰊢  api.main") {
+	if view := m.View(); strings.Contains(view, "pkg") || !strings.Contains(view, "└▸   󰊢  api.main") {
 		t.Fatalf("S should fold all when any foldable session is unfolded: %q", view)
 	}
 }
@@ -1289,9 +1289,9 @@ func TestModelAgentPromptCreatesAgentInSelectedSession(t *testing.T) {
 	if !m.creatingAgent || m.agentSessionID != 2 || m.agentProjectID != 7 {
 		t.Fatalf("creatingAgent=%v sessionID=%d projectID=%d", m.creatingAgent, m.agentSessionID, m.agentProjectID)
 	}
-	m = press(m, runes("claude"))
-	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})
 	m = press(m, runes("reviewer"))
+	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = press(m, runes("claude"))
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
 	if !m.loading || cmd == nil {
@@ -1320,8 +1320,8 @@ func TestModelAgentPromptOmitsEmptyName(t *testing.T) {
 	m = updated.(Model)
 	m = press(m, runes("2")) // sessions tab
 	m = press(m, runes("a"))
+	m = press(m, tea.KeyMsg{Type: tea.KeyEnter}) // advance to the executable step with an empty name
 	m = press(m, runes("opencode"))
-	m = press(m, tea.KeyMsg{Type: tea.KeyEnter}) // advance to the name step
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
 	if cmd == nil {
@@ -1346,7 +1346,7 @@ func TestModelAgentPromptUsesDefaultExecutable(t *testing.T) {
 	m = updated.(Model)
 	m = press(m, runes("2")) // sessions tab
 	m = press(m, runes("a"))
-	m = press(m, tea.KeyMsg{Type: tea.KeyEnter}) // accept the default executable
+	m = press(m, tea.KeyMsg{Type: tea.KeyEnter}) // advance with an empty name
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
 	if cmd == nil {
@@ -1374,8 +1374,8 @@ func TestModelAgentPromptEscCancels(t *testing.T) {
 	m = press(m, runes("claude"))
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = updated.(Model)
-	if m.creatingAgent || m.agentExecutable != "" || m.agentSessionID != 0 || cmd != nil || len(api.createdAgents) != 0 {
-		t.Fatalf("creatingAgent=%v executable=%q sessionID=%d cmd=%v created=%d", m.creatingAgent, m.agentExecutable, m.agentSessionID, cmd, len(api.createdAgents))
+	if m.creatingAgent || m.agentName != "" || m.agentExecutable != "" || m.agentSessionID != 0 || cmd != nil || len(api.createdAgents) != 0 {
+		t.Fatalf("creatingAgent=%v name=%q executable=%q sessionID=%d cmd=%v created=%d", m.creatingAgent, m.agentName, m.agentExecutable, m.agentSessionID, cmd, len(api.createdAgents))
 	}
 }
 

@@ -164,8 +164,8 @@ type Model struct {
 	secondaryRelwd    string
 	secondaryName     string
 
-	// creatingAgent drives the 'a' flow: a two-step prompt (executable, then an
-	// optional name) that spawns an agent in the resolved target session. The
+	// creatingAgent drives the 'a' flow: a two-step prompt (optional name, then
+	// executable) that spawns an agent in the resolved target session. The
 	// daemon owns the new pane, so this is wholly client-side.
 	creatingAgent   bool
 	agentStep       agentPromptStep
@@ -1218,9 +1218,8 @@ func (m Model) updateSecondaryPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 // updateAgentPrompt handles key input for the 'a' flow: the first step captures
-// the agent executable (required), the second an optional name. Enter advances
-// from the executable to the name, then fires the create; an empty name means no
-// name is sent.
+// an optional name, the second the executable. Enter advances from name to
+// executable, then fires the create; an empty name means no name is sent.
 func (m Model) updateAgentPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlC:
@@ -1239,20 +1238,23 @@ func (m Model) updateAgentPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case tea.KeyEnter:
+		if m.agentStep == agentPromptName {
+			m.agentName = strings.TrimSpace(m.agentName)
+			m.agentStep = agentPromptExecutable
+			m.status = ""
+			return m, nil
+		}
 		if m.agentStep == agentPromptExecutable {
 			executable := strings.TrimSpace(m.agentExecutable)
 			if executable == "" {
 				executable = defaultAgentExecutable
 			}
 			m.agentExecutable = executable
-			m.agentStep = agentPromptName
 			m.status = ""
-			return m, nil
+			m.loading = true
+			return m, m.createAgentCmd(m.agentProjectID, m.agentSessionID, m.agentExecutable, m.agentName)
 		}
-		m.agentName = strings.TrimSpace(m.agentName)
-		m.status = ""
-		m.loading = true
-		return m, m.createAgentCmd(m.agentProjectID, m.agentSessionID, m.agentExecutable, m.agentName)
+		return m, nil
 	case tea.KeyRunes:
 		if m.agentStep == agentPromptName {
 			m.agentName += string(msg.Runes)
@@ -1825,7 +1827,7 @@ func (m *Model) startAgent() {
 		return
 	}
 	m.creatingAgent = true
-	m.agentStep = agentPromptExecutable
+	m.agentStep = agentPromptName
 	m.agentProjectID = target.ProjectID
 	m.agentSessionID = target.ID
 	m.agentExecutable = ""
@@ -2085,14 +2087,16 @@ func (m Model) hasFoldedAncestor(s httpclient.Session) bool {
 	return false
 }
 
-func (m Model) sessionFoldMarker(s httpclient.Session) string {
-	if !m.hasSecondaryDescendants(s.ID) {
-		return "  "
+func (m Model) sessionConnector(s httpclient.Session, hasLaterSibling bool) string {
+	joint := "└"
+	if hasLaterSibling {
+		joint = "├"
 	}
-	if m.foldedSessions[s.ID] {
-		return "▸ "
+	line := "─"
+	if m.hasSecondaryDescendants(s.ID) && m.foldedSessions[s.ID] {
+		line = "▸"
 	}
-	return "▾ "
+	return joint + line + " "
 }
 
 func (m *Model) toggleAllFolds() {
@@ -2217,12 +2221,8 @@ func (m Model) sessionTreePrefix(rows []httpclient.Session, s httpclient.Session
 			b.WriteString("   ")
 		}
 	}
-	if sessionHasLaterSibling(rows, s) {
-		b.WriteString("├─ ")
-	} else {
-		b.WriteString("└─ ")
-	}
-	b.WriteString(m.sessionFoldMarker(s) + sessionIcon(s) + "  ")
+	b.WriteString(m.sessionConnector(s, sessionHasLaterSibling(rows, s)))
+	b.WriteString("  " + sessionIcon(s) + "  ")
 	return b.String()
 }
 
