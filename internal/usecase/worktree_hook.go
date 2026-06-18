@@ -33,7 +33,8 @@ type WorktreeHookRequest struct {
 }
 
 type WorktreeHookResult struct {
-	Output string
+	Output  string
+	LogPath string
 }
 
 type WorktreeHookRunner interface {

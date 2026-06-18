@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -246,7 +247,7 @@ func TestCreateSessionHookFailureRollsBackWorktreeAndBranch(t *testing.T) {
 	var events []string
 	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
 	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
-	hooks := &fakeWorktreeHookRunner{events: &events, err: errors.New("exit status 1")}
+	hooks := &fakeWorktreeHookRunner{events: &events, err: errors.New("exit status 1"), logPath: "/tmp/tmux-coder-hook.log"}
 	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository(), obs.Nop())
 	var project *domain.Project
 	if err := lock.WithWrite(func() error {
@@ -260,6 +261,9 @@ func TestCreateSessionHookFailureRollsBackWorktreeAndBranch(t *testing.T) {
 	_, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
 	if !errors.Is(err, usecase.ErrGateway) {
 		t.Fatalf("Execute error = %v, want ErrGateway", err)
+	}
+	if !strings.Contains(err.Error(), "log: /tmp/tmux-coder-hook.log") {
+		t.Fatalf("Execute error = %v, want hook log path", err)
 	}
 	worktreePath := filepath.Join(parent, "api.feature-login")
 	if !reflect.DeepEqual(events, []string{"git:add", "hook:run"}) {
@@ -1181,6 +1185,7 @@ type fakeWorktreeHookRunner struct {
 	events      *[]string
 	calls       []usecase.WorktreeHookRequest
 	err         error
+	logPath     string
 	cancel      context.CancelFunc // models a client disconnecting while the hook runs
 	leases      usecase.ResourceLeaseRepository
 	acquirePort bool
@@ -1198,7 +1203,7 @@ func (r *fakeWorktreeHookRunner) Run(ctx context.Context, req usecase.WorktreeHo
 		}
 	}
 	if r.err != nil {
-		return usecase.WorktreeHookResult{Output: "hook failed"}, r.err
+		return usecase.WorktreeHookResult{Output: "hook failed", LogPath: r.logPath}, r.err
 	}
 	return usecase.WorktreeHookResult{Output: "hook ok"}, nil
 }

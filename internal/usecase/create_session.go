@@ -508,10 +508,14 @@ func (uc *CreateSession) runConfiguredWorktreeHook(ctx context.Context, project 
 	if err != nil {
 		_ = uc.leases.ReleaseHookLeases(ctx, token)
 		_ = uc.leases.EndHook(ctx, token)
-		if result.Output != "" {
-			return "", fmt.Errorf("%w: worktree hook failed: %v: %s", ErrGateway, err, result.Output)
+		logSuffix := ""
+		if result.LogPath != "" {
+			logSuffix = fmt.Sprintf(" (log: %s)", result.LogPath)
 		}
-		return "", fmt.Errorf("%w: worktree hook failed: %v", ErrGateway, err)
+		if result.Output != "" {
+			return "", fmt.Errorf("%w: worktree hook failed: %v%s: %s", ErrGateway, err, logSuffix, result.Output)
+		}
+		return "", fmt.Errorf("%w: worktree hook failed: %v%s", ErrGateway, err, logSuffix)
 	}
 	return token, nil
 }

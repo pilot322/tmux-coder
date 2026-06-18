@@ -20,6 +20,11 @@ func WithRequestID(ctx context.Context, id string) context.Context {
 	return context.WithValue(ctx, requestIDKey, id)
 }
 
+// RequestIDFrom returns the request id stored in ctx, if any.
+func RequestIDFrom(ctx context.Context) (string, bool) {
+	return requestIDFrom(ctx)
+}
+
 // requestIDFrom returns the request id stored in ctx, if any.
 func requestIDFrom(ctx context.Context) (string, bool) {
 	id, ok := ctx.Value(requestIDKey).(string)

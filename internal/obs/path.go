@@ -8,6 +8,8 @@ import (
 	"github.com/pilot322/tmux-coder/internal/tmuxserver"
 )
 
+const installedTmuxServerLabel = "tmux-coder"
+
 // Role names the kind of process a log file belongs to. It is the leaf
 // directory under an instance's logs/ tree and is recorded as the role field on
 // every line, so a shared file stays sliceable by process kind.
@@ -37,8 +39,8 @@ func LogDir(role Role, getenv func(string) string) (string, error) {
 	}
 
 	base := filepath.Join(home, ".tmux-coder", "logs")
-	if label := tmuxserver.Label(getenv); label != tmuxserver.DefaultLabel {
-		worktree := strings.TrimPrefix(label, tmuxserver.DefaultLabel+"-")
+	if label := tmuxserver.Label(getenv); label != installedTmuxServerLabel {
+		worktree := strings.TrimPrefix(label, installedTmuxServerLabel+"-")
 		base = filepath.Join(base, "dev-"+worktree)
 	}
 	return filepath.Join(base, string(role)), nil
