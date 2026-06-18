@@ -134,7 +134,7 @@ func TestAgentEvent_NotificationNameFallsBackToAgentID(t *testing.T) {
 	}
 }
 
-func TestAgentEvent_DoesNotNotifyOnNonBusyDepartures(t *testing.T) {
+func TestAgentEvent_NotifiesOnTransitionIntoWaitingOrIdle(t *testing.T) {
 	cases := []struct {
 		name  string
 		start domain.AgentStatus
@@ -143,7 +143,35 @@ func TestAgentEvent_DoesNotNotifyOnNonBusyDepartures(t *testing.T) {
 		{"running to waiting", domain.AgentRunning, "waiting"},
 		{"idle to waiting", domain.AgentIdle, "waiting"},
 		{"starting to idle", domain.AgentStarting, "idle"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, agents, projects, sessions, _, lock := agentFixture()
+			p, s := seedProjectAndSession(projects, sessions)
+			ctx := context.Background()
+			a, _ := agents.Create(ctx, domain.NewAgent(0, p.ID(), s.ID(), "opencode", "reviewer", "%10", true, tc.start))
+
+			notifier := &fakeNotifier{}
+			eventUc := usecase.NewAgentEvent(agents, projects, sessions, notifier, lock, obs.Nop())
+			if err := eventUc.Execute(ctx, usecase.AgentEventInput{AgentID: a.ID(), Event: tc.event}); err != nil {
+				t.Fatalf("%s event: %v", tc.event, err)
+			}
+			if len(notifier.calls) != 1 {
+				t.Fatalf("%s must notify once, got %d", tc.name, len(notifier.calls))
+			}
+		})
+	}
+}
+
+func TestAgentEvent_DoesNotNotifyWhenStatusIsUnchanged(t *testing.T) {
+	cases := []struct {
+		name  string
+		start domain.AgentStatus
+		event string
+	}{
 		{"busy to busy", domain.AgentBusy, "busy"},
+		{"idle to idle", domain.AgentIdle, "idle"},
+		{"waiting to waiting", domain.AgentWaiting, "waiting"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

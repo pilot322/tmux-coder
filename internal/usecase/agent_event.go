@@ -84,11 +84,11 @@ func (uc *AgentEvent) handleActivity(ctx context.Context, agentID int, status do
 		return err
 	}
 
-	// Notify only when an agent leaves busy for a state the user cares about.
+	// Notify when an agent enters a state the user cares about.
 	// Composing the body needs the project and session, looked up outside the
 	// write lock; delivery is best-effort and never affects event processing
 	// (ADR 0008).
-	if old == domain.AgentBusy && (status == domain.AgentWaiting || status == domain.AgentIdle) {
+	if old != status && (status == domain.AgentWaiting || status == domain.AgentIdle) {
 		project, session := uc.lookupContext(ctx, agent)
 		if n, ok := notificationFor(old, status, agentName(agent), project, session); ok {
 			_ = uc.notifier.Notify(ctx, n)
@@ -122,12 +122,12 @@ func agentName(agent *domain.Agent) string {
 	return fmt.Sprintf("agent-%d", agent.ID())
 }
 
-// notificationFor maps a busy departure to its Desktop Notification, mirroring
-// the TUI's visual semantics: waiting needs the user (critical), idle is done
-// (normal). It is the single source of truth for which transitions notify, so
-// any other (old, new) pair yields ok=false.
+// notificationFor maps a transition into a user-relevant state to its Desktop
+// Notification, mirroring the TUI's visual semantics: waiting needs the user
+// (critical), idle is done (normal). It is the single source of truth for which
+// transitions notify, so any other (old, new) pair yields ok=false.
 func notificationFor(old, new domain.AgentStatus, name, project, session string) (Notification, bool) {
-	if old != domain.AgentBusy {
+	if old == new {
 		return Notification{}, false
 	}
 	body := project + " · " + session

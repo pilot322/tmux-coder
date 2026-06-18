@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
@@ -81,7 +82,9 @@ func TestNotifierPlaysSoundWhenRequestedAndEnabled(t *testing.T) {
 
 func TestNotifierUsesConfiguredNamedSound(t *testing.T) {
 	rec := &recorder{}
-	n := &Notifier{CommandContext: rec.commandContext, soundEnabled: true, soundFiles: map[string]string{"agent-idle": "/home/me/.tmux-coder/sounds/agent-idle.oga"}}
+	n := &Notifier{CommandContext: rec.commandContext, soundEnabled: true, soundFiles: func() map[string]string {
+		return map[string]string{"agent-idle": "/home/me/.tmux-coder/sounds/agent-idle.oga"}
+	}}
 	n.Notify(context.Background(), usecase.Notification{Title: "t", Body: "b", Sound: true, SoundName: "agent-idle"})
 
 	got, ok := rec.find(soundPlayer)
@@ -95,7 +98,9 @@ func TestNotifierUsesConfiguredNamedSound(t *testing.T) {
 
 func TestNotifierFallsBackToConfiguredNotificationSound(t *testing.T) {
 	rec := &recorder{}
-	n := &Notifier{CommandContext: rec.commandContext, soundEnabled: true, soundFiles: map[string]string{defaultSoundName: "/home/me/.tmux-coder/sounds/notification.wav"}}
+	n := &Notifier{CommandContext: rec.commandContext, soundEnabled: true, soundFiles: func() map[string]string {
+		return map[string]string{defaultSoundName: "/home/me/.tmux-coder/sounds/notification.wav"}
+	}}
 	n.Notify(context.Background(), usecase.Notification{Title: "t", Body: "b", Sound: true, SoundName: "missing"})
 
 	got, ok := rec.find(soundPlayer)
@@ -103,6 +108,49 @@ func TestNotifierFallsBackToConfiguredNotificationSound(t *testing.T) {
 		t.Fatalf("expected the sound player to be invoked, argvs = %v", rec.argvs)
 	}
 	if want := []string{soundPlayer, "/home/me/.tmux-coder/sounds/notification.wav"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sound argv = %v, want %v", got, want)
+	}
+}
+
+func TestNotifierUsesSeparateSoundTimeout(t *testing.T) {
+	var mu sync.Mutex
+	deadlines := map[string]time.Duration{}
+	commandContext := func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		if deadline, ok := ctx.Deadline(); ok {
+			mu.Lock()
+			deadlines[name] = time.Until(deadline)
+			mu.Unlock()
+		}
+		return exec.CommandContext(ctx, "true")
+	}
+
+	n := &Notifier{CommandContext: commandContext, soundEnabled: true}
+	n.Notify(context.Background(), usecase.Notification{Title: "t", Body: "b", Sound: true})
+
+	mu.Lock()
+	notifyRemaining := deadlines["notify-send"]
+	soundRemaining := deadlines[soundPlayer]
+	mu.Unlock()
+	if soundRemaining <= notifyRemaining {
+		t.Fatalf("sound deadline = %v, notify-send deadline = %v; sound should have a longer budget", soundRemaining, notifyRemaining)
+	}
+}
+
+func TestNotifierResolvesSoundFilesAtNotifyTime(t *testing.T) {
+	rec := &recorder{}
+	files := map[string]string{defaultSoundName: "/home/me/.tmux-coder/sounds/old.wav"}
+	n := &Notifier{CommandContext: rec.commandContext, soundEnabled: true, soundFiles: func() map[string]string {
+		return files
+	}}
+	files = map[string]string{defaultSoundName: "/home/me/.tmux-coder/sounds/new.wav"}
+
+	n.Notify(context.Background(), usecase.Notification{Title: "t", Body: "b", Sound: true})
+
+	got, ok := rec.find(soundPlayer)
+	if !ok {
+		t.Fatalf("expected the sound player to be invoked, argvs = %v", rec.argvs)
+	}
+	if want := []string{soundPlayer, "/home/me/.tmux-coder/sounds/new.wav"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sound argv = %v, want %v", got, want)
 	}
 }

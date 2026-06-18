@@ -24,10 +24,13 @@ var (
 )
 
 // notifyTimeout bounds a single notify-send invocation so a wedged notification
-// daemon can never stall agent-event processing. The optional sound shares this
-// budget, so requesting one can add at most the notify budget — never an
-// unbounded stall.
+// daemon can never stall agent-event processing.
 const notifyTimeout = 2 * time.Second
+
+// soundTimeout bounds paplay independently from notify-send. Custom cues are
+// often longer than notification daemons need, so sharing notifyTimeout would
+// cut otherwise valid sounds short.
+const soundTimeout = 10 * time.Second
 
 // soundPlayer is the audio player the sound cue shells out to. paplay ships with
 // PulseAudio/PipeWire and reliably produces a sound on modern Linux desktops,
@@ -69,7 +72,7 @@ type Notifier struct {
 	// config or no player resolved on PATH, in which case Notify only shows the
 	// visual notification.
 	soundEnabled bool
-	soundFiles   map[string]string
+	soundFiles   func() map[string]string
 }
 
 // NewNotifier returns a notify-send-backed Notifier when running on Linux with
@@ -78,10 +81,12 @@ type Notifier struct {
 // covers a Linux host without libnotify installed. soundEnabled requests the
 // audible cue; it is honoured only when paplay also resolves on PATH.
 func NewNotifier(soundEnabled bool) usecase.Notifier {
-	return newNotifier(runtime.GOOS, exec.LookPath, exec.CommandContext, soundEnabled, SoundFiles(os.Getenv, fileExists))
+	return newNotifier(runtime.GOOS, exec.LookPath, exec.CommandContext, soundEnabled, func() map[string]string {
+		return SoundFiles(os.Getenv, fileExists)
+	})
 }
 
-func newNotifier(goos string, lookPath func(string) (string, error), commandContext func(ctx context.Context, name string, args ...string) *exec.Cmd, soundEnabled bool, soundFiles map[string]string) usecase.Notifier {
+func newNotifier(goos string, lookPath func(string) (string, error), commandContext func(ctx context.Context, name string, args ...string) *exec.Cmd, soundEnabled bool, soundFiles func() map[string]string) usecase.Notifier {
 	if goos != "linux" {
 		return NoopNotifier{}
 	}
@@ -133,9 +138,9 @@ func firstExistingSound(dir, name string, exists func(string) bool) string {
 }
 
 // Notify shells out to notify-send and, when the message requests it and sound
-// is enabled, plays the audible cue concurrently. Both run under notifyTimeout,
-// so the cue cannot stall event processing beyond the notify budget. The cue is
-// best-effort: its error is ignored.
+// is enabled, plays the audible cue concurrently. notify-send and paplay each
+// run under bounded contexts, so neither can stall event processing indefinitely.
+// The cue is best-effort: its error is ignored.
 //
 // The daemon is launched with no explicit cmd.Env (see
 // internal/client/daemon/daemon.go), so it inherits the launching client's
@@ -144,23 +149,25 @@ func firstExistingSound(dir, name string, exists func(string) bool) string {
 // from a context with no session bus (e.g. a bare SSH login), both fail; callers
 // swallow the error.
 func (n *Notifier) Notify(ctx context.Context, msg usecase.Notification) error {
-	ctx, cancel := context.WithTimeout(ctx, notifyTimeout)
-	defer cancel()
+	notifyCtx, notifyCancel := context.WithTimeout(ctx, notifyTimeout)
+	defer notifyCancel()
 
 	if msg.Sound && n.soundEnabled {
 		soundFile := n.soundFile(msg.SoundName)
+		soundCtx, soundCancel := context.WithTimeout(ctx, soundTimeout)
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			_ = n.CommandContext(ctx, soundPlayer, soundFile).Run()
+			_ = n.CommandContext(soundCtx, soundPlayer, soundFile).Run()
 		}()
-		// Wait runs before cancel (LIFO), so the cue completes — or hits the
-		// shared timeout — before the context is torn down.
+		// Wait runs before soundCancel (LIFO), so the cue completes — or hits its
+		// own timeout — before the context is torn down.
+		defer soundCancel()
 		defer wg.Wait()
 	}
 
-	cmd := n.CommandContext(ctx, "notify-send", "-u", urgencyFlag(msg.Urgency), "-a", "tmux-coder", msg.Title, msg.Body)
+	cmd := n.CommandContext(notifyCtx, "notify-send", "-u", urgencyFlag(msg.Urgency), "-a", "tmux-coder", msg.Title, msg.Body)
 	return cmd.Run()
 }
 
@@ -168,10 +175,14 @@ func (n *Notifier) soundFile(name string) string {
 	if name == "" {
 		name = defaultSoundName
 	}
-	if path := n.soundFiles[name]; path != "" {
+	var files map[string]string
+	if n.soundFiles != nil {
+		files = n.soundFiles()
+	}
+	if path := files[name]; path != "" {
 		return path
 	}
-	if path := n.soundFiles[defaultSoundName]; path != "" {
+	if path := files[defaultSoundName]; path != "" {
 		return path
 	}
 	return defaultSoundFile

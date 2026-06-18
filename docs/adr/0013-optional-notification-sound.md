@@ -6,11 +6,11 @@ Accepted
 
 ## Context
 
-ADR 0012 added daemon-side **Desktop Notifications** that fire on `busy → waiting`
-and `busy → idle`, delivered visually via `notify-send`. The motivating case is a
-user working in another window while an agent runs unattended — but a purely
-visual alert is easy to miss when the user is not looking at the screen at all. An
-audible cue closes that gap.
+ADR 0012 added daemon-side **Desktop Notifications** that fire when an agent
+enters `waiting` or `idle`, delivered visually via `notify-send`. The motivating
+case is a user working in another window while an agent runs unattended — but a
+purely visual alert is easy to miss when the user is not looking at the screen at
+all. An audible cue closes that gap.
 
 Two facts shaped the design. First, `notify-send`'s own sound hints
 (`-h string:sound-name:…`) are unreliable: several notification daemons (notably
@@ -54,10 +54,10 @@ case-insensitive); an unset or unrecognised value keeps it on. The flag governs
 sound only — it never affects the visual notification, so ADR 0012's "notifications
 are always on" still holds.
 
-**The cue shares the notify budget.** It plays concurrently with `notify-send`
-under the same 2-second timeout, so requesting a sound can add at most the notify
-budget and never an unbounded stall. Its error is swallowed like any other
-delivery failure (ADR 0012's "best-effort, never disruptive").
+**The cue has its own bounded budget.** It plays concurrently with `notify-send`,
+but uses a longer sound-specific timeout so ordinary custom sounds are not cut
+off by the visual notification's short timeout. Its error is swallowed like any
+other delivery failure (ADR 0012's "best-effort, never disruptive").
 
 ## Consequences
 
@@ -72,5 +72,5 @@ delivery failure (ADR 0012's "best-effort, never disruptive").
   (audio server address). A daemon first auto-launched from a context without one
   produces no sound; we do not engineer around this (same note as ADR 0012).
 - The cue blocks the triggering event's HTTP response for the sound's duration
-  (bounded by the notify timeout), the same way the visual notification already
+  (bounded by the sound timeout), the same way the visual notification already
   does.

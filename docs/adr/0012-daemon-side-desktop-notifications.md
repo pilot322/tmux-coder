@@ -26,17 +26,18 @@ write commits and raises the notification there. Consequences are intended:
 notifications fire **even when no TUI is open**, and never double-fire when several
 TUIs are attached. Sorting/notifying in a client would do neither.
 
-**Only `busy → waiting` and `busy → idle` notify.** A notification marks the end of
-unattended work — the agent was busy and has now either parked on the user
-(`waiting`) or finished (`idle`). No other transition qualifies: not
-`running → waiting`, not `idle → waiting`, not any `starting → *`, not lifecycle
-`started` / `exited`. The predicate is a pure helper (`notificationFor`) so it is
-unit-tested independently of delivery.
+**Transitions into `waiting` and `idle` notify.** A notification marks that the
+agent has either parked on the user (`waiting`) or finished (`idle`). Integrations
+do not all emit a perfectly paired `busy` before every terminal activity event, so
+requiring `busy → ...` makes real notifications dependent on hook ordering rather
+than the state the user sees. Repeated same-status events do not notify, and
+lifecycle `started` / `exited` events still never notify. The predicate is a pure
+helper (`notificationFor`) so it is unit-tested independently of delivery.
 
-| transition       | title              | body                   | urgency    |
-| ---------------- | ------------------ | ---------------------- | ---------- |
-| `busy → waiting` | `{name} needs input` | `{project} · {session}` | critical |
-| `busy → idle`    | `{name} is idle`     | `{project} · {session}` | normal   |
+| transition       | title                | body                    | urgency  |
+| ---------------- | -------------------- | ----------------------- | -------- |
+| `* → waiting`    | `{name} needs input` | `{project} · {session}` | critical |
+| `* → idle`       | `{name} is idle`     | `{project} · {session}` | normal   |
 
 Title and urgency mirror the TUI's visual semantics (`waiting` demands attention,
 `idle` is informational). `{name}` is the agent's display name, falling back to
