@@ -24,6 +24,10 @@ _Avoid_: Branch session
 The creation-time origin of a **Worktree Session**, recorded as its `parent`. When a Worktree Session is created *from* another **Session** (its source), that source becomes the parent and the new Session renders nested beneath it. When created from a bare base branch that no Session represents, the Worktree Session is parentless and renders at the **Project** level. Provenance is a frozen structural fact, not a live Git merge-base.
 _Avoid_: Lineage, ancestry, base
 
+**Session Topology**:
+The parent-child structure among **Sessions** within a **Project**, including **Provenance** for **Worktree Sessions** and **Secondary Session** nesting under a **Main Session** or **Worktree Session** root. It is structural metadata, not a representation of Git branch ancestry or filesystem layout.
+_Avoid_: Session tree, hierarchy, lineage
+
 **Secondary Session**:
 A child **Session** that stems from a **Main Session**, **Worktree Session**, or another **Secondary Session**. Represents a sub-context within the same worktree (e.g. `packages/frontend`) and may be declared in a **Config File**.
 _Avoid_: Sub-session, nested session
