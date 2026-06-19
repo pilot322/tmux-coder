@@ -2094,7 +2094,7 @@ func (m Model) sessionConnector(s httpclient.Session, hasLaterSibling bool) stri
 	}
 	line := "─"
 	if m.hasSecondaryDescendants(s.ID) && m.foldedSessions[s.ID] {
-		line = "▸"
+		return joint + "▸"
 	}
 	return joint + line + " "
 }
@@ -2222,7 +2222,11 @@ func (m Model) sessionTreePrefix(rows []httpclient.Session, s httpclient.Session
 		}
 	}
 	b.WriteString(m.sessionConnector(s, sessionHasLaterSibling(rows, s)))
-	b.WriteString("  " + sessionIcon(s) + "  ")
+	iconPadding := ""
+	if m.hasSecondaryDescendants(s.ID) && m.foldedSessions[s.ID] {
+		iconPadding = " "
+	}
+	b.WriteString(iconPadding + sessionIcon(s) + "  ")
 	return b.String()
 }
 

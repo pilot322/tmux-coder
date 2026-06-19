@@ -365,7 +365,7 @@ func TestModelOverviewRendersSessionsUnderProject(t *testing.T) {
 		},
 	})
 	view := m.View()
-	if !strings.Contains(view, "Backend API") || !strings.Contains(view, "├─   󰊢  api-main") || !strings.Contains(view, "└─     api-work (feature/api)") {
+	if !strings.Contains(view, "Backend API") || !strings.Contains(view, "├─ 󰊢  api-main") || !strings.Contains(view, "└─   api-work (feature/api)") {
 		t.Fatalf("view missing overview rows: %q", view)
 	}
 }
@@ -377,7 +377,7 @@ func TestModelOverviewRendersAgentsUnderSessions(t *testing.T) {
 		agents:   []httpclient.Agent{{ID: 20, ProjectID: 1, SessionID: 10, DisplayName: "reviewer", TmuxPaneID: "%7", Status: "running"}},
 	})
 	view := m.View()
-	if !strings.Contains(view, "└─   󰊢  api-main") || !strings.Contains(view, "└─   reviewer [running]") {
+	if !strings.Contains(view, "└─ 󰊢  api-main") || !strings.Contains(view, "└─   reviewer [running]") {
 		t.Fatalf("view missing session agent rows: %q", view)
 	}
 }
@@ -396,7 +396,7 @@ func TestModelOverviewIndentsAgentsUnderSecondarySessions(t *testing.T) {
 	m = press(m, runes("j"))
 	m = press(m, tea.KeyMsg{Type: tea.KeySpace})
 	view := m.View()
-	secondary := strings.Index(view, "└─     inner")
+	secondary := strings.Index(view, "└─   inner")
 	agent := strings.Index(view, "└─   reviewer [running]")
 	if secondary < 0 || agent < 0 || secondary > agent {
 		t.Fatalf("agent under secondary not indented below secondary session: %q", view)
@@ -434,7 +434,7 @@ func TestModelStartsWithSecondarySessionsFolded(t *testing.T) {
 	})
 
 	view := m.View()
-	if !strings.Contains(view, "└▸   󰊢  api.main") || strings.Contains(view, "pkg") {
+	if !strings.Contains(view, "└▸ 󰊢  api.main") || strings.Contains(view, "pkg") {
 		t.Fatalf("secondary sessions should start folded under a marker: %q", view)
 	}
 }
@@ -450,7 +450,7 @@ func TestModelSpaceTogglesSelectedSessionFold(t *testing.T) {
 
 	m = press(m, tea.KeyMsg{Type: tea.KeySpace})
 	view := m.View()
-	if !strings.Contains(view, "└─   󰊢  api.main") || !strings.Contains(view, "pkg") {
+	if !strings.Contains(view, "└─ 󰊢  api.main") || !strings.Contains(view, "pkg") {
 		t.Fatalf("space should unfold selected session subtree: %q", view)
 	}
 }
@@ -465,11 +465,11 @@ func TestModelGlobalFoldToggleFoldsAndUnfoldsAllFoldableSessions(t *testing.T) {
 	})
 
 	m = press(m, runes("S"))
-	if view := m.View(); !strings.Contains(view, "pkg") || !strings.Contains(view, "└─   󰊢  api.main") {
+	if view := m.View(); !strings.Contains(view, "pkg") || !strings.Contains(view, "└─ 󰊢  api.main") {
 		t.Fatalf("S should unfold all when all foldable sessions are folded: %q", view)
 	}
 	m = press(m, runes("S"))
-	if view := m.View(); strings.Contains(view, "pkg") || !strings.Contains(view, "└▸   󰊢  api.main") {
+	if view := m.View(); strings.Contains(view, "pkg") || !strings.Contains(view, "└▸ 󰊢  api.main") {
 		t.Fatalf("S should fold all when any foldable session is unfolded: %q", view)
 	}
 }
@@ -523,13 +523,13 @@ func TestModelSessionRowsNestWorktreesByProvenance(t *testing.T) {
 
 	// Nesting is shown by rooted-tree lanes: feat one level under main,
 	// feat-backend under feat, while the base-ref worktree sits at the Project level.
-	if !strings.Contains(view, "│  └─     api.feat (feat)") {
+	if !strings.Contains(view, "│  └─   api.feat (feat)") {
 		t.Fatalf("feat should be indented one level under main:\n%q", view)
 	}
-	if !strings.Contains(view, "│     └─     api.feat-backend (feat-backend)") {
+	if !strings.Contains(view, "│     └─   api.feat-backend (feat-backend)") {
 		t.Fatalf("feat-backend should be indented under feat:\n%q", view)
 	}
-	if !strings.Contains(view, "└─     api.standalone (standalone)") || strings.Contains(view, "│  └─     api.standalone (standalone)") {
+	if !strings.Contains(view, "└─   api.standalone (standalone)") || strings.Contains(view, "│  └─   api.standalone (standalone)") {
 		t.Fatalf("base-ref worktree should sit at the project level (same indent as main):\n%q", view)
 	}
 }
@@ -542,7 +542,7 @@ func TestModelSessionsViewOmitsAgents(t *testing.T) {
 	})
 	m = press(m, runes("2"))
 	view := m.View()
-	if !strings.Contains(view, "└─   󰊢  main") {
+	if !strings.Contains(view, "└─ 󰊢  main") {
 		t.Fatalf("sessions view missing session row: %q", view)
 	}
 	if strings.Contains(view, "reviewer") {
@@ -716,7 +716,7 @@ func TestModelViewScrollsSelectedRowIntoSmallViewport(t *testing.T) {
 	m = press(m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("G")})
 
 	view := m.View()
-	if !strings.Contains(view, "> └─     wt-4") {
+	if !strings.Contains(view, "> └─   wt-4") {
 		t.Fatalf("selected bottom row should be visible in small viewport: %q", view)
 	}
 	if !strings.Contains(view, "j/k move") {

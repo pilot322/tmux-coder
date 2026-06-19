@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 
 	"github.com/pilot322/tmux-coder/internal/obs"
@@ -124,7 +125,21 @@ func (g *Gateway) AddWorktree(ctx context.Context, repoPath, worktreePath, branc
 }
 
 func (g *Gateway) RemoveWorktree(ctx context.Context, worktreePath string, force bool) error {
-	args := []string{"-C", worktreePath, "worktree", "remove"}
+	if repoPath, ok := repoPathFromWorktreeGitFile(worktreePath); ok {
+		if err := g.removeWorktreeFrom(ctx, repoPath, worktreePath, force); err == nil {
+			return nil
+		} else if force && isOrphanedWorktreeDir(worktreePath, repoPath) {
+			g.log.Warn(ctx, "removing orphaned worktree directory", "worktree", worktreePath, "repo", repoPath, "err", err.Error())
+			return os.RemoveAll(worktreePath)
+		} else {
+			return err
+		}
+	}
+	return g.removeWorktreeFrom(ctx, worktreePath, worktreePath, force)
+}
+
+func (g *Gateway) removeWorktreeFrom(ctx context.Context, repoPath, worktreePath string, force bool) error {
+	args := []string{"-C", repoPath, "worktree", "remove"}
 	if force {
 		args = append(args, "--force")
 	}
@@ -135,9 +150,48 @@ func (g *Gateway) RemoveWorktree(ctx context.Context, worktreePath string, force
 		return nil
 	}
 	if isExit(err) {
+		g.log.Error(ctx, "git exec failed", "args", args, "err", err.Error(), "output", strings.TrimSpace(string(out)))
 		return fmt.Errorf("%w: git %v: %v: %s", usecase.ErrConflict, args, err, out)
 	}
 	return fmt.Errorf("git %v: %w: %s", args, err, out)
+}
+
+func repoPathFromWorktreeGitFile(worktreePath string) (string, bool) {
+	data, err := os.ReadFile(filepath.Join(worktreePath, ".git"))
+	if err != nil {
+		return "", false
+	}
+	gitdir, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir: ")
+	if !ok {
+		return "", false
+	}
+	marker := string(filepath.Separator) + filepath.Join(".git", "worktrees") + string(filepath.Separator)
+	gitdir = filepath.Clean(gitdir)
+	idx := strings.Index(gitdir, marker)
+	if idx <= 0 {
+		return "", false
+	}
+	return gitdir[:idx], true
+}
+
+func isOrphanedWorktreeDir(worktreePath, repoPath string) bool {
+	info, err := os.Stat(worktreePath)
+	if err != nil || !info.IsDir() {
+		return false
+	}
+	if _, err := os.Stat(filepath.Join(repoPath, ".git")); err != nil {
+		return false
+	}
+	data, err := os.ReadFile(filepath.Join(worktreePath, ".git"))
+	if err != nil {
+		return false
+	}
+	gitdir, ok := strings.CutPrefix(strings.TrimSpace(string(data)), "gitdir: ")
+	if !ok {
+		return false
+	}
+	_, err = os.Stat(gitdir)
+	return errors.Is(err, os.ErrNotExist)
 }
 
 func (g *Gateway) DeleteBranch(ctx context.Context, repoPath, branch string) error {
