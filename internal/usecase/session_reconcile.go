@@ -29,7 +29,7 @@ func reconcileWorktreeSessions(ctx context.Context, sessions ISessionRepository,
 		return err
 	}
 
-	var prune []int
+	var missingWorktrees []int
 	for _, s := range worktrees {
 		exists, err := git.WorktreePathExists(ctx, s.WorktreePath())
 		if err != nil {
@@ -38,6 +38,19 @@ func reconcileWorktreeSessions(ctx context.Context, sessions ISessionRepository,
 		if exists {
 			continue
 		}
+		missingWorktrees = append(missingWorktrees, s.ID())
+	}
+	if len(missingWorktrees) == 0 {
+		return nil
+	}
+
+	plan, err := domain.PlanWorktreePrune(allSessions, missingWorktrees)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	byID := sessionsByID(allSessions)
+	for _, id := range plan.DeleteSessionIDs {
+		s := byID[id]
 		tmuxExists, err := tmux.Exists(ctx, s.TmuxName())
 		if err != nil {
 			return fmt.Errorf("%w: %v", ErrGateway, err)
@@ -47,53 +60,21 @@ func reconcileWorktreeSessions(ctx context.Context, sessions ISessionRepository,
 				return fmt.Errorf("%w: %v", ErrGateway, err)
 			}
 		}
-		toPrune := append([]*domain.Session{s}, secondaryDescendants(allSessions, s.ID())...)
-		for _, descendant := range toPrune[1:] {
-			tmuxExists, err := tmux.Exists(ctx, descendant.TmuxName())
-			if err != nil {
-				return fmt.Errorf("%w: %v", ErrGateway, err)
-			}
-			if tmuxExists {
-				if err := tmux.Kill(ctx, descendant.TmuxName()); err != nil {
-					return fmt.Errorf("%w: %v", ErrGateway, err)
-				}
-			}
-		}
-		for _, p := range toPrune {
-			prune = append(prune, p.ID())
-		}
 	}
 
-	if len(prune) == 0 {
-		return nil
-	}
-	prunedSet := make(map[int]bool, len(prune))
-	for _, id := range prune {
-		prunedSet[id] = true
-	}
-	parentOf := make(map[int]int, len(allSessions))
-	for _, s := range allSessions {
-		parentOf[s.ID()] = s.Parent()
-	}
 	return lock.WithWrite(func() error {
 		// Worktree children of a pruned worktree are independent checkouts that
 		// survive; reparent them to the nearest ancestor that is not itself
 		// being pruned so they stay attached to the tree (ADR-0010). Secondary
 		// children are already in the prune set via cascade above.
-		for _, s := range allSessions {
-			if prunedSet[s.ID()] || s.Type() != domain.WorktreeSession || !prunedSet[s.Parent()] {
-				continue
-			}
-			newParent := s.Parent()
-			for newParent > 0 && prunedSet[newParent] {
-				newParent = parentOf[newParent]
-			}
-			reparented := domain.NewWorktreeSession(s.ID(), newParent, s.ProjectID(), s.Name(), s.Branch(), s.WorktreePath())
+		for _, r := range plan.ReparentWorktrees {
+			s := byID[r.SessionID]
+			reparented := domain.NewWorktreeSession(s.ID(), r.ParentID, s.ProjectID(), s.Name(), s.Branch(), s.WorktreePath())
 			if _, err := sessions.Update(ctx, reparented); err != nil {
 				return err
 			}
 		}
-		for _, id := range prune {
+		for _, id := range plan.DeleteSessionIDs {
 			if err := leases.ReleaseSessionLeases(ctx, id); err != nil {
 				return err
 			}
