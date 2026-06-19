@@ -38,7 +38,7 @@ func (uc *DeleteAgent) Execute(ctx context.Context, id int) error {
 
 	if agent.PaneOwned() {
 		if err := uc.tmux.KillPane(ctx, agent.TmuxPaneID()); err != nil {
-			return fmt.Errorf("%w: %v", ErrGateway, err)
+			uc.log.Warn(ctx, "agent pane kill failed during delete", "agent_id", id, "pane_id", agent.TmuxPaneID(), "err", err.Error())
 		}
 	} else {
 		if agent.ChildProcessGroupID() == 0 {

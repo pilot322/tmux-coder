@@ -649,6 +649,20 @@ func TestDeleteAgent_KillsOwnedPaneAndDeletesRecord(t *testing.T) {
 	}
 }
 
+func TestDeleteAgent_DeletesRecordWhenOwnedPaneKillFails(t *testing.T) {
+	_, agents, _, _, gw, lock := agentFixture()
+	ctx := context.Background()
+	gw.killErr = errors.New("can't find pane: %10")
+	agent, _ := agents.Create(ctx, domain.NewAgent(0, 1, 2, "opencode", "", "%10", true, domain.AgentRunning))
+
+	if err := usecase.NewDeleteAgent(agents, gw, nil, lock, obs.Nop()).Execute(ctx, agent.ID()); err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if _, err := agents.GetByID(ctx, agent.ID()); !errors.Is(err, usecase.ErrAgentNotFound) {
+		t.Fatalf("lookup error = %v, want ErrAgentNotFound", err)
+	}
+}
+
 func TestDeleteAgent_TerminatesBorrowedPaneProcessGroup(t *testing.T) {
 	_, agents, _, _, gw, lock := agentFixture()
 	ctx := context.Background()
