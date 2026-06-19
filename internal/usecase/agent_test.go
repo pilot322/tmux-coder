@@ -21,6 +21,7 @@ type fakeAgentGateway struct {
 	commands       []string
 	paneIDCounter  int
 	panes          map[string]bool
+	paneErr        error
 	renameErr      error
 	killErr        error
 }
@@ -54,6 +55,9 @@ func (g *fakeAgentGateway) NewWindow(ctx context.Context, sessionName, windowNam
 }
 
 func (g *fakeAgentGateway) PaneExists(ctx context.Context, paneID string) (bool, error) {
+	if g.paneErr != nil {
+		return false, g.paneErr
+	}
 	return g.panes[paneID], nil
 }
 
@@ -511,7 +515,7 @@ func TestAgentEvent_InvalidEvent(t *testing.T) {
 	}
 }
 
-func TestGetAgents_PrunesMissingPanesAndFilters(t *testing.T) {
+func TestGetAgents_DoesNotPruneMissingPanesAndFilters(t *testing.T) {
 	_, agents, projects, sessions, gw, lock := agentFixture()
 	p, s := seedProjectAndSession(projects, sessions)
 	ctx := context.Background()
@@ -520,7 +524,7 @@ func TestGetAgents_PrunesMissingPanesAndFilters(t *testing.T) {
 	missingPane := "%11"
 	gw.panes[keepPane] = true
 	kept, _ := agents.Create(ctx, domain.NewAgent(0, p.ID(), s.ID(), "opencode", "", keepPane, true, domain.AgentRunning))
-	pruned, _ := agents.Create(ctx, domain.NewAgent(0, p.ID(), s.ID(), "claude", "", missingPane, true, domain.AgentRunning))
+	missing, _ := agents.Create(ctx, domain.NewAgent(0, p.ID(), s.ID(), "claude", "", missingPane, true, domain.AgentRunning))
 	otherProject, _ := projects.Create(ctx, domain.NewProject(0, "/work/web", "web"))
 	otherSession, _ := sessions.Create(ctx, domain.NewSession(0, -1, otherProject.ID(), "web.main", domain.MainSession))
 	gw.panes["%12"] = true
@@ -530,14 +534,41 @@ func TestGetAgents_PrunesMissingPanesAndFilters(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	if len(views) != 1 || views[0].Agent.ID() != kept.ID() {
-		t.Fatalf("views = %#v, want only kept agent %d", views, kept.ID())
+	if len(views) != 2 {
+		t.Fatalf("views = %#v, want kept and missing agents", views)
 	}
-	if _, err := agents.GetByID(ctx, pruned.ID()); !errors.Is(err, usecase.ErrAgentNotFound) {
-		t.Fatalf("pruned agent lookup error = %v, want ErrAgentNotFound", err)
+	seen := map[int]bool{}
+	for _, view := range views {
+		seen[view.Agent.ID()] = true
+	}
+	if !seen[kept.ID()] || !seen[missing.ID()] {
+		t.Fatalf("views contain IDs %#v, want kept %d and missing %d", seen, kept.ID(), missing.ID())
+	}
+	if _, err := agents.GetByID(ctx, missing.ID()); err != nil {
+		t.Fatalf("missing-pane agent lookup error = %v, want agent retained", err)
 	}
 	if views[0].MainSessionName != s.Name() || views[0].MainTmuxSessionName != s.TmuxName() {
 		t.Fatalf("main session = %q/%q", views[0].MainSessionName, views[0].MainTmuxSessionName)
+	}
+}
+
+func TestGetAgents_KeepsAgentsWhenPaneCheckFails(t *testing.T) {
+	_, agents, projects, sessions, gw, lock := agentFixture()
+	p, s := seedProjectAndSession(projects, sessions)
+	ctx := context.Background()
+
+	agent, _ := agents.Create(ctx, domain.NewAgent(0, p.ID(), s.ID(), "opencode", "", "%10", true, domain.AgentRunning))
+	gw.paneErr = errors.New("tmux temporarily unavailable")
+
+	views, err := usecase.NewGetAgents(agents, projects, sessions, gw, lock, obs.Nop()).Execute(ctx, usecase.GetAgentsInput{})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(views) != 1 || views[0].Agent.ID() != agent.ID() {
+		t.Fatalf("views = %#v, want agent retained", views)
+	}
+	if _, err := agents.GetByID(ctx, agent.ID()); err != nil {
+		t.Fatalf("agent lookup error = %v, want agent retained", err)
 	}
 }
 

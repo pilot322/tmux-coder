@@ -27,15 +27,28 @@ func (g *TmuxGateway) NewWindow(ctx context.Context, sessionName, windowName, wo
 
 func (g *TmuxGateway) PaneExists(ctx context.Context, paneID string) (bool, error) {
 	cmd := g.cmd(ctx, "list-panes", "-t", paneID)
-	err := cmd.Run()
+	out, err := cmd.CombinedOutput()
 	if err != nil {
 		var exitErr *exec.ExitError
 		if errors.As(err, &exitErr) {
-			return false, nil
+			output := strings.TrimSpace(string(out))
+			if isTmuxTargetNotFound(output) {
+				g.log.Warn(ctx, "tmux pane target not found", "pane_id", paneID, "status", exitErr.ExitCode(), "output", output)
+				return false, nil
+			}
+			g.log.Warn(ctx, "tmux pane existence check failed", "pane_id", paneID, "status", exitErr.ExitCode(), "output", output)
+			return false, fmt.Errorf("list-panes -t %s: %w: %s", paneID, err, output)
 		}
 		return false, err
 	}
 	return true, nil
+}
+
+func isTmuxTargetNotFound(output string) bool {
+	output = strings.ToLower(output)
+	return strings.Contains(output, "can't find pane") ||
+		strings.Contains(output, "can't find window") ||
+		strings.Contains(output, "can't find session")
 }
 
 func (g *TmuxGateway) RenameWindow(ctx context.Context, paneID, name string) error {

@@ -100,35 +100,16 @@ func (uc *GetAgents) Execute(ctx context.Context, in GetAgentsInput) ([]AgentVie
 		}
 	}
 
-	var pruned []int
 	for _, a := range agents {
 		if a.TmuxPaneID() != "" {
 			exists, err := uc.tmux.PaneExists(ctx, a.TmuxPaneID())
 			if err != nil {
-				return nil, fmt.Errorf("%w: %v", ErrGateway, err)
+				uc.log.Warn(ctx, "agent pane existence check failed", "agent_id", a.ID(), "pane_id", a.TmuxPaneID(), "err", err.Error())
+				continue
 			}
 			if !exists {
-				pruned = append(pruned, a.ID())
+				uc.log.Warn(ctx, "agent pane not found during list", "agent_id", a.ID(), "pane_id", a.TmuxPaneID())
 			}
-		}
-	}
-
-	if len(pruned) > 0 {
-		uc.log.Info(ctx, "pruning agents whose panes are gone", "count", len(pruned), "agent_ids", pruned)
-		if err := uc.lock.WithWrite(func() error {
-			for _, id := range pruned {
-				if err := uc.agents.Delete(ctx, id); err != nil {
-					return err
-				}
-			}
-			all, err := uc.agents.GetAll(ctx)
-			if err != nil {
-				return err
-			}
-			agents = all
-			return nil
-		}); err != nil {
-			return nil, err
 		}
 	}
 
