@@ -13,7 +13,7 @@ import (
 var _ usecase.AgentTmuxGateway = (*TmuxGateway)(nil)
 
 func (g *TmuxGateway) NewWindow(ctx context.Context, sessionName, windowName, workingDir, command string, env []string) (string, error) {
-	args := []string{"-L", g.serverLabel, "new-window", "-P", "-F", "#{pane_id}", "-t", sessionName, "-n", windowName, "-c", workingDir}
+	args := []string{"new-window", "-P", "-F", "#{pane_id}", "-t", sessionName, "-n", windowName, "-c", workingDir}
 	for _, e := range env {
 		args = append(args, "-e", e)
 	}

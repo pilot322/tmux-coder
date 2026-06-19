@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -52,6 +53,40 @@ func TestPaneExistsReturnsErrorForOtherTmuxFailures(t *testing.T) {
 	}
 }
 
+func TestNewWindowAppliesServerLabelOnce(t *testing.T) {
+	g := fakeTmuxGateway(t)
+	argsPath := filepath.Join(t.TempDir(), "args")
+	t.Setenv("TMUX_CODER_FAKE_TMUX_MODE", "new-window")
+	t.Setenv("TMUX_CODER_FAKE_TMUX_ARGS", argsPath)
+
+	paneID, err := g.NewWindow(context.Background(), "session-main", "agent-1", "/work/tree", "opencode run", []string{"FOO=bar", "BAZ=qux"})
+	if err != nil {
+		t.Fatalf("NewWindow: %v", err)
+	}
+	if paneID != "%42" {
+		t.Fatalf("paneID = %q, want %%42", paneID)
+	}
+
+	data, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatalf("read fake tmux args: %v", err)
+	}
+	got := strings.Split(strings.TrimSpace(string(data)), "\n")
+	want := []string{
+		"-L", "test",
+		"new-window", "-P", "-F", "#{pane_id}",
+		"-t", "session-main",
+		"-n", "agent-1",
+		"-c", "/work/tree",
+		"-e", "FOO=bar",
+		"-e", "BAZ=qux",
+		"opencode run",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("args = %#v, want %#v", got, want)
+	}
+}
+
 func fakeTmuxGateway(t *testing.T) *TmuxGateway {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "tmux")
@@ -67,6 +102,11 @@ missing-pane)
 server-error)
   printf '%s\n' "server exited unexpectedly" >&2
   exit 1
+  ;;
+new-window)
+  printf '%s\n' "$@" > "$TMUX_CODER_FAKE_TMUX_ARGS"
+  printf '%s\n' "%42"
+  exit 0
   ;;
 *)
   printf '%s\n' "unknown fake tmux mode" >&2
