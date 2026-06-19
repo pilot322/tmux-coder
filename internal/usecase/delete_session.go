@@ -75,6 +75,11 @@ func (uc *DeleteSession) deleteWorktree(ctx context.Context, session *domain.Ses
 	}); err != nil {
 		return err
 	}
+	byID := sessionsByID(allSessions)
+	plan, err := domain.PlanWorktreeRemoval(allSessions, session.ID())
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrValidation, err)
+	}
 
 	if err := uc.git.RemoveWorktree(ctx, session.WorktreePath(), force); err != nil {
 		if errors.Is(err, ErrConflict) {
@@ -86,30 +91,26 @@ func (uc *DeleteSession) deleteWorktree(ctx context.Context, session *domain.Ses
 	// The worktree is already gone, so the records must be removed to stay
 	// consistent — listed-but-unattachable sessions are worse than stray tmux
 	// sessions, which the kills below clear best-effort.
-	cascade := secondaryDescendants(allSessions, session.ID())
-	uc.releaseAndKill(ctx, session)
-	for _, s := range cascade {
-		uc.releaseAndKill(ctx, s)
+	for _, id := range plan.DeleteSessionIDs {
+		uc.releaseAndKill(ctx, byID[id])
 	}
 
 	return uc.lock.WithWrite(func() error {
-		for _, s := range allSessions {
-			if s.Type() != domain.WorktreeSession || s.Parent() != session.ID() {
-				continue
-			}
-			reparented := domain.NewWorktreeSession(s.ID(), session.Parent(), s.ProjectID(), s.Name(), s.Branch(), s.WorktreePath())
+		for _, r := range plan.ReparentWorktrees {
+			s := byID[r.SessionID]
+			reparented := domain.NewWorktreeSession(s.ID(), r.ParentID, s.ProjectID(), s.Name(), s.Branch(), s.WorktreePath())
 			if _, err := uc.sessions.Update(ctx, reparented); err != nil {
 				return err
 			}
 		}
-		for _, s := range append(cascade, session) {
-			if err := uc.agents.DeleteBySessionID(ctx, s.ID()); err != nil {
+		for _, id := range plan.DeleteSessionIDs {
+			if err := uc.agents.DeleteBySessionID(ctx, id); err != nil {
 				return err
 			}
-			if err := uc.leases.ReleaseSessionLeases(ctx, s.ID()); err != nil {
+			if err := uc.leases.ReleaseSessionLeases(ctx, id); err != nil {
 				return err
 			}
-			if err := uc.sessions.Delete(ctx, s.ID()); err != nil {
+			if err := uc.sessions.Delete(ctx, id); err != nil {
 				return err
 			}
 		}
@@ -126,32 +127,32 @@ func (uc *DeleteSession) deleteSecondary(ctx context.Context, session *domain.Se
 	}); err != nil {
 		return err
 	}
-
-	toDelete := []*domain.Session{session}
-	if session.OnDelete() != "inherit" {
-		toDelete = append(toDelete, secondaryDescendants(sessions, session.ID())...)
+	byID := sessionsByID(sessions)
+	plan, err := domain.PlanSecondaryRemoval(sessions, session.ID())
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrValidation, err)
 	}
-	for _, s := range toDelete {
-		uc.releaseAndKill(ctx, s)
+
+	for _, id := range plan.DeleteSessionIDs {
+		uc.releaseAndKill(ctx, byID[id])
 	}
 
 	return uc.lock.WithWrite(func() error {
-		if session.OnDelete() == "inherit" {
-			for _, s := range sessions {
-				if s.Type() != domain.SecondarySession || s.Parent() != session.ID() {
-					continue
-				}
-				updated := domain.NewSecondarySessionWithTmuxName(s.ID(), session.Parent(), s.ProjectID(), s.Name(), s.TmuxName(), s.RelativeWorkingDirectory(), s.OnDelete())
-				if _, err := uc.sessions.Update(ctx, updated); err != nil {
-					return err
-				}
-			}
-		}
-		for _, s := range toDelete {
-			if err := uc.agents.DeleteBySessionID(ctx, s.ID()); err != nil {
+		for _, r := range plan.ReparentSecondaries {
+			s := byID[r.SessionID]
+			updated := domain.NewSecondarySessionWithTmuxName(s.ID(), r.ParentID, s.ProjectID(), s.Name(), s.TmuxName(), s.RelativeWorkingDirectory(), s.OnDelete())
+			if _, err := uc.sessions.Update(ctx, updated); err != nil {
 				return err
 			}
-			if err := uc.sessions.Delete(ctx, s.ID()); err != nil {
+		}
+		for _, id := range plan.DeleteSessionIDs {
+			if err := uc.agents.DeleteBySessionID(ctx, id); err != nil {
+				return err
+			}
+			if err := uc.leases.ReleaseSessionLeases(ctx, id); err != nil {
+				return err
+			}
+			if err := uc.sessions.Delete(ctx, id); err != nil {
 				return err
 			}
 		}
@@ -166,6 +167,9 @@ func (uc *DeleteSession) deleteSecondary(ctx context.Context, session *domain.Se
 // the session the user is attached to can itself tear the server down and make
 // kill-session exit non-zero, which is exactly why the kill is not surfaced.
 func (uc *DeleteSession) releaseAndKill(ctx context.Context, session *domain.Session) {
+	if session == nil {
+		return
+	}
 	uc.switchClientsToMain(ctx, session)
 	_ = uc.tmux.Kill(ctx, session.TmuxName())
 }
@@ -195,14 +199,10 @@ func (uc *DeleteSession) switchClientsToMain(ctx context.Context, session *domai
 	_ = uc.tmux.SwitchClients(ctx, session.TmuxName(), mainTmuxName)
 }
 
-func secondaryDescendants(sessions []*domain.Session, parentID int) []*domain.Session {
-	var out []*domain.Session
+func sessionsByID(sessions []*domain.Session) map[int]*domain.Session {
+	byID := make(map[int]*domain.Session, len(sessions))
 	for _, s := range sessions {
-		if s.Type() != domain.SecondarySession || s.Parent() != parentID {
-			continue
-		}
-		out = append(out, s)
-		out = append(out, secondaryDescendants(sessions, s.ID())...)
+		byID[s.ID()] = s
 	}
-	return out
+	return byID
 }
