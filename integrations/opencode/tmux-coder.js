@@ -67,6 +67,11 @@ export const TmuxCoderStatus = async () => {
   // a failing daemon cannot reopen that per-token spam.
   let lastStatus = "";
 
+  // OpenCode emits session.idle for child sessions as well as the primary
+  // session. Remember children so a finished subagent cannot mark the owning
+  // tmux-coder agent idle while its primary turn is still running.
+  const childSessions = new Set();
+
   // While blocked on a permission prompt or a question, the streaming/tool busy
   // signals are ignored so a token arriving mid-prompt cannot clobber waiting;
   // only the reply or session.idle releases it.
@@ -96,6 +101,22 @@ export const TmuxCoderStatus = async () => {
     event: async ({ event }) => {
       const type = event?.type;
       debug(`event ${type}`);
+
+      if (type === "session.created" || type === "session.updated") {
+        const info = event.properties?.info;
+        if (info?.parentID) childSessions.add(info.id);
+        else if (info?.id) childSessions.delete(info.id);
+      } else if (type === "session.deleted") {
+        childSessions.delete(event.properties?.info?.id);
+      }
+
+      if (
+        type === "session.idle" &&
+        childSessions.has(event.properties?.sessionID)
+      ) {
+        debug(`ignore child session idle ${event.properties.sessionID}`);
+        return;
+      }
 
       if (WAITING_EVENTS.has(type)) {
         blocked = true;
