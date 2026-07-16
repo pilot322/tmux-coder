@@ -149,12 +149,13 @@ func firstExistingSound(dir, name string, exists func(string) bool) string {
 // from a context with no session bus (e.g. a bare SSH login), both fail; callers
 // swallow the error.
 func (n *Notifier) Notify(ctx context.Context, msg usecase.Notification) error {
-	notifyCtx, notifyCancel := context.WithTimeout(ctx, notifyTimeout)
+	deliveryCtx := context.WithoutCancel(ctx)
+	notifyCtx, notifyCancel := context.WithTimeout(deliveryCtx, notifyTimeout)
 	defer notifyCancel()
 
 	if msg.Sound && n.soundEnabled {
 		soundFile := n.soundFile(msg.SoundName)
-		soundCtx, soundCancel := context.WithTimeout(ctx, soundTimeout)
+		soundCtx, soundCancel := context.WithTimeout(deliveryCtx, soundTimeout)
 		var wg sync.WaitGroup
 		wg.Add(1)
 		go func() {

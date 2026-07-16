@@ -136,6 +136,41 @@ func TestNotifierUsesSeparateSoundTimeout(t *testing.T) {
 	}
 }
 
+func TestNotifierDeliveryOutlivesCanceledCallerContext(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	var mu sync.Mutex
+	canceled := map[string]bool{}
+	commandContext := func(ctx context.Context, name string, args ...string) *exec.Cmd {
+		select {
+		case <-ctx.Done():
+			mu.Lock()
+			canceled[name] = true
+			mu.Unlock()
+		default:
+			mu.Lock()
+			canceled[name] = false
+			mu.Unlock()
+		}
+		return exec.CommandContext(ctx, "true")
+	}
+
+	n := &Notifier{CommandContext: commandContext, soundEnabled: true}
+	n.Notify(parent, usecase.Notification{Title: "t", Body: "b", Sound: true})
+
+	mu.Lock()
+	notifyCanceled := canceled["notify-send"]
+	soundCanceled := canceled[soundPlayer]
+	mu.Unlock()
+	if notifyCanceled {
+		t.Fatalf("notify-send context inherited caller cancellation")
+	}
+	if soundCanceled {
+		t.Fatalf("sound context inherited caller cancellation")
+	}
+}
+
 func TestNotifierResolvesSoundFilesAtNotifyTime(t *testing.T) {
 	rec := &recorder{}
 	files := map[string]string{defaultSoundName: "/home/me/.tmux-coder/sounds/old.wav"}
