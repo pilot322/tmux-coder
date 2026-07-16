@@ -131,6 +131,24 @@ func TestRemoveWorktreeWithoutForceKeepsOrphanedDirectory(t *testing.T) {
 	}
 }
 
+func TestRemoveWorktreeForceRemovesDirectoryWithoutGitMetadata(t *testing.T) {
+	worktree := filepath.Join(t.TempDir(), "repo.feature")
+	if err := os.MkdirAll(worktree, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "left-behind.txt"), []byte("partial checkout\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	g := NewGateway(obs.Nop())
+	if err := g.RemoveWorktree(context.Background(), worktree, true); err != nil {
+		t.Fatalf("RemoveWorktree: %v", err)
+	}
+	if _, err := os.Stat(worktree); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("worktree stat after forced metadata-less removal = %v, want not exist", err)
+	}
+}
+
 func runGit(t *testing.T, repo string, args ...string) {
 	t.Helper()
 	full := append([]string{"-C", repo}, args...)

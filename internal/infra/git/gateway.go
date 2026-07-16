@@ -135,7 +135,14 @@ func (g *Gateway) RemoveWorktree(ctx context.Context, worktreePath string, force
 			return err
 		}
 	}
-	return g.removeWorktreeFrom(ctx, worktreePath, worktreePath, force)
+	if err := g.removeWorktreeFrom(ctx, worktreePath, worktreePath, force); err != nil {
+		if force && isDirectory(worktreePath) {
+			g.log.Warn(ctx, "removing worktree directory without git metadata", "worktree", worktreePath, "err", err.Error())
+			return os.RemoveAll(worktreePath)
+		}
+		return err
+	}
+	return nil
 }
 
 func (g *Gateway) removeWorktreeFrom(ctx context.Context, repoPath, worktreePath string, force bool) error {
@@ -192,6 +199,11 @@ func isOrphanedWorktreeDir(worktreePath, repoPath string) bool {
 	}
 	_, err = os.Stat(gitdir)
 	return errors.Is(err, os.ErrNotExist)
+}
+
+func isDirectory(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }
 
 func (g *Gateway) DeleteBranch(ctx context.Context, repoPath, branch string) error {
