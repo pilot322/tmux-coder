@@ -1,6 +1,8 @@
 .claude/skills/go-mentor
 **/go-*.md
 .env
+__pycache__/
+/.scratch/opencode-server-benchmark-*/
 
 # built binaries
 /tmux-coderd
