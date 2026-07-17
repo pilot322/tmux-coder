@@ -16,7 +16,7 @@ Unit tests don't cover the daemon ↔ client ↔ tmux wiring. For anything touch
 
 ### Why this is safe to do
 
-Every dev build is isolated. `./dev build` bakes a per-worktree daemon port and tmux server label into the binary via `-ldflags`, both derived from the worktree path. So the instance you spin up here **cannot touch the installed (prod) tmux-coder or any other worktree's instance** — it gets its own daemon and its own tmux server. The installed binary keeps the shipped `tmux-coder` / port `64357` defaults; your dev build does not.
+Every dev build is isolated. `./dev build` bakes per-worktree daemon and OpenCode ports plus a tmux server label into the binary via `-ldflags`, all derived from the worktree path. So the instance you spin up here **cannot touch the installed (prod) tmux-coder or any other worktree's instance** — it gets its own daemon, OpenCode server, and tmux server. The installed binary keeps the shipped `tmux-coder`, daemon port `64357`, and OpenCode port `39155` defaults; your dev build does not.
 
 ### 1. Build
 
@@ -25,10 +25,10 @@ Every dev build is isolated. `./dev build` bakes a per-worktree daemon port and 
 ./dev build client
 ```
 
-Build both. `./dev build` prints the port and tmux server label it baked in, e.g.:
+Build both. `./dev build` prints the ports and tmux server label it baked in, e.g.:
 
 ```
-  bin/ dev build → port 64481, tmux server tmux-coder-<worktree>
+  bin/ dev build → daemon port 64481, OpenCode port 39279, tmux server tmux-coder-<worktree>
 ```
 
 ### 2. Get the binary paths and the server label

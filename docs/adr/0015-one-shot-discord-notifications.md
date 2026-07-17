@@ -24,17 +24,24 @@ Armed state belongs to the TC Agent in the in-memory Agent Registry. It is not
 persisted and disappears when the agent exits or the Daemon restarts. Arming an
 agent that is already `waiting` or `idle` does not send immediately.
 
-The Daemon consumes an armed notification only on these transitions:
+The Daemon sends an armed notification only on these transitions:
 
 | transition | Discord content |
 | ---------- | --------------- |
-| `busy` to `waiting` | Agent needs input, with Project and Session |
-| `busy` to `idle` | Agent is idle, with Project and Session |
+| `busy` to `waiting` | Agent needs input, with Project and Session, styled as a red embed |
+| `busy` to `idle` | Agent is idle, with Project and Session, styled as a green embed |
 
-All other status and lifecycle transitions leave it armed. This strict predicate
-is intentionally different from Desktop Notifications, which retain their broader
-changed `*` to `waiting` or `idle` policy because integrations do not always report
-a preceding `busy` event.
+The webhook payload keeps a single-line plain-text `content` field so the
+Discord mobile push notification renders the summary at a glance, and pairs it
+with one embed (title, color keyed off urgency, inline Project/Session fields, a
+`tmux-coder` footer) for the richer in-client read. `allowed_mentions` stays an
+empty parse list so the webhook never pings anyone.
+
+The notification remains armed after `busy` to `waiting`, and is consumed only
+when the agent enters `idle`. Other status and lifecycle transitions leave it
+armed. This strict predicate is intentionally different from Desktop
+Notifications, which retain their broader changed `*` to `waiting` or `idle`
+policy because integrations do not always report a preceding `busy` event.
 
 Status update and one-shot consumption happen atomically under the Daemon state
 write lock. Delivery happens afterward and outside the lock. It is bounded and

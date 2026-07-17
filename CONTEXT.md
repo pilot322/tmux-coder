@@ -77,7 +77,7 @@ An outbound, user-facing OS alert the **Daemon** raises to the host desktop on a
 _Avoid_: Event, alert, toast, message
 
 **Discord Notification**:
-An outbound, one-shot message that a user arms for one **TC Agent** through the **Client**. The **Daemon** consumes the armed request on that TC Agent's next `busy` to `waiting` or `busy` to `idle` transition and then attempts best-effort delivery through the configured Discord webhook. Non-qualifying transitions leave it armed; delivery failure does not restore or retry it. Unlike an always-on **Desktop Notification**, a Discord Notification is explicitly armed per TC Agent and exists only in the in-memory **Agent Registry**.
+An outbound, one-shot message that a user arms for one **TC Agent** through the **Client**. The **Daemon** attempts best-effort delivery on that TC Agent's next `busy` to `waiting` or `busy` to `idle` transition, and consumes the armed request only when the agent enters `idle`. Non-qualifying transitions leave it armed; delivery failure does not restore or retry it. Unlike an always-on **Desktop Notification**, a Discord Notification is explicitly armed per TC Agent and exists only in the in-memory **Agent Registry**.
 _Avoid_: Event, Desktop Notification, persistent subscription, channel
 
 **Reconciliation**:

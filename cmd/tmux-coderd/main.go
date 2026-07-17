@@ -57,7 +57,7 @@ func main() {
 	ports := netport.NewChecker(logger)
 	processGw := processinfra.NewProcessGateway(logger)
 	notifier := desktopnotify.NewNotifier(desktopnotify.SoundEnabled(os.Getenv))
-	openCodeServer := opencodeserver.NewManager(logger)
+	openCodeServer := opencodeserver.NewManager(logger, config.OpenCodeServerPort)
 	discordNotifier := discordnotify.NewNotifier(config.DiscordWebhookNotify)
 
 	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gateway, git, state, state.Config(), logger)

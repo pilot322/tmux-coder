@@ -150,8 +150,34 @@ type Notifier interface {
 	Notify(ctx context.Context, n Notification) error
 }
 
-// DiscordNotifier delivers already-composed text to a configured Discord
+// DiscordMessage is the structured payload that DiscordNotifier delivers to a
+// configured webhook. Content is the short, plain-text summary that Discord
+// mobile push notifications show; Embed is rendered in the Discord client with
+// color and fields for a richer in-app read.
+type DiscordMessage struct {
+	Content string
+	Embed   DiscordEmbed
+}
+
+// DiscordEmbed is one Rich Presence embed. Color is a Discord embed color as an
+// RGB integer; Fields appear below the description in the Discord client.
+type DiscordEmbed struct {
+	Title       string
+	Description string
+	Color       int
+	Fields      []DiscordField
+}
+
+// DiscordField is a name/value pair rendered inline within an embed, mirroring
+// the desktop notification's "project · session" body.
+type DiscordField struct {
+	Name   string
+	Value  string
+	Inline bool
+}
+
+// DiscordNotifier delivers an already-composed DiscordMessage to a configured
 // webhook. Transition policy and one-shot consumption remain in AgentEvent.
 type DiscordNotifier interface {
-	Notify(ctx context.Context, content string) error
+	Notify(ctx context.Context, msg DiscordMessage) error
 }

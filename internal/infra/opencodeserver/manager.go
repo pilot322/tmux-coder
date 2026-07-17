@@ -33,16 +33,18 @@ type Manager struct {
 	getenv  func(string) string
 	command commandRunner
 	log     obs.Logger
+	port    int
 	url     string
 	cmd     *exec.Cmd
 	result  *processResult
 }
 
-func NewManager(log obs.Logger) *Manager {
+func NewManager(log obs.Logger, port int) *Manager {
 	return &Manager{
 		getenv:  os.Getenv,
 		command: exec.Command,
 		log:     log.With("component", "opencode-server"),
+		port:    port,
 	}
 }
 
@@ -64,11 +66,10 @@ func (m *Manager) Ensure(ctx context.Context) (string, error) {
 		}
 	}
 
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	listener, err := net.Listen("tcp", net.JoinHostPort("0.0.0.0", strconv.Itoa(m.port)))
 	if err != nil {
-		return "", fmt.Errorf("reserve listen port: %w", err)
+		return "", fmt.Errorf("reserve OpenCode server port %d: %w", m.port, err)
 	}
-	port := listener.Addr().(*net.TCPAddr).Port
 	if err := listener.Close(); err != nil {
 		return "", fmt.Errorf("release listen port: %w", err)
 	}
@@ -77,7 +78,7 @@ func (m *Manager) Ensure(ctx context.Context) (string, error) {
 	if binary == "" {
 		binary = "opencode"
 	}
-	cmd := m.command(binary, "serve", "--hostname", "127.0.0.1", "--port", strconv.Itoa(port))
+	cmd := m.command(binary, "serve", "--hostname", "0.0.0.0", "--port", strconv.Itoa(m.port))
 	cmd.Env = serverEnv(os.Environ())
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
@@ -87,7 +88,7 @@ func (m *Manager) Ensure(ctx context.Context) (string, error) {
 	}
 
 	m.cmd = cmd
-	m.url = fmt.Sprintf("http://127.0.0.1:%d", port)
+	m.url = fmt.Sprintf("http://127.0.0.1:%d", m.port)
 	m.result = &processResult{done: make(chan struct{})}
 	result := m.result
 	go func() {
@@ -97,7 +98,7 @@ func (m *Manager) Ensure(ctx context.Context) (string, error) {
 
 	readyCtx, cancel := context.WithTimeout(ctx, startupTimeout)
 	defer cancel()
-	if err := waitUntilReady(readyCtx, port, result); err != nil {
+	if err := waitUntilReady(readyCtx, m.port, result); err != nil {
 		_ = syscall.Kill(-cmd.Process.Pid, syscall.SIGTERM)
 		select {
 		case <-result.done:

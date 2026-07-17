@@ -3,6 +3,7 @@ package usecase
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/obs"
@@ -34,7 +35,7 @@ func NewAgentEventWithDiscord(a IAgentRepository, p IProjectRepository, s ISessi
 
 type noopDiscordNotifier struct{}
 
-func (noopDiscordNotifier) Notify(context.Context, string) error { return nil }
+func (noopDiscordNotifier) Notify(context.Context, DiscordMessage) error { return nil }
 
 func (uc *AgentEvent) Execute(ctx context.Context, in AgentEventInput) error {
 	uc.log.Debug(ctx, "agent event received", "agent_id", in.AgentID, "event", in.Event)
@@ -92,7 +93,7 @@ func (uc *AgentEvent) handleActivity(ctx context.Context, agentID int, status do
 		updated := current.WithStatus(status)
 		sendDiscord = current.DiscordNotificationArmed() && old == domain.AgentBusy &&
 			(status == domain.AgentWaiting || status == domain.AgentIdle)
-		if sendDiscord {
+		if current.DiscordNotificationArmed() && status == domain.AgentIdle {
 			updated = updated.WithDiscordNotificationArmed(false)
 		}
 		_, err = uc.agents.Update(ctx, updated)
@@ -110,7 +111,7 @@ func (uc *AgentEvent) handleActivity(ctx context.Context, agentID int, status do
 		if n, ok := notificationFor(old, status, agentName(agent), project, session); ok {
 			_ = uc.notifier.Notify(ctx, n)
 			if sendDiscord {
-				_ = uc.discord.Notify(ctx, discordContent(n.Title, project, session))
+				_ = uc.discord.Notify(ctx, discordMessage(n, project, session))
 			}
 		}
 	}
@@ -118,8 +119,55 @@ func (uc *AgentEvent) handleActivity(ctx context.Context, agentID int, status do
 	return nil
 }
 
-func discordContent(title, project, session string) string {
-	return fmt.Sprintf("%s\nProject: %s\nSession: %s", title, project, session)
+// Discord embed colors, chosen to mirror notification urgency: critical reading
+// (waiting / needs input) glows red, normal reading (idle / done) glows green.
+const (
+	discordColorCritical = 0xE74C3C
+	discordColorNormal   = 0x2ECC71
+)
+
+// discordMessage composes the structured Discord webhook payload for a one-shot
+// notification. Content is a single-line summary so mobile push notifications
+// show the same essential information at a glance; Embed renders a styled card
+// with color keyed off urgency and inline Project/Session fields in the Discord
+// client.
+func discordMessage(n Notification, project, session string) DiscordMessage {
+	color := discordColorNormal
+	if n.Urgency == UrgencyCritical {
+		color = discordColorCritical
+	}
+	fields := make([]DiscordField, 0, 2)
+	if project != "" {
+		fields = append(fields, DiscordField{Name: "Project", Value: project, Inline: true})
+	}
+	if session != "" {
+		fields = append(fields, DiscordField{Name: "Session", Value: session, Inline: true})
+	}
+	// Single-line content for mobile push; the embed repeats the title and adds
+	// rich fields so the in-client card is informative.
+	line := n.Title
+	if project != "" || session != "" {
+		parts := make([]string, 0, 3)
+		if n.Title != "" {
+			parts = append(parts, n.Title)
+		}
+		if project != "" {
+			parts = append(parts, project)
+		}
+		if session != "" {
+			parts = append(parts, session)
+		}
+		line = strings.Join(parts, " · ")
+	}
+	return DiscordMessage{
+		Content: line,
+		Embed: DiscordEmbed{
+			Title:       n.Title,
+			Description: n.Body,
+			Color:       color,
+			Fields:      fields,
+		},
+	}
 }
 
 // lookupContext fetches the agent's project title and session name for the

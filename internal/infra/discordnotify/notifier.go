@@ -11,6 +11,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
 const requestTimeout = 3 * time.Second
@@ -20,11 +22,6 @@ const requestTimeout = 3 * time.Second
 // contain the secret webhook URL or token.
 var ErrDelivery = errors.New("discord notification delivery failed")
 
-// DiscordNotifier is the transport shape consumed by the usecase package.
-type DiscordNotifier interface {
-	Notify(ctx context.Context, content string) error
-}
-
 type Notifier struct {
 	webhookURL string
 	client     *http.Client
@@ -32,13 +29,13 @@ type Notifier struct {
 
 // NewNotifier returns a webhook-backed notifier, or a no-op notifier when the
 // webhook is blank.
-func NewNotifier(webhook string) DiscordNotifier {
+func NewNotifier(webhook string) usecase.DiscordNotifier {
 	return NewNotifierWithClient(webhook, http.DefaultClient)
 }
 
 // NewNotifierWithClient is NewNotifier with an injectable HTTP client for
 // tests and custom transports.
-func NewNotifierWithClient(webhook string, client *http.Client) DiscordNotifier {
+func NewNotifierWithClient(webhook string, client *http.Client) usecase.DiscordNotifier {
 	webhook = strings.TrimSpace(webhook)
 	if webhook == "" {
 		return NoopNotifier{}
@@ -53,15 +50,64 @@ func NewNotifierWithClient(webhook string, client *http.Client) DiscordNotifier 
 	return &Notifier{webhookURL: webhook, client: &clientCopy}
 }
 
-func (n *Notifier) Notify(ctx context.Context, content string) error {
-	body, err := json.Marshal(struct {
-		Content         string `json:"content"`
-		AllowedMentions struct {
-			Parse []string `json:"parse"`
-		} `json:"allowed_mentions"`
-	}{Content: content, AllowedMentions: struct {
+// webhookPayload is the JSON body for a Discord webhook execute. Content is the
+// short text Discord mobile push notifications render; Embeds render the styled
+// embed in the Discord client. AllowedMentions keeps the webhook from causing
+// pings, matching the prior plain-text behavior.
+type webhookPayload struct {
+	Content         string         `json:"content"`
+	Embeds          []webhookEmbed `json:"embeds,omitempty"`
+	AllowedMentions struct {
 		Parse []string `json:"parse"`
-	}{Parse: []string{}}})
+	} `json:"allowed_mentions"`
+}
+
+type webhookEmbed struct {
+	Title       string         `json:"title"`
+	Description string         `json:"description,omitempty"`
+	Color       int            `json:"color,omitempty"`
+	Fields      []webhookField `json:"fields,omitempty"`
+	Footer      webhookFooter  `json:"footer,omitempty"`
+}
+
+type webhookField struct {
+	Name   string `json:"name"`
+	Value  string `json:"value"`
+	Inline bool   `json:"inline"`
+}
+
+type webhookFooter struct {
+	Text string `json:"text"`
+}
+
+const discordFooter = "tmux-coder"
+
+func (n *Notifier) Notify(ctx context.Context, msg usecase.DiscordMessage) error {
+	payload := webhookPayload{
+		Content: msg.Content,
+	}
+	payload.AllowedMentions.Parse = []string{}
+
+	embed := webhookEmbed{
+		Title:       msg.Embed.Title,
+		Description: msg.Embed.Description,
+		Color:       msg.Embed.Color,
+		Footer:      webhookFooter{Text: discordFooter},
+	}
+	for _, f := range msg.Embed.Fields {
+		embed.Fields = append(embed.Fields, webhookField{
+			Name:   f.Name,
+			Value:  f.Value,
+			Inline: f.Inline,
+		})
+	}
+	// Append the embed only when it carries something to render; the plain
+	// Content alone is enough for a bare delivery.
+	if embed.Title != "" || embed.Description != "" || embed.Color != 0 || len(embed.Fields) > 0 {
+		payload.Embeds = []webhookEmbed{embed}
+	}
+
+	body, err := json.Marshal(payload)
 	if err != nil {
 		return ErrDelivery
 	}
@@ -88,4 +134,4 @@ func (n *Notifier) Notify(ctx context.Context, content string) error {
 // NoopNotifier discards Discord notifications when no webhook is configured.
 type NoopNotifier struct{}
 
-func (NoopNotifier) Notify(context.Context, string) error { return nil }
+func (NoopNotifier) Notify(context.Context, usecase.DiscordMessage) error { return nil }

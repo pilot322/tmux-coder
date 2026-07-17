@@ -21,6 +21,9 @@ func TestLoadFromMissingFileReturnsDefaults(t *testing.T) {
 	if config.DiscordWebhookNotify != "" {
 		t.Errorf("DiscordWebhookNotify = %q, want disabled", config.DiscordWebhookNotify)
 	}
+	if config.OpenCodeServerPort != 39155 {
+		t.Errorf("OpenCodeServerPort = %d, want 39155", config.OpenCodeServerPort)
+	}
 }
 
 func TestLoadUsesHOMEConfigPath(t *testing.T) {
@@ -34,6 +37,7 @@ func TestLoadUsesHOMEConfigPath(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("HOME", home)
+	t.Setenv(OpenCodeServerPortEnv, "")
 
 	config, err := Load()
 	if err != nil {
@@ -41,6 +45,51 @@ func TestLoadUsesHOMEConfigPath(t *testing.T) {
 	}
 	if config.DiscordWebhookNotify != webhook {
 		t.Errorf("DiscordWebhookNotify = %q, want configured webhook", config.DiscordWebhookNotify)
+	}
+}
+
+func TestParseAcceptsOpenCodeServerPort(t *testing.T) {
+	config, err := Parse([]byte("opencode_server_port: 41000\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if config.OpenCodeServerPort != 41000 {
+		t.Fatalf("OpenCodeServerPort = %d, want 41000", config.OpenCodeServerPort)
+	}
+}
+
+func TestEnvironmentOverridesOpenCodeServerPort(t *testing.T) {
+	config, err := applyEnv(domain.DaemonConfig{OpenCodeServerPort: 41000}, func(key string) string {
+		if key == OpenCodeServerPortEnv {
+			return "42000"
+		}
+		return ""
+	})
+	if err != nil {
+		t.Fatalf("applyEnv: %v", err)
+	}
+	if config.OpenCodeServerPort != 42000 {
+		t.Fatalf("OpenCodeServerPort = %d, want environment override 42000", config.OpenCodeServerPort)
+	}
+}
+
+func TestRejectsInvalidOpenCodeServerPorts(t *testing.T) {
+	for _, input := range []string{"0", "65536", "-1"} {
+		t.Run("yaml_"+input, func(t *testing.T) {
+			_, err := Parse([]byte("opencode_server_port: " + input + "\n"))
+			if !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("Parse error = %v, want ErrInvalidConfig", err)
+			}
+		})
+	}
+
+	for _, input := range []string{"0", "65536", "not-a-port"} {
+		t.Run("env_"+input, func(t *testing.T) {
+			_, err := applyEnv(domain.DefaultDaemonConfig(), func(string) string { return input })
+			if !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("applyEnv error = %v, want ErrInvalidConfig", err)
+			}
+		})
 	}
 }
 

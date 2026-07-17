@@ -14,21 +14,23 @@ if [[ $# -gt 1 ]]; then
 fi
 
 # Isolate this worktree's dev build from the installed (prod) tmux-coder by
-# baking a per-worktree daemon port and tmux server label into the binary via
-# -ldflags -X. Both are derived deterministically from the worktree path so the
+# baking per-worktree daemon and OpenCode ports plus a tmux server label into
+# the binary via -ldflags -X. They are derived deterministically from the worktree path so the
 # client and daemon built here always agree, and so any worktree is isolated the
 # moment it is built — no config file required. `go install` (scripts/install)
-# does not pass these flags, so the shipped binary keeps the "64357"/"tmux-coder"
-# defaults. Set TMUX_CODERD_PORT / TMUX_CODER_TMUX_SERVER at runtime to override.
+# does not pass these flags, so the shipped binary keeps the "64357"/"39155"/
+# "tmux-coder" defaults. Runtime environment variables still take precedence.
 worktree_name="$(basename "$root_dir")"
 path_hash="$(printf '%s' "$root_dir" | cksum | cut -d' ' -f1)"
 dev_port=$(( 64357 + (path_hash % 200) + 1 ))
+dev_opencode_port=$(( 39155 + (path_hash % 200) + 1 ))
 dev_label="tmux-coder-${worktree_name}"
 
 ldflags="-X ${module}/internal/daemonaddr.DefaultPort=${dev_port}"
+ldflags+=" -X ${module}/internal/domain.DefaultOpenCodeServerPort=${dev_opencode_port}"
 ldflags+=" -X ${module}/internal/tmuxserver.DefaultLabel=${dev_label}"
 
-echo "  bin/ dev build → port ${dev_port}, tmux server ${dev_label}" >&2
+echo "  bin/ dev build → daemon port ${dev_port}, OpenCode port ${dev_opencode_port}, tmux server ${dev_label}" >&2
 
 mkdir -p "$root_dir/bin"
 

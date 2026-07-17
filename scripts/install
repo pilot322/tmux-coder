@@ -72,11 +72,32 @@ fi
 
 gobin="$(go env GOBIN)"
 [[ -z "$gobin" ]] && gobin="$(go env GOPATH)/bin"
-echo "installed prod tmux-coder, tmux-coderd → ${gobin} (defaults: port 64357, tmux server tmux-coder)"
+echo "installed prod tmux-coder, tmux-coderd → ${gobin} (defaults: daemon port 64357, OpenCode port 39155, tmux server tmux-coder)"
 
-opencode_plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugin"
+opencode_plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugin/tmux-coder"
 mkdir -p "$opencode_plugin_dir"
-cp "$root_dir/integrations/opencode/tmux-coder.js" "$opencode_plugin_dir/tmux-coder.js"
-echo "installed OpenCode plugin → ${opencode_plugin_dir}/tmux-coder.js"
+cp "$root_dir/integrations/opencode/package.json" "$root_dir/integrations/opencode/tui.js" "$opencode_plugin_dir"
+opencode_tui_config="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/tui.json"
+node - "$opencode_tui_config" "$opencode_plugin_dir" <<'NODE'
+import { readFileSync, renameSync, writeFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+
+const [configPath, pluginDir] = process.argv.slice(2);
+let config = {};
+try {
+  config = JSON.parse(readFileSync(configPath, "utf8"));
+} catch (error) {
+  if (error.code !== "ENOENT") throw error;
+}
+if (config.plugin !== undefined && !Array.isArray(config.plugin)) {
+  throw new Error(`${configPath}: plugin must be an array`);
+}
+const plugin = pathToFileURL(pluginDir).href;
+config.plugin = [...(config.plugin ?? []).filter((entry) => entry !== plugin), plugin];
+const temporaryPath = `${configPath}.tmp`;
+writeFileSync(temporaryPath, JSON.stringify(config, null, 2) + "\n");
+renameSync(temporaryPath, configPath);
+NODE
+echo "installed and configured OpenCode TUI plugin → ${opencode_plugin_dir}"
 
 "${gobin}/tmux-coder" install-claude-hooks

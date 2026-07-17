@@ -23,13 +23,13 @@ type fakeNotifier struct {
 }
 
 type fakeDiscordNotifier struct {
-	calls    []string
+	calls    []usecase.DiscordMessage
 	err      error
 	onNotify func()
 }
 
-func (n *fakeDiscordNotifier) Notify(_ context.Context, content string) error {
-	n.calls = append(n.calls, content)
+func (n *fakeDiscordNotifier) Notify(_ context.Context, msg usecase.DiscordMessage) error {
+	n.calls = append(n.calls, msg)
 	if n.onNotify != nil {
 		n.onNotify()
 	}
@@ -327,7 +327,7 @@ func TestAgentEvent_StartedStatusChangedAtSemantics(t *testing.T) {
 	}
 }
 
-func TestAgentEvent_DiscordUsesStrictBusyDepartureAndConsumesOneShot(t *testing.T) {
+func TestAgentEvent_DiscordConsumesOneShotOnlyOnIdle(t *testing.T) {
 	cases := []struct {
 		name      string
 		start     domain.AgentStatus
@@ -335,10 +335,10 @@ func TestAgentEvent_DiscordUsesStrictBusyDepartureAndConsumesOneShot(t *testing.
 		wantCalls int
 		wantArmed bool
 	}{
-		{"busy to waiting", domain.AgentBusy, "waiting", 1, false},
+		{"busy to waiting", domain.AgentBusy, "waiting", 1, true},
 		{"busy to idle", domain.AgentBusy, "idle", 1, false},
-		{"running to idle", domain.AgentRunning, "idle", 0, true},
-		{"starting to idle", domain.AgentStarting, "idle", 0, true},
+		{"running to idle", domain.AgentRunning, "idle", 0, false},
+		{"starting to idle", domain.AgentStarting, "idle", 0, false},
 		{"idle to waiting", domain.AgentIdle, "waiting", 0, true},
 		{"busy to busy", domain.AgentBusy, "busy", 0, true},
 	}
@@ -363,22 +363,42 @@ func TestAgentEvent_DiscordUsesStrictBusyDepartureAndConsumesOneShot(t *testing.
 	}
 }
 
-func TestAgentEvent_DiscordRemainsArmedUntilLaterQualifyingTransition(t *testing.T) {
+func TestAgentEvent_DiscordRemainsArmedUntilBusyToIdle(t *testing.T) {
 	_, agents, projects, sessions, _, lock := agentFixture()
 	p, s := seedProjectAndSession(projects, sessions)
 	a, _ := agents.Create(context.Background(), domain.NewAgent(0, p.ID(), s.ID(), "opencode", "reviewer", "%10", true, domain.AgentRunning).WithDiscordNotificationArmed(true))
 	discord := &fakeDiscordNotifier{}
 	uc := usecase.NewAgentEventWithDiscord(agents, projects, sessions, &fakeNotifier{}, discord, lock, obs.Nop())
-	for _, event := range []string{"idle", "busy", "waiting", "idle"} {
+	for _, event := range []string{"busy", "waiting", "busy", "idle"} {
 		if err := uc.Execute(context.Background(), usecase.AgentEventInput{AgentID: a.ID(), Event: event}); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if len(discord.calls) != 1 {
-		t.Fatalf("Discord calls = %d, want one", len(discord.calls))
+	if len(discord.calls) != 2 {
+		t.Fatalf("Discord calls = %d, want two", len(discord.calls))
 	}
-	if got := discord.calls[0]; got != "reviewer needs input\nProject: api\nSession: api.main" {
-		t.Fatalf("content = %q", got)
+	first := discord.calls[0]
+	if first.Content != "reviewer needs input · api · api.main" {
+		t.Fatalf("content = %q", first.Content)
+	}
+	if first.Embed.Title != "reviewer needs input" {
+		t.Fatalf("embed title = %q", first.Embed.Title)
+	}
+	if first.Embed.Color != 0xE74C3C {
+		t.Fatalf("embed color = %#x, want critical red %#x", first.Embed.Color, 0xE74C3C)
+	}
+	if len(first.Embed.Fields) != 2 ||
+		first.Embed.Fields[0] != (usecase.DiscordField{Name: "Project", Value: "api", Inline: true}) ||
+		first.Embed.Fields[1] != (usecase.DiscordField{Name: "Session", Value: "api.main", Inline: true}) {
+		t.Fatalf("embed fields = %#v", first.Embed.Fields)
+	}
+	second := discord.calls[1]
+	if second.Embed.Color != 0x2ECC71 {
+		t.Fatalf("second embed color = %#x, want normal green %#x", second.Embed.Color, 0x2ECC71)
+	}
+	stored, _ := agents.GetByID(context.Background(), a.ID())
+	if stored.DiscordNotificationArmed() {
+		t.Fatal("Discord notification remained armed after idle")
 	}
 }
 

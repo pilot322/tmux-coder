@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
@@ -17,6 +18,8 @@ import (
 
 const configRelativePath = ".tmux-coder/config.yaml"
 
+const OpenCodeServerPortEnv = "TMUX_CODER_OPENCODE_SERVER_PORT"
+
 // ErrInvalidConfig marks malformed YAML and invalid daemon configuration
 // values. Details from parsers are deliberately omitted because they may
 // contain a Discord webhook token.
@@ -24,6 +27,7 @@ var ErrInvalidConfig = errors.New("invalid daemon config")
 
 type file struct {
 	DiscordWebhookNotify string `yaml:"discord_webhook_notify"`
+	OpenCodeServerPort   *int   `yaml:"opencode_server_port"`
 }
 
 // Load reads the daemon configuration from $HOME/.tmux-coder/config.yaml. HOME
@@ -34,7 +38,11 @@ func Load() (domain.DaemonConfig, error) {
 	if err != nil {
 		return domain.DaemonConfig{}, fmt.Errorf("resolve daemon config home: %w", err)
 	}
-	return LoadFrom(filepath.Join(home, filepath.FromSlash(configRelativePath)))
+	config, err := LoadFrom(filepath.Join(home, filepath.FromSlash(configRelativePath)))
+	if err != nil {
+		return domain.DaemonConfig{}, err
+	}
+	return applyEnv(config, os.Getenv)
 }
 
 func resolveHome(getenv func(string) string, userHomeDir func() (string, error)) (string, error) {
@@ -84,6 +92,12 @@ func Parse(data []byte) (domain.DaemonConfig, error) {
 	if err := dec.Decode(&extra); !errors.Is(err, io.EOF) {
 		return domain.DaemonConfig{}, fmt.Errorf("%w: multiple YAML documents", ErrInvalidConfig)
 	}
+	if decoded.OpenCodeServerPort != nil {
+		if !validPort(*decoded.OpenCodeServerPort) {
+			return domain.DaemonConfig{}, fmt.Errorf("%w: invalid opencode_server_port", ErrInvalidConfig)
+		}
+		config.OpenCodeServerPort = *decoded.OpenCodeServerPort
+	}
 
 	webhook := strings.TrimSpace(decoded.DiscordWebhookNotify)
 	if webhook == "" {
@@ -94,6 +108,23 @@ func Parse(data []byte) (domain.DaemonConfig, error) {
 	}
 	config.DiscordWebhookNotify = webhook
 	return config, nil
+}
+
+func applyEnv(config domain.DaemonConfig, getenv func(string) string) (domain.DaemonConfig, error) {
+	raw := strings.TrimSpace(getenv(OpenCodeServerPortEnv))
+	if raw == "" {
+		return config, nil
+	}
+	port, err := strconv.Atoi(raw)
+	if err != nil || !validPort(port) {
+		return domain.DaemonConfig{}, fmt.Errorf("%w: invalid %s", ErrInvalidConfig, OpenCodeServerPortEnv)
+	}
+	config.OpenCodeServerPort = port
+	return config, nil
+}
+
+func validPort(port int) bool {
+	return port >= 1 && port <= 65535
 }
 
 func validDiscordWebhook(raw string) bool {

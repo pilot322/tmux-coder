@@ -60,13 +60,14 @@ Notification dependencies:
 - sound is optional and needs `paplay`
 - disable sound with `TMUX_CODER_NOTIFY_SOUND=0`
 
-Discord notifications use a webhook configured in `~/.tmux-coder/config.yaml`:
+Daemon-wide settings live in `~/.tmux-coder/config.yaml`:
 
 ```yaml
 discord_webhook_notify: https://discord.com/api/webhooks/WEBHOOK_ID/WEBHOOK_TOKEN
+opencode_server_port: 39155
 ```
 
-Create the webhook under your Discord server's **Server Settings > Integrations > Webhooks**, then replace the example value with its copied URL. Only official HTTPS Discord webhook URLs are accepted. The daemon reads this file once at startup, so restart it after changing the configuration. A missing file or key leaves Discord notifications disabled; invalid YAML, unknown keys, and invalid webhook URLs prevent daemon startup.
+Create the webhook under your Discord server's **Server Settings > Integrations > Webhooks**, then replace the example value with its copied URL. Only official HTTPS Discord webhook URLs are accepted. The OpenCode server port defaults to `39155`; `TMUX_CODER_OPENCODE_SERVER_PORT` overrides the file at runtime. The daemon reads this configuration once at startup, so restart it after changing the file or environment. A missing webhook leaves Discord notifications disabled; invalid YAML, unknown keys, webhook URLs, and ports prevent daemon startup.
 
 # How to use
 
@@ -122,11 +123,14 @@ You can use any executable really, but it needs to have an extension or hooks se
 OpenCode agents share one headless server owned by the daemon. Each agent pane
 runs an attached TUI in its own working directory, so concurrent agents avoid
 duplicating the server process. Set `TMUX_CODER_OPENCODE_SERVER_URL` to use an
-already-running server instead.
+already-running server instead. The managed server listens on `0.0.0.0` at
+`opencode_server_port`, so its embedded web UI is available through localhost,
+LAN, and Tailscale addresses allowed by the host firewall and tailnet policy.
 
-Configure the bundled OpenCode plugin in `~/.config/opencode/tui.json` so
-activity remains associated with the attached TUI's agent ID. Remove any older
-`tmux-coder.js` entry from `opencode.json`:
+`./dev install` installs and configures the bundled OpenCode TUI plugin so
+activity remains associated with the attached TUI's agent ID. For a manual
+installation, add the bundled plugin directory to `~/.config/opencode/tui.json`.
+Remove any older `tmux-coder.js` entry from `opencode.json`:
 
 ```json
 {

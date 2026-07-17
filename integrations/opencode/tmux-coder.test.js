@@ -40,14 +40,21 @@ async function fixture(name) {
   };
 }
 
-test("reports only the session displayed by this attached TUI", async () => {
-  const app = await fixture("session-filter");
+test("aggregates activity from child sessions without accepting unrelated sessions", async () => {
+  const app = await fixture("child-status");
   try {
     assert.equal(app.module.default.id, "tmux-coder-status");
     assert.deepEqual(app.reported, ["idle"]);
 
+    app.emit("session.created", {
+      info: { id: "child", parentID: "primary" },
+    });
     app.emit("session.status", {
       sessionID: "other-agent-session",
+      status: { type: "busy" },
+    });
+    app.emit("session.status", {
+      sessionID: "child",
       status: { type: "busy" },
     });
     app.emit("session.status", {
@@ -55,6 +62,8 @@ test("reports only the session displayed by this attached TUI", async () => {
       status: { type: "busy" },
     });
     app.emit("session.idle", { sessionID: "child" });
+    assert.deepEqual(app.reported, ["idle", "busy"]);
+
     app.emit("session.idle", { sessionID: "primary" });
 
     assert.deepEqual(app.reported, ["idle", "busy", "idle"]);
@@ -75,6 +84,28 @@ test("waiting is not clobbered by a busy event before the reply", async () => {
 
     app.emit("permission.replied", { sessionID: "primary" });
     assert.deepEqual(app.reported, ["idle", "waiting", "busy"]);
+  } finally {
+    app.restore();
+  }
+});
+
+test("a child waiting for input takes precedence over a busy parent", async () => {
+  const app = await fixture("child-waiting");
+  try {
+    app.emit("session.created", {
+      info: { id: "child", parentID: "primary" },
+    });
+    app.emit("session.status", {
+      sessionID: "primary",
+      status: { type: "busy" },
+    });
+    app.emit("permission.asked", { sessionID: "child" });
+    app.emit("session.status", {
+      sessionID: "primary",
+      status: { type: "busy" },
+    });
+
+    assert.deepEqual(app.reported, ["idle", "busy", "waiting"]);
   } finally {
     app.restore();
   }

@@ -5,6 +5,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"strconv"
 	"syscall"
 	"testing"
 
@@ -13,10 +14,13 @@ import (
 
 func TestManagerStartsOneServerAndReusesItsURL(t *testing.T) {
 	t.Setenv("GO_WANT_OPENCODE_SERVER_HELPER", "1")
-	m := NewManager(obs.Nop())
+	port := freeTCPPort(t)
+	m := NewManager(obs.Nop(), port)
 	starts := 0
+	var startedArgs []string
 	m.command = func(_ string, args ...string) *exec.Cmd {
 		starts++
+		startedArgs = append([]string(nil), args...)
 		helperArgs := append([]string{"-test.run=TestOpenCodeServerHelper", "--"}, args...)
 		return exec.Command(os.Args[0], helperArgs...)
 	}
@@ -36,10 +40,13 @@ func TestManagerStartsOneServerAndReusesItsURL(t *testing.T) {
 	if starts != 1 {
 		t.Fatalf("server starts = %d, want 1", starts)
 	}
+	if len(startedArgs) != 5 || startedArgs[0] != "serve" || startedArgs[1] != "--hostname" || startedArgs[2] != "0.0.0.0" || startedArgs[3] != "--port" || startedArgs[4] != strconv.Itoa(port) {
+		t.Fatalf("server args = %#v, want serve bound to 0.0.0.0:%d", startedArgs, port)
+	}
 }
 
 func TestManagerUsesConfiguredServerWithoutStartingProcess(t *testing.T) {
-	m := NewManager(obs.Nop())
+	m := NewManager(obs.Nop(), freeTCPPort(t))
 	m.getenv = func(key string) string {
 		if key == "TMUX_CODER_OPENCODE_SERVER_URL" {
 			return "http://127.0.0.1:9876"
@@ -62,7 +69,7 @@ func TestManagerUsesConfiguredServerWithoutStartingProcess(t *testing.T) {
 
 func TestManagerRestartsServerAfterItExits(t *testing.T) {
 	t.Setenv("GO_WANT_OPENCODE_SERVER_HELPER", "1")
-	m := NewManager(obs.Nop())
+	m := NewManager(obs.Nop(), freeTCPPort(t))
 	starts := 0
 	m.command = func(_ string, args ...string) *exec.Cmd {
 		starts++
@@ -137,4 +144,17 @@ func TestOpenCodeServerHelper(t *testing.T) {
 		}
 		_ = conn.Close()
 	}
+}
+
+func freeTCPPort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "0.0.0.0:0")
+	if err != nil {
+		t.Fatalf("allocate test port: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if err := listener.Close(); err != nil {
+		t.Fatalf("release test port: %v", err)
+	}
+	return port
 }
