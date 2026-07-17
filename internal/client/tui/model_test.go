@@ -14,27 +14,31 @@ import (
 )
 
 type fakeAPI struct {
-	projects          []httpclient.Project
-	sessions          []httpclient.Session
-	agents            []httpclient.Agent
-	listErr           error
-	deleted           int
-	deletedSession    int
-	deletedAgent      int
-	deleteForce       bool
-	created           []httpclient.CreateSessionInput
-	createdSession    httpclient.Session
-	createErr         error
-	createdAgents     []httpclient.CreateAgentInput
-	createdAgent      httpclient.Agent
-	createAgentErr    error
-	renamedAgentID    int
-	renamedAgentName  string
-	renamedAgent      httpclient.Agent
-	renameAgentErr    error
-	listProjectsCalls int
-	listSessionsCalls int
-	listAgentsCalls   int
+	projects            []httpclient.Project
+	sessions            []httpclient.Session
+	agents              []httpclient.Agent
+	listErr             error
+	deleted             int
+	deletedSession      int
+	deletedAgent        int
+	deleteForce         bool
+	created             []httpclient.CreateSessionInput
+	createdSession      httpclient.Session
+	createErr           error
+	createdAgents       []httpclient.CreateAgentInput
+	createdAgent        httpclient.Agent
+	createAgentErr      error
+	renamedAgentID      int
+	renamedAgentName    string
+	renamedAgent        httpclient.Agent
+	renameAgentErr      error
+	notificationAgentID int
+	notificationEnabled []bool
+	notificationAgent   httpclient.Agent
+	notificationErr     error
+	listProjectsCalls   int
+	listSessionsCalls   int
+	listAgentsCalls     int
 }
 
 func (a *fakeAPI) ListProjects(context.Context) ([]httpclient.Project, error) {
@@ -66,6 +70,12 @@ func (a *fakeAPI) RenameAgent(_ context.Context, id int, displayName string) (ht
 	a.renamedAgentID = id
 	a.renamedAgentName = displayName
 	return a.renamedAgent, a.renameAgentErr
+}
+
+func (a *fakeAPI) SetAgentDiscordNotification(_ context.Context, id int, enabled bool) (httpclient.Agent, error) {
+	a.notificationAgentID = id
+	a.notificationEnabled = append(a.notificationEnabled, enabled)
+	return a.notificationAgent, a.notificationErr
 }
 
 func (a *fakeAPI) DeleteProject(_ context.Context, id int) error {
@@ -654,10 +664,10 @@ func TestModelFooterShowsPerViewKeys(t *testing.T) {
 		want    []string
 		notWant []string
 	}{
-		{"0", []string{"w worktree", "W base worktree", "X delete"}, []string{"S secondary"}},
-		{"1", []string{"w worktree", "W base worktree", "X delete"}, []string{"S secondary"}},
-		{"2", []string{"w worktree", "W base worktree", "s secondary", "X delete"}, nil},
-		{"3", []string{"o group", "X delete"}, []string{"w worktree", "W base worktree", "s secondary"}},
+		{"0", []string{"n notifications", "w worktree", "W base worktree", "X delete"}, []string{"S secondary"}},
+		{"1", []string{"w worktree", "W base worktree", "X delete"}, []string{"n notifications", "S secondary"}},
+		{"2", []string{"w worktree", "W base worktree", "s secondary", "X delete"}, []string{"n notifications"}},
+		{"3", []string{"n notifications", "o group", "X delete"}, []string{"w worktree", "W base worktree", "s secondary"}},
 	}
 	for _, tc := range cases {
 		m := loaded(t, base)
@@ -677,6 +687,14 @@ func TestModelFooterShowsPerViewKeys(t *testing.T) {
 		if strings.Contains(view, "s sessions") || strings.Contains(view, "a agents") {
 			t.Fatalf("tab %s footer still advertises removed toggles: %q", tc.tab, view)
 		}
+	}
+}
+
+func TestModelHelpAdvertisesDiscordNotificationsInSupportedViews(t *testing.T) {
+	m := loaded(t, listMsg{})
+	m = press(m, runes("?"))
+	if view := m.View(); !strings.Contains(view, "n notifications (Overview/Agents)") {
+		t.Fatalf("help missing notification binding: %q", view)
 	}
 }
 
@@ -1476,6 +1494,228 @@ func TestModelRenameIgnoredOutsideAgentsTab(t *testing.T) {
 	m = press(m, runes("u"))
 	if m.renamingAgent {
 		t.Fatal("u should be ignored outside the agents tab")
+	}
+}
+
+// --- Discord notification configuration ---------------------------------
+
+func notificationModel(t *testing.T, api *fakeAPI, armed bool) Model {
+	t.Helper()
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		seq:      1,
+		projects: []httpclient.Project{{ID: 7, Title: "API", MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 5, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+		agents: []httpclient.Agent{{
+			ID:                       3,
+			ProjectID:                7,
+			SessionID:                5,
+			Kind:                     "claude",
+			DisplayName:              "reviewer",
+			TmuxPaneID:               "%3",
+			Status:                   "running",
+			DiscordNotificationArmed: armed,
+		}},
+	})
+	return updated.(Model)
+}
+
+func TestModelDiscordNotificationPromptAvailableForAgentRows(t *testing.T) {
+	tests := []struct {
+		name        string
+		armed       bool
+		selectAgent func(Model) Model
+		wantPrompt  string
+		wantEnable  bool
+	}{
+		{
+			name:        "overview enables unarmed agent",
+			selectAgent: func(m Model) Model { return press(m, runes("j")) },
+			wantPrompt:  "Enable Discord notifications for reviewer?",
+			wantEnable:  true,
+		},
+		{
+			name:        "agents disables armed agent",
+			armed:       true,
+			selectAgent: func(m Model) Model { return press(m, runes("3")) },
+			wantPrompt:  "Disable Discord notifications for reviewer?",
+			wantEnable:  false,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := tt.selectAgent(notificationModel(t, &fakeAPI{}, tt.armed))
+			m = press(m, runes("n"))
+			if !m.configuringDiscordNotification || m.discordNotificationAgentID != 3 || m.discordNotificationAgentName != "reviewer" || m.discordNotificationEnabled != tt.wantEnable {
+				t.Fatalf("notification prompt state = active:%v id:%d name:%q enabled:%v", m.configuringDiscordNotification, m.discordNotificationAgentID, m.discordNotificationAgentName, m.discordNotificationEnabled)
+			}
+			if view := m.View(); !strings.Contains(view, tt.wantPrompt) || !strings.Contains(view, "enter confirm  esc cancel") {
+				t.Fatalf("notification prompt missing from view: %q", view)
+			}
+		})
+	}
+}
+
+func TestModelDiscordNotificationOnNonAgentShowsExactStatus(t *testing.T) {
+	m := notificationModel(t, &fakeAPI{}, false)
+	m = press(m, runes("n"))
+	if m.configuringDiscordNotification || m.status != "select an agent to configure notifications" {
+		t.Fatalf("active=%v status=%q", m.configuringDiscordNotification, m.status)
+	}
+}
+
+func TestModelDiscordNotificationEscCancelsBeforeGlobalQuit(t *testing.T) {
+	api := &fakeAPI{}
+	m := notificationModel(t, api, false)
+	m = press(m, runes("3"))
+	m = press(m, runes("n"))
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	if m.configuringDiscordNotification || m.discordNotificationAgentID != 0 || cmd != nil || len(api.notificationEnabled) != 0 {
+		t.Fatalf("active=%v id=%d cmd nil=%v calls=%d", m.configuringDiscordNotification, m.discordNotificationAgentID, cmd == nil, len(api.notificationEnabled))
+	}
+}
+
+func TestModelDiscordNotificationSnapshotsTargetAcrossPolling(t *testing.T) {
+	api := &fakeAPI{notificationErr: &httpclient.APIError{Status: 404, Message: "agent not found"}}
+	m := notificationModel(t, api, false)
+	m = press(m, runes("3"))
+	m = press(m, runes("n"))
+	m.status = "previous notification error"
+
+	updated, _ := m.Update(listMsg{
+		seq:      2,
+		projects: []httpclient.Project{{ID: 7, Title: "API", MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 5, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+	})
+	m = updated.(Model)
+	if !m.configuringDiscordNotification || m.discordNotificationAgentID != 3 || m.discordNotificationAgentName != "reviewer" || !m.discordNotificationEnabled || m.status != "previous notification error" {
+		t.Fatalf("poll changed snapshot/error: active=%v id=%d name=%q enabled=%v status=%q", m.configuringDiscordNotification, m.discordNotificationAgentID, m.discordNotificationAgentName, m.discordNotificationEnabled, m.status)
+	}
+	if view := m.View(); !strings.Contains(view, "Enable Discord notifications for reviewer?") {
+		t.Fatalf("snapshotted prompt missing after target disappeared: %q", view)
+	}
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if cmd == nil || m.attach != (AttachTarget{}) {
+		t.Fatalf("enter should submit without attaching or quitting: cmd nil=%v attach=%+v", cmd == nil, m.attach)
+	}
+	msg := cmd().(setDiscordNotificationMsg)
+	if api.notificationAgentID != 3 || len(api.notificationEnabled) != 1 || !api.notificationEnabled[0] {
+		t.Fatalf("notification call id=%d enabled=%v", api.notificationAgentID, api.notificationEnabled)
+	}
+	updated, resultCmd := m.Update(msg)
+	m = updated.(Model)
+	if resultCmd != nil || !m.configuringDiscordNotification || m.status != "404 Not Found: agent not found" {
+		t.Fatalf("missing target result: cmd nil=%v active=%v status=%q", resultCmd == nil, m.configuringDiscordNotification, m.status)
+	}
+}
+
+func TestModelDiscordNotificationPreventsDuplicateSubmitAndRejectsStalePoll(t *testing.T) {
+	updatedAgent := httpclient.Agent{
+		ID:                       3,
+		ProjectID:                7,
+		SessionID:                5,
+		Kind:                     "claude",
+		DisplayName:              "reviewer",
+		Status:                   "running",
+		DiscordNotificationArmed: true,
+	}
+	api := &fakeAPI{notificationAgent: updatedAgent}
+	m := notificationModel(t, api, false)
+	m = press(m, runes("3"))
+	m = press(m, runes("n"))
+
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if cmd == nil || !m.discordNotificationSubmitting {
+		t.Fatalf("first enter should submit: cmd nil=%v submitting=%v", cmd == nil, m.discordNotificationSubmitting)
+	}
+	updated, duplicate := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if duplicate != nil {
+		t.Fatal("second enter must not submit another request")
+	}
+
+	msg := cmd().(setDiscordNotificationMsg)
+	if len(api.notificationEnabled) != 1 {
+		t.Fatalf("API calls = %d, want one", len(api.notificationEnabled))
+	}
+	_ = m.nextListCmd() // an older poll is now in flight
+	staleSeq := m.listSeq
+	updated, _ = m.Update(msg)
+	m = updated.(Model)
+	if m.configuringDiscordNotification || m.status != "discord notifications armed" || len(m.agents) != 1 || !m.agents[0].DiscordNotificationArmed {
+		t.Fatalf("success state: active=%v status=%q agents=%+v", m.configuringDiscordNotification, m.status, m.agents)
+	}
+
+	staleAgent := updatedAgent
+	staleAgent.DiscordNotificationArmed = false
+	updated, _ = m.Update(listMsg{
+		seq:      staleSeq,
+		projects: m.projects,
+		sessions: m.sessions,
+		agents:   []httpclient.Agent{staleAgent},
+	})
+	m = updated.(Model)
+	if !m.agents[0].DiscordNotificationArmed || m.status != "discord notifications armed" {
+		t.Fatalf("stale poll overwrote success: status=%q agent=%+v", m.status, m.agents[0])
+	}
+}
+
+func TestModelDiscordNotificationMissingConfigGuidancePersists(t *testing.T) {
+	guidance := "discord webhook is not configured; set discord_webhook_notify in ~/.tmux-coder/config.yaml"
+	api := &fakeAPI{notificationErr: &httpclient.APIError{Status: 409, Message: guidance}}
+	m := notificationModel(t, api, false)
+	m = press(m, runes("3"))
+	m = press(m, runes("n"))
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	updated, _ = m.Update(cmd().(setDiscordNotificationMsg))
+	m = updated.(Model)
+	if !m.configuringDiscordNotification || m.agents[0].DiscordNotificationArmed || !strings.Contains(m.status, guidance) {
+		t.Fatalf("config error state: active=%v armed=%v status=%q", m.configuringDiscordNotification, m.agents[0].DiscordNotificationArmed, m.status)
+	}
+
+	updated, _ = m.Update(listMsg{seq: 2, projects: m.projects, sessions: m.sessions, agents: m.agents})
+	m = updated.(Model)
+	if !strings.Contains(m.View(), guidance) || !m.configuringDiscordNotification || m.agents[0].DiscordNotificationArmed {
+		t.Fatalf("poll hid guidance or armed agent: %q", m.View())
+	}
+}
+
+func TestModelDiscordNotificationDisableSuccess(t *testing.T) {
+	api := &fakeAPI{notificationAgent: httpclient.Agent{ID: 3, ProjectID: 7, SessionID: 5, DisplayName: "reviewer"}}
+	m := notificationModel(t, api, true)
+	m = press(m, runes("3"))
+	m = press(m, runes("n"))
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	updated, _ = m.Update(cmd().(setDiscordNotificationMsg))
+	m = updated.(Model)
+	if len(api.notificationEnabled) != 1 || api.notificationEnabled[0] || m.status != "discord notifications disabled" || m.agents[0].DiscordNotificationArmed {
+		t.Fatalf("disable result: calls=%v status=%q agent=%+v", api.notificationEnabled, m.status, m.agents[0])
+	}
+}
+
+func TestModelDiscordNotificationIgnoresResponseAfterCancelAndReopen(t *testing.T) {
+	api := &fakeAPI{notificationAgent: httpclient.Agent{ID: 3, ProjectID: 7, SessionID: 5, DisplayName: "reviewer", DiscordNotificationArmed: true}}
+	m := notificationModel(t, api, false)
+	m = press(m, runes("3"))
+	m = press(m, runes("n"))
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	oldResponse := cmd().(setDiscordNotificationMsg)
+
+	updated, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = updated.(Model)
+	m = press(m, runes("n"))
+	newSeq := m.discordNotificationPromptSeq
+	updated, resultCmd := m.Update(oldResponse)
+	m = updated.(Model)
+	if resultCmd != nil || !m.configuringDiscordNotification || m.discordNotificationPromptSeq != newSeq || m.discordNotificationSubmitting {
+		t.Fatalf("stale response changed new prompt: active=%v seq=%d submitting=%v", m.configuringDiscordNotification, m.discordNotificationPromptSeq, m.discordNotificationSubmitting)
 	}
 }
 

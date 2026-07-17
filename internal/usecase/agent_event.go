@@ -19,13 +19,22 @@ type AgentEvent struct {
 	projects IProjectRepository
 	sessions ISessionRepository
 	notifier Notifier
+	discord  DiscordNotifier
 	lock     StateLock
 	log      obs.Logger
 }
 
 func NewAgentEvent(a IAgentRepository, p IProjectRepository, s ISessionRepository, n Notifier, l StateLock, log obs.Logger) *AgentEvent {
-	return &AgentEvent{agents: a, projects: p, sessions: s, notifier: n, lock: l, log: log.With("component", "agent-event")}
+	return NewAgentEventWithDiscord(a, p, s, n, noopDiscordNotifier{}, l, log)
 }
+
+func NewAgentEventWithDiscord(a IAgentRepository, p IProjectRepository, s ISessionRepository, n Notifier, d DiscordNotifier, l StateLock, log obs.Logger) *AgentEvent {
+	return &AgentEvent{agents: a, projects: p, sessions: s, notifier: n, discord: d, lock: l, log: log.With("component", "agent-event")}
+}
+
+type noopDiscordNotifier struct{}
+
+func (noopDiscordNotifier) Notify(context.Context, string) error { return nil }
 
 func (uc *AgentEvent) Execute(ctx context.Context, in AgentEventInput) error {
 	uc.log.Debug(ctx, "agent event received", "agent_id", in.AgentID, "event", in.Event)
@@ -49,12 +58,11 @@ func (uc *AgentEvent) Execute(ctx context.Context, in AgentEventInput) error {
 // running only from starting. It never downgrades a richer status the agent's
 // integration has already reported (see ADR 0008).
 func (uc *AgentEvent) handleStarted(ctx context.Context, agentID int, childProcessGroupID *int) error {
-	agent, err := uc.readAgent(ctx, agentID)
-	if err != nil {
-		return err
-	}
-
 	return uc.lock.WithWrite(func() error {
+		agent, err := uc.agents.GetByID(ctx, agentID)
+		if err != nil {
+			return err
+		}
 		updated := agent
 		if updated.Status() == domain.AgentStarting {
 			updated = updated.WithStatus(domain.AgentRunning)
@@ -62,7 +70,7 @@ func (uc *AgentEvent) handleStarted(ctx context.Context, agentID int, childProce
 		if childProcessGroupID != nil {
 			updated = updated.WithChildProcessGroupID(*childProcessGroupID)
 		}
-		_, err := uc.agents.Update(ctx, updated)
+		_, err = uc.agents.Update(ctx, updated)
 		return err
 	})
 }
@@ -71,14 +79,23 @@ func (uc *AgentEvent) handleStarted(ctx context.Context, agentID int, childProce
 // last-write-wins, then raises a Desktop Notification on the transitions that
 // want the user's attention.
 func (uc *AgentEvent) handleActivity(ctx context.Context, agentID int, status domain.AgentStatus) error {
-	agent, err := uc.readAgent(ctx, agentID)
-	if err != nil {
-		return err
-	}
-
-	old := agent.Status()
+	var agent *domain.Agent
+	var old domain.AgentStatus
+	var sendDiscord bool
 	if err := uc.lock.WithWrite(func() error {
-		_, err := uc.agents.Update(ctx, agent.WithStatus(status))
+		current, err := uc.agents.GetByID(ctx, agentID)
+		if err != nil {
+			return err
+		}
+		agent = current
+		old = current.Status()
+		updated := current.WithStatus(status)
+		sendDiscord = current.DiscordNotificationArmed() && old == domain.AgentBusy &&
+			(status == domain.AgentWaiting || status == domain.AgentIdle)
+		if sendDiscord {
+			updated = updated.WithDiscordNotificationArmed(false)
+		}
+		_, err = uc.agents.Update(ctx, updated)
 		return err
 	}); err != nil {
 		return err
@@ -92,10 +109,17 @@ func (uc *AgentEvent) handleActivity(ctx context.Context, agentID int, status do
 		project, session := uc.lookupContext(ctx, agent)
 		if n, ok := notificationFor(old, status, agentName(agent), project, session); ok {
 			_ = uc.notifier.Notify(ctx, n)
+			if sendDiscord {
+				_ = uc.discord.Notify(ctx, discordContent(n.Title, project, session))
+			}
 		}
 	}
 
 	return nil
+}
+
+func discordContent(title, project, session string) string {
+	return fmt.Sprintf("%s\nProject: %s\nSession: %s", title, project, session)
 }
 
 // lookupContext fetches the agent's project title and session name for the
@@ -141,19 +165,6 @@ func notificationFor(old, new domain.AgentStatus, name, project, session string)
 	default:
 		return Notification{}, false
 	}
-}
-
-func (uc *AgentEvent) readAgent(ctx context.Context, agentID int) (*domain.Agent, error) {
-	var agent *domain.Agent
-	err := uc.lock.WithRead(func() error {
-		a, err := uc.agents.GetByID(ctx, agentID)
-		if err != nil {
-			return err
-		}
-		agent = a
-		return nil
-	})
-	return agent, err
 }
 
 func (uc *AgentEvent) handleExited(ctx context.Context, agentID int) error {

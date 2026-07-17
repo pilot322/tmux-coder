@@ -22,6 +22,20 @@ type fakeNotifier struct {
 	onNotify func()
 }
 
+type fakeDiscordNotifier struct {
+	calls    []string
+	err      error
+	onNotify func()
+}
+
+func (n *fakeDiscordNotifier) Notify(_ context.Context, content string) error {
+	n.calls = append(n.calls, content)
+	if n.onNotify != nil {
+		n.onNotify()
+	}
+	return n.err
+}
+
 func (n *fakeNotifier) Notify(_ context.Context, msg usecase.Notification) error {
 	n.calls = append(n.calls, msg)
 	if n.onNotify != nil {
@@ -310,5 +324,89 @@ func TestAgentEvent_StartedStatusChangedAtSemantics(t *testing.T) {
 	}
 	if !gotStarting.StatusChangedAt().After(old) {
 		t.Fatalf("started promotion StatusChangedAt = %v, want after %v", gotStarting.StatusChangedAt(), old)
+	}
+}
+
+func TestAgentEvent_DiscordUsesStrictBusyDepartureAndConsumesOneShot(t *testing.T) {
+	cases := []struct {
+		name      string
+		start     domain.AgentStatus
+		event     string
+		wantCalls int
+		wantArmed bool
+	}{
+		{"busy to waiting", domain.AgentBusy, "waiting", 1, false},
+		{"busy to idle", domain.AgentBusy, "idle", 1, false},
+		{"running to idle", domain.AgentRunning, "idle", 0, true},
+		{"starting to idle", domain.AgentStarting, "idle", 0, true},
+		{"idle to waiting", domain.AgentIdle, "waiting", 0, true},
+		{"busy to busy", domain.AgentBusy, "busy", 0, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, agents, projects, sessions, _, lock := agentFixture()
+			p, s := seedProjectAndSession(projects, sessions)
+			a, _ := agents.Create(context.Background(), domain.NewAgent(0, p.ID(), s.ID(), "opencode", "reviewer", "%10", true, tc.start).WithDiscordNotificationArmed(true))
+			discord := &fakeDiscordNotifier{}
+			uc := usecase.NewAgentEventWithDiscord(agents, projects, sessions, &fakeNotifier{}, discord, lock, obs.Nop())
+			if err := uc.Execute(context.Background(), usecase.AgentEventInput{AgentID: a.ID(), Event: tc.event}); err != nil {
+				t.Fatal(err)
+			}
+			if len(discord.calls) != tc.wantCalls {
+				t.Fatalf("Discord calls = %d, want %d", len(discord.calls), tc.wantCalls)
+			}
+			stored, _ := agents.GetByID(context.Background(), a.ID())
+			if stored.DiscordNotificationArmed() != tc.wantArmed {
+				t.Fatalf("armed = %v, want %v", stored.DiscordNotificationArmed(), tc.wantArmed)
+			}
+		})
+	}
+}
+
+func TestAgentEvent_DiscordRemainsArmedUntilLaterQualifyingTransition(t *testing.T) {
+	_, agents, projects, sessions, _, lock := agentFixture()
+	p, s := seedProjectAndSession(projects, sessions)
+	a, _ := agents.Create(context.Background(), domain.NewAgent(0, p.ID(), s.ID(), "opencode", "reviewer", "%10", true, domain.AgentRunning).WithDiscordNotificationArmed(true))
+	discord := &fakeDiscordNotifier{}
+	uc := usecase.NewAgentEventWithDiscord(agents, projects, sessions, &fakeNotifier{}, discord, lock, obs.Nop())
+	for _, event := range []string{"idle", "busy", "waiting", "idle"} {
+		if err := uc.Execute(context.Background(), usecase.AgentEventInput{AgentID: a.ID(), Event: event}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(discord.calls) != 1 {
+		t.Fatalf("Discord calls = %d, want one", len(discord.calls))
+	}
+	if got := discord.calls[0]; got != "reviewer needs input\nProject: api\nSession: api.main" {
+		t.Fatalf("content = %q", got)
+	}
+}
+
+func TestAgentEvent_DiscordFailureIsSwallowedAfterAtomicConsumption(t *testing.T) {
+	_, agents, projects, sessions, _, lock := agentFixture()
+	p, s := seedProjectAndSession(projects, sessions)
+	a, _ := agents.Create(context.Background(), domain.NewAgent(0, p.ID(), s.ID(), "opencode", "reviewer", "%10", true, domain.AgentBusy).WithDiscordNotificationArmed(true))
+	var armedAtNotify bool
+	var inWriteAtNotify bool
+	discord := &fakeDiscordNotifier{err: errors.New("delivery failed"), onNotify: func() {
+		stored, _ := agents.GetByID(context.Background(), a.ID())
+		armedAtNotify = stored.DiscordNotificationArmed()
+		inWriteAtNotify = lock.inWrite
+	}}
+	uc := usecase.NewAgentEventWithDiscord(agents, projects, sessions, &fakeNotifier{}, discord, lock, obs.Nop())
+	if err := uc.Execute(context.Background(), usecase.AgentEventInput{AgentID: a.ID(), Event: "idle"}); err != nil {
+		t.Fatalf("Discord failure failed event: %v", err)
+	}
+	if armedAtNotify || inWriteAtNotify {
+		t.Fatalf("at notify armed=%v inWrite=%v, want both false", armedAtNotify, inWriteAtNotify)
+	}
+	if err := uc.Execute(context.Background(), usecase.AgentEventInput{AgentID: a.ID(), Event: "busy"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := uc.Execute(context.Background(), usecase.AgentEventInput{AgentID: a.ID(), Event: "idle"}); err != nil {
+		t.Fatal(err)
+	}
+	if len(discord.calls) != 1 {
+		t.Fatalf("failed delivery retried: calls=%d", len(discord.calls))
 	}
 }

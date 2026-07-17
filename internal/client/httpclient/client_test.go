@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"testing"
 	"time"
 
@@ -222,14 +223,14 @@ func TestClientAcquirePort(t *testing.T) {
 	}
 }
 
-func TestClientListAgentsDecodesStatusChangedAt(t *testing.T) {
+func TestClientListAgentsDecodesNotificationStateAndStatusChangedAt(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/agents" {
 			w.WriteHeader(http.StatusNotFound)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"agents":[{"id":1,"projectId":2,"sessionId":3,"kind":"opencode","status":"waiting","statusChangedAt":"2026-06-17T10:00:00Z"}]}`))
+		_, _ = w.Write([]byte(`{"agents":[{"id":1,"projectId":2,"sessionId":3,"kind":"opencode","status":"waiting","statusChangedAt":"2026-06-17T10:00:00Z","discordNotificationArmed":true}]}`))
 	}))
 	defer server.Close()
 
@@ -239,7 +240,47 @@ func TestClientListAgentsDecodesStatusChangedAt(t *testing.T) {
 		t.Fatalf("ListAgents: %v", err)
 	}
 	want := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
-	if len(agents) != 1 || !agents[0].StatusChangedAt.Equal(want) {
-		t.Fatalf("agents = %+v, want statusChangedAt %v", agents, want)
+	if len(agents) != 1 || !agents[0].StatusChangedAt.Equal(want) || !agents[0].DiscordNotificationArmed {
+		t.Fatalf("agents = %+v, want statusChangedAt %v and armed notification", agents, want)
+	}
+}
+
+func TestClientSetAgentDiscordNotification(t *testing.T) {
+	tests := []struct {
+		name    string
+		enabled bool
+	}{
+		{name: "enable", enabled: true},
+		{name: "disable", enabled: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method != http.MethodPut || r.URL.Path != "/agents/42/discord-notification" {
+					t.Fatalf("request = %s %s, want PUT /agents/42/discord-notification", r.Method, r.URL.Path)
+				}
+				if got := r.Header.Get("Content-Type"); got != "application/json" {
+					t.Fatalf("Content-Type = %q, want application/json", got)
+				}
+				var body map[string]any
+				if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+					t.Fatalf("decode request: %v", err)
+				}
+				if len(body) != 1 || body["enabled"] != tt.enabled {
+					t.Fatalf("request body = %#v, want explicit enabled=%v", body, tt.enabled)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"id":42,"displayName":"reviewer","discordNotificationArmed":` + strconv.FormatBool(tt.enabled) + `}`))
+			}))
+			defer server.Close()
+
+			agent, err := httpclient.New(server.URL, server.Client()).SetAgentDiscordNotification(context.Background(), 42, tt.enabled)
+			if err != nil {
+				t.Fatalf("SetAgentDiscordNotification: %v", err)
+			}
+			if agent.ID != 42 || agent.DisplayName != "reviewer" || agent.DiscordNotificationArmed != tt.enabled {
+				t.Fatalf("agent = %+v, want notification state %v", agent, tt.enabled)
+			}
+		})
 	}
 }

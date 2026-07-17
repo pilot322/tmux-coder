@@ -73,8 +73,12 @@ A notification sent to the **Daemon** about a **TC Agent**, carrying an event ty
 _Avoid_: Message, signal, notification
 
 **Desktop Notification**:
-An outbound, user-facing OS alert the **Daemon** raises to the host desktop when a **TC Agent** leaves `busy` for `waiting` or `idle`. It is the mirror image of an **Event**: an Event flows *in* to the Daemon, a Desktop Notification flows *out* to the user. Platform-specific and best-effort — delivered only where the host supports it, and never allowed to block or fail the handling of the **Event** that triggered it. Optionally carries an audible cue (on by default, muted by `TMUX_CODER_NOTIFY_SOUND=0`), itself best-effort and Linux-only.
+An outbound, user-facing OS alert the **Daemon** raises to the host desktop on a changed transition into `waiting` or `idle`. It is the mirror image of an **Event**: an Event flows *in* to the Daemon, a Desktop Notification flows *out* to the user. Platform-specific, always on, and best-effort — delivered only where the host supports it, and never allowed to block or fail the handling of the **Event** that triggered it. Optionally carries an audible cue (on by default, muted by `TMUX_CODER_NOTIFY_SOUND=0`), itself best-effort and Linux-only.
 _Avoid_: Event, alert, toast, message
+
+**Discord Notification**:
+An outbound, one-shot message that a user arms for one **TC Agent** through the **Client**. The **Daemon** consumes the armed request on that TC Agent's next `busy` to `waiting` or `busy` to `idle` transition and then attempts best-effort delivery through the configured Discord webhook. Non-qualifying transitions leave it armed; delivery failure does not restore or retry it. Unlike an always-on **Desktop Notification**, a Discord Notification is explicitly armed per TC Agent and exists only in the in-memory **Agent Registry**.
+_Avoid_: Event, Desktop Notification, persistent subscription, channel
 
 **Reconciliation**:
 The process by which the **Daemon** heals drift between its in-memory record of a **Session** and the runtime resources it owns: the tmux session for every **Session**, and the git worktree for a **Worktree Session**. Triggered on write operations, never on plain reads.

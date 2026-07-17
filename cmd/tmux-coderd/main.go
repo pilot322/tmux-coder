@@ -13,7 +13,9 @@ import (
 
 	"github.com/pilot322/tmux-coder/internal/adapter/httpapi"
 	"github.com/pilot322/tmux-coder/internal/daemonaddr"
+	"github.com/pilot322/tmux-coder/internal/daemonconfig"
 	"github.com/pilot322/tmux-coder/internal/infra/desktopnotify"
+	"github.com/pilot322/tmux-coder/internal/infra/discordnotify"
 	gitinfra "github.com/pilot322/tmux-coder/internal/infra/git"
 	"github.com/pilot322/tmux-coder/internal/infra/hookexec"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
@@ -42,13 +44,19 @@ func main() {
 
 	addr := "127.0.0.1:" + daemonaddr.Port(os.Getenv)
 
-	state := memory.NewDaemonState()
+	config, err := daemonconfig.Load()
+	if err != nil {
+		logger.Error(ctx, "failed to load daemon config", "err", err.Error())
+		os.Exit(1)
+	}
+	state := memory.NewDaemonStateWithConfig(config)
 	gateway := tmux.NewTmuxGateway(logger)
 	git := gitinfra.NewGateway(logger)
 	hooks := hookexec.NewRunner(logger)
 	ports := netport.NewChecker(logger)
 	processGw := processinfra.NewProcessGateway(logger)
 	notifier := desktopnotify.NewNotifier(desktopnotify.SoundEnabled(os.Getenv))
+	discordNotifier := discordnotify.NewNotifier(config.DiscordWebhookNotify)
 
 	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gateway, git, state, state.Config(), logger)
 	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state, logger)
@@ -59,13 +67,14 @@ func main() {
 	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), gateway, state, logger)
 	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), gateway, state, logger)
 	renameAgent := usecase.NewRenameAgent(state.Agents(), state.Projects(), state.Sessions(), gateway, state, logger)
-	agentEvent := usecase.NewAgentEvent(state.Agents(), state.Projects(), state.Sessions(), notifier, state, logger)
+	setAgentDiscordNotification := usecase.NewSetAgentDiscordNotification(state.Agents(), state.Projects(), state.Sessions(), config, state)
+	agentEvent := usecase.NewAgentEventWithDiscord(state.Agents(), state.Projects(), state.Sessions(), notifier, discordNotifier, state, logger)
 	deleteAgent := usecase.NewDeleteAgent(state.Agents(), gateway, processGw, state, logger)
 	acquirePort := usecase.NewAcquirePort(state.Sessions(), state.Leases(), ports, state, logger)
 
 	controller := httpapi.NewProjectController(create, list, del)
 	sessionController := httpapi.NewSessionController(createSession, listSessions, deleteSession)
-	agentController := httpapi.NewAgentController(createAgent, listAgents, renameAgent, agentEvent, deleteAgent)
+	agentController := httpapi.NewAgentController(createAgent, listAgents, renameAgent, setAgentDiscordNotification, agentEvent, deleteAgent)
 	resourceController := httpapi.NewResourceController(acquirePort)
 	router := httpapi.NewRouter(controller, sessionController, agentController, resourceController)
 

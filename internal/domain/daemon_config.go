@@ -7,6 +7,11 @@ const DefaultMaxProjectTitleLength = 40
 // it later.
 type DaemonConfig struct {
 	MaxProjectTitleLength int
+	DiscordWebhookNotify  string
+}
+
+func (c DaemonConfig) DiscordWebhookConfigured() bool {
+	return c.DiscordWebhookNotify != ""
 }
 
 func DefaultDaemonConfig() DaemonConfig {

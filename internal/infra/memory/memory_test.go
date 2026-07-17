@@ -85,3 +85,12 @@ func TestDaemonState_WithWritePropagatesError(t *testing.T) {
 		t.Fatalf("WithWrite should return fn's error, got %v", err)
 	}
 }
+
+func TestDaemonState_RetainsInjectedConfig(t *testing.T) {
+	config := domain.DefaultDaemonConfig()
+	config.DiscordWebhookNotify = "https://discord.com/api/webhooks/1/token"
+	state := memory.NewDaemonStateWithConfig(config)
+	if state.Config().DiscordWebhookNotify != config.DiscordWebhookNotify {
+		t.Fatalf("Config = %+v, want injected config", state.Config())
+	}
+}

@@ -30,6 +30,18 @@ func TestMemoryAgentRepository_CreateAssignsID(t *testing.T) {
 	}
 }
 
+func TestMemoryAgentRepository_CreatePreservesDiscordNotificationArmed(t *testing.T) {
+	ctx := context.Background()
+	r := memory.NewMemoryAgentRepository()
+	created, err := r.Create(ctx, domain.NewAgent(0, 1, 2, "opencode", "", "%1", true, domain.AgentStarting).WithDiscordNotificationArmed(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !created.DiscordNotificationArmed() {
+		t.Fatal("Create lost Discord notification armed state")
+	}
+}
+
 func TestMemoryAgentRepository_GetByID(t *testing.T) {
 	ctx := context.Background()
 	r := memory.NewMemoryAgentRepository()

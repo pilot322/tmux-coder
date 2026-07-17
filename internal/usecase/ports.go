@@ -149,3 +149,9 @@ type Notification struct {
 type Notifier interface {
 	Notify(ctx context.Context, n Notification) error
 }
+
+// DiscordNotifier delivers already-composed text to a configured Discord
+// webhook. Transition policy and one-shot consumption remain in AgentEvent.
+type DiscordNotifier interface {
+	Notify(ctx context.Context, content string) error
+}

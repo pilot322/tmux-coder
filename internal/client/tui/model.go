@@ -26,6 +26,7 @@ type API interface {
 	CreateSession(context.Context, httpclient.CreateSessionInput) (httpclient.Session, error)
 	CreateAgent(context.Context, httpclient.CreateAgentInput) (httpclient.Agent, error)
 	RenameAgent(context.Context, int, string) (httpclient.Agent, error)
+	SetAgentDiscordNotification(context.Context, int, bool) (httpclient.Agent, error)
 	DeleteProject(context.Context, int) error
 	DeleteSession(context.Context, int, bool) error
 	DeleteAgent(context.Context, int) error
@@ -178,6 +179,13 @@ type Model struct {
 	renameAgentID int
 	renameValue   string
 
+	configuringDiscordNotification bool
+	discordNotificationAgentID     int
+	discordNotificationAgentName   string
+	discordNotificationEnabled     bool
+	discordNotificationSubmitting  bool
+	discordNotificationPromptSeq   uint64
+
 	pendingSelectSession string
 	initialSession       string
 	attach               AttachTarget
@@ -213,6 +221,14 @@ type renameAgentMsg struct {
 	err   error
 }
 
+type setDiscordNotificationMsg struct {
+	agent     httpclient.Agent
+	id        int
+	enabled   bool
+	promptSeq uint64
+	err       error
+}
+
 var (
 	errorStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("9"))
 	mutedStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("8"))
@@ -236,10 +252,10 @@ const noProjectsMsg = "No projects yet. Run `tmux-coder open` or `tmux-coder o` 
 
 const defaultAgentExecutable = "opencode"
 
-const helpText = "Keys: j/k or ctrl+n/ctrl+p or arrows move, g/G jump, 0-3 switch tab, enter attach, a agent, u rename (Agents), X delete, w worktree (off session), W base worktree (off ref), s secondary (Sessions), S fold all, space fold, o group (Agents), f filter, r refresh, ? help, q quit"
+const helpText = "Keys: j/k or ctrl+n/ctrl+p or arrows move, g/G jump, 0-3 switch tab, enter attach, a agent, n notifications (Overview/Agents), u rename (Agents), X delete, w worktree (off session), W base worktree (off ref), s secondary (Sessions), S fold all, space fold, o group (Agents), f filter, r refresh, ? help, q quit"
 
 var keys = struct {
-	up, down, top, bottom, enter, del, refresh, worktree, worktreeBase, secondary, foldAll, fold, agent, rename, group, filter, help, quit, tab key.Binding
+	up, down, top, bottom, enter, del, refresh, worktree, worktreeBase, secondary, foldAll, fold, agent, notification, rename, group, filter, help, quit, tab key.Binding
 }{
 	up:           key.NewBinding(key.WithKeys("up", "k", "ctrl+p")),
 	down:         key.NewBinding(key.WithKeys("down", "j", "ctrl+n")),
@@ -254,6 +270,7 @@ var keys = struct {
 	foldAll:      key.NewBinding(key.WithKeys("S")),
 	fold:         key.NewBinding(key.WithKeys(" ")),
 	agent:        key.NewBinding(key.WithKeys("a")),
+	notification: key.NewBinding(key.WithKeys("n")),
 	rename:       key.NewBinding(key.WithKeys("u")),
 	group:        key.NewBinding(key.WithKeys("o")),
 	filter:       key.NewBinding(key.WithKeys("f")),
@@ -299,7 +316,7 @@ func (m Model) tickCmd() tea.Cmd {
 // modalActive reports whether a confirm or text-entry prompt is open. Background
 // refreshes must leave that interaction state untouched.
 func (m Model) modalActive() bool {
-	return m.confirm || m.creatingWorktree || m.creatingWorktreeFromBase || m.creatingSecondary || m.creatingAgent || m.renamingAgent || m.worktreeConflict != ""
+	return m.confirm || m.creatingWorktree || m.creatingWorktreeFromBase || m.creatingSecondary || m.creatingAgent || m.renamingAgent || m.configuringDiscordNotification || m.worktreeConflict != ""
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -410,6 +427,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.agentSel = selection{id: msg.agent.ID}
 		m.loading = true
 		return m, m.nextListCmd()
+	case setDiscordNotificationMsg:
+		if !m.configuringDiscordNotification || msg.promptSeq != m.discordNotificationPromptSeq {
+			return m, nil
+		}
+		m.discordNotificationSubmitting = false
+		if msg.err != nil {
+			m.status = msg.err.Error()
+			return m, nil
+		}
+		for i := range m.agents {
+			if m.agents[i].ID == msg.id {
+				m.agents[i] = msg.agent
+				break
+			}
+		}
+		m.resetDiscordNotificationPrompt()
+		if msg.enabled {
+			m.status = "discord notifications armed"
+		} else {
+			m.status = "discord notifications disabled"
+		}
+		// Any list request already in flight predates this successful mutation.
+		// Advance the sequence so its stale agent state cannot overwrite the
+		// updated agent before the next poll.
+		m.listSeq++
+		return m, nil
 	case tea.KeyMsg:
 		if m.worktreeConflict != "" {
 			return m.updateWorktreeConflict(msg)
@@ -428,6 +471,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.renamingAgent {
 			return m.updateRenamePrompt(msg)
+		}
+		if m.configuringDiscordNotification {
+			return m.updateDiscordNotificationPrompt(msg)
 		}
 		if m.filtering {
 			return m.updateFilter(msg)
@@ -475,6 +521,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.toggleCursorFold()
 		case key.Matches(msg, keys.agent):
 			m.startAgent()
+		case key.Matches(msg, keys.notification):
+			m.startDiscordNotification()
 		case key.Matches(msg, keys.rename):
 			m.startRename()
 		case key.Matches(msg, keys.group):
@@ -569,6 +617,13 @@ func (m Model) View() string {
 	if m.renamingAgent {
 		footer.WriteString("Agent name: " + m.renameValue + "\n")
 	}
+	if m.configuringDiscordNotification {
+		action := "Enable"
+		if !m.discordNotificationEnabled {
+			action = "Disable"
+		}
+		footer.WriteString(fmt.Sprintf("%s Discord notifications for %s?\n", action, m.discordNotificationAgentName))
+	}
 	switch m.worktreeConflict {
 	case httpclient.CodeBranchExists:
 		footer.WriteString("branch already exists. Create a worktree for it? y/n\n")
@@ -588,6 +643,8 @@ func (m Model) View() string {
 		footer.WriteString(mutedStyle.Render("enter next/create  esc cancel") + "\n")
 	} else if m.renamingAgent {
 		footer.WriteString(mutedStyle.Render("enter rename  esc cancel") + "\n")
+	} else if m.configuringDiscordNotification {
+		footer.WriteString(mutedStyle.Render("enter confirm  esc cancel") + "\n")
 	} else if m.worktreeConflict != "" {
 		footer.WriteString(mutedStyle.Render("y confirm  n cancel") + "\n")
 	} else if m.filtering {
@@ -697,12 +754,14 @@ func (m Model) tabStrip() string {
 func (m Model) footer() string {
 	parts := []string{"j/k move", "enter attach", "a agent", "S fold", "space toggle"}
 	switch m.tab {
-	case tabOverview, tabProjects:
+	case tabOverview:
+		parts = append(parts, "n notifications", "w worktree", "W base worktree", "X delete")
+	case tabProjects:
 		parts = append(parts, "w worktree", "W base worktree", "X delete")
 	case tabSessions:
 		parts = append(parts, "w worktree", "W base worktree", "s secondary", "X delete")
 	default:
-		parts = append(parts, "u rename", "o group", "X delete")
+		parts = append(parts, "n notifications", "u rename", "o group", "X delete")
 	}
 	parts = append(parts, "f filter", "0-3 tabs", "r refresh", "? help", "q quit")
 	return strings.Join(parts, "  ")
@@ -1014,6 +1073,13 @@ func (m Model) renameAgentCmd(id int, name string) tea.Cmd {
 	}
 }
 
+func (m Model) setDiscordNotificationCmd(id int, enabled bool, promptSeq uint64) tea.Cmd {
+	return func() tea.Msg {
+		agent, err := m.api.SetAgentDiscordNotification(m.ctx, id, enabled)
+		return setDiscordNotificationMsg{agent: agent, id: id, enabled: enabled, promptSeq: promptSeq, err: err}
+	}
+}
+
 func (m Model) createWorktreeCmd(projectID, parentID int, branch string, createWorktree, createBranch bool) tea.Cmd {
 	return func() tea.Msg {
 		session, err := m.api.CreateSession(m.ctx, httpclient.CreateSessionInput{
@@ -1292,6 +1358,25 @@ func (m Model) updateRenamePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyRunes:
 		m.renameValue += string(msg.Runes)
 		return m, nil
+	}
+	return m, nil
+}
+
+func (m Model) updateDiscordNotificationPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.Type {
+	case tea.KeyCtrlC:
+		return m, tea.Quit
+	case tea.KeyEsc:
+		m.resetDiscordNotificationPrompt()
+		m.status = ""
+		return m, nil
+	case tea.KeyEnter:
+		if m.discordNotificationSubmitting {
+			return m, nil
+		}
+		m.discordNotificationSubmitting = true
+		m.status = ""
+		return m, m.setDiscordNotificationCmd(m.discordNotificationAgentID, m.discordNotificationEnabled, m.discordNotificationPromptSeq)
 	}
 	return m, nil
 }
@@ -1851,6 +1936,33 @@ func (m *Model) startRename() {
 		m.renameValue = fmt.Sprintf("agent-%d", row.agent.ID)
 	}
 	m.status = ""
+}
+
+func (m *Model) startDiscordNotification() {
+	row, ok := m.cursor()
+	if !ok || row.kind != rowAgent {
+		m.status = "select an agent to configure notifications"
+		return
+	}
+	name := row.agent.DisplayName
+	if name == "" {
+		name = fmt.Sprintf("agent-%d", row.agent.ID)
+	}
+	m.configuringDiscordNotification = true
+	m.discordNotificationPromptSeq++
+	m.discordNotificationAgentID = row.agent.ID
+	m.discordNotificationAgentName = name
+	m.discordNotificationEnabled = !row.agent.DiscordNotificationArmed
+	m.discordNotificationSubmitting = false
+	m.status = ""
+}
+
+func (m *Model) resetDiscordNotificationPrompt() {
+	m.configuringDiscordNotification = false
+	m.discordNotificationAgentID = 0
+	m.discordNotificationAgentName = ""
+	m.discordNotificationEnabled = false
+	m.discordNotificationSubmitting = false
 }
 
 func (m *Model) resetRenamePrompt() {

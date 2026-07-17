@@ -145,7 +145,7 @@ func TestModelFilterFindsFoldedSecondarySessions(t *testing.T) {
 	}
 }
 
-// While filtering, keys that are bindings in normal mode (w, q, s, digits) must
+// While filtering, keys that are bindings in normal mode (w, n, q, s, digits) must
 // be typed into the query instead of triggering their actions.
 func TestModelFilterCapturesActionKeysAsText(t *testing.T) {
 	m := loaded(t, listMsg{projects: []httpclient.Project{
@@ -153,14 +153,17 @@ func TestModelFilterCapturesActionKeysAsText(t *testing.T) {
 	}})
 	m = press(m, runes("1"))
 	m = press(m, runes("f"))
-	for _, k := range []string{"w", "s"} {
+	for _, k := range []string{"w", "s", "n"} {
 		m = press(m, runes(k))
 	}
 	if m.creatingWorktree {
 		t.Fatal("w should be captured as query text, not start a worktree")
 	}
-	if m.filterQuery != "ws" {
-		t.Fatalf("query should be %q, got %q", "ws", m.filterQuery)
+	if m.configuringDiscordNotification {
+		t.Fatal("n should be captured as query text, not open notification configuration")
+	}
+	if m.filterQuery != "wsn" {
+		t.Fatalf("query should be %q, got %q", "wsn", m.filterQuery)
 	}
 	if m.tab != tabProjects {
 		t.Fatalf("digits/letters must not switch tabs while filtering, tab=%d", m.tab)

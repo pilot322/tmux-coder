@@ -92,19 +92,24 @@ type updateAgentRequest struct {
 	DisplayName *string `json:"displayName"`
 }
 
+type setAgentDiscordNotificationRequest struct {
+	Enabled *bool `json:"enabled"`
+}
+
 type agentResponse struct {
-	ID                  int             `json:"id"`
-	ProjectID           int             `json:"projectId"`
-	SessionID           int             `json:"sessionId"`
-	Kind                string          `json:"kind"`
-	DisplayName         string          `json:"displayName"`
-	TmuxPaneID          string          `json:"tmuxPaneId"`
-	PaneOwned           bool            `json:"paneOwned"`
-	Status              string          `json:"status"`
-	StatusChangedAt     time.Time       `json:"statusChangedAt"`
-	ChildProcessGroupID int             `json:"childProcessGroupId,omitempty"`
-	Project             projectResponse `json:"project"`
-	Session             sessionResponse `json:"session"`
+	ID                       int             `json:"id"`
+	ProjectID                int             `json:"projectId"`
+	SessionID                int             `json:"sessionId"`
+	Kind                     string          `json:"kind"`
+	DisplayName              string          `json:"displayName"`
+	TmuxPaneID               string          `json:"tmuxPaneId"`
+	PaneOwned                bool            `json:"paneOwned"`
+	Status                   string          `json:"status"`
+	StatusChangedAt          time.Time       `json:"statusChangedAt"`
+	ChildProcessGroupID      int             `json:"childProcessGroupId,omitempty"`
+	DiscordNotificationArmed bool            `json:"discordNotificationArmed"`
+	Project                  projectResponse `json:"project"`
+	Session                  sessionResponse `json:"session"`
 }
 
 type agentsResponse struct {

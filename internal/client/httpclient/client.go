@@ -43,18 +43,19 @@ type Session struct {
 }
 
 type Agent struct {
-	ID                  int       `json:"id"`
-	ProjectID           int       `json:"projectId"`
-	SessionID           int       `json:"sessionId"`
-	Kind                string    `json:"kind"`
-	DisplayName         string    `json:"displayName"`
-	TmuxPaneID          string    `json:"tmuxPaneId"`
-	PaneOwned           bool      `json:"paneOwned"`
-	Status              string    `json:"status"`
-	StatusChangedAt     time.Time `json:"statusChangedAt"`
-	ChildProcessGroupID int       `json:"childProcessGroupId,omitempty"`
-	Project             Project   `json:"project"`
-	Session             Session   `json:"session"`
+	ID                       int       `json:"id"`
+	ProjectID                int       `json:"projectId"`
+	SessionID                int       `json:"sessionId"`
+	Kind                     string    `json:"kind"`
+	DisplayName              string    `json:"displayName"`
+	TmuxPaneID               string    `json:"tmuxPaneId"`
+	PaneOwned                bool      `json:"paneOwned"`
+	Status                   string    `json:"status"`
+	StatusChangedAt          time.Time `json:"statusChangedAt"`
+	ChildProcessGroupID      int       `json:"childProcessGroupId,omitempty"`
+	DiscordNotificationArmed bool      `json:"discordNotificationArmed"`
+	Project                  Project   `json:"project"`
+	Session                  Session   `json:"session"`
 }
 
 type CreateAgentInput struct {
@@ -308,6 +309,25 @@ func (c *Client) RenameAgent(ctx context.Context, id int, displayName string) (A
 		return Agent{}, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPatch, fmt.Sprintf("%s/agents/%d", c.baseURL, id), bytes.NewReader(body))
+	if err != nil {
+		return Agent{}, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	var agent Agent
+	if err := c.doJSON(req, http.StatusOK, &agent); err != nil {
+		return Agent{}, err
+	}
+	return agent, nil
+}
+
+func (c *Client) SetAgentDiscordNotification(ctx context.Context, id int, enabled bool) (Agent, error) {
+	body, err := json.Marshal(struct {
+		Enabled bool `json:"enabled"`
+	}{Enabled: enabled})
+	if err != nil {
+		return Agent{}, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, fmt.Sprintf("%s/agents/%d/discord-notification", c.baseURL, id), bytes.NewReader(body))
 	if err != nil {
 		return Agent{}, err
 	}

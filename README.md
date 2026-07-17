@@ -58,7 +58,15 @@ Notification dependencies:
 - desktop notifications work only on Linux
 - visual notifications need `notify-send`
 - sound is optional and needs `paplay`
-- disable sound with `TMUX__NOTIFY_SOUND=0`
+- disable sound with `TMUX_CODER_NOTIFY_SOUND=0`
+
+Discord notifications use a webhook configured in `~/.tmux-coder/config.yaml`:
+
+```yaml
+discord_webhook_notify: https://discord.com/api/webhooks/WEBHOOK_ID/WEBHOOK_TOKEN
+```
+
+Create the webhook under your Discord server's **Server Settings > Integrations > Webhooks**, then replace the example value with its copied URL. Only official HTTPS Discord webhook URLs are accepted. The daemon reads this file once at startup, so restart it after changing the configuration. A missing file or key leaves Discord notifications disabled; invalid YAML, unknown keys, and invalid webhook URLs prevent daemon startup.
 
 # How to use
 
@@ -90,6 +98,7 @@ Useful TUI keys:
 - `j/k`: move
 - `enter`: attach
 - `a`: create agent
+- `n`: arm or disable a one-shot Discord notification for the selected agent
 - `w`: create worktree from selected session
 - `W`: create worktree from a base ref
 - `s`: create secondary session
@@ -97,6 +106,8 @@ Useful TUI keys:
 - `f`: fuzzyfind
 - `?`: help
 - `q`: quit
+
+Pressing `n` in Overview or Agents opens an enable/disable confirmation. An armed notification is consumed by the selected agent's next `busy` to `waiting` (needs input) or `busy` to `idle` transition. Other transitions leave it armed. Confirming again while armed disables it.
 
 Start an agent from inside a tmux-coder-managed session:
 
