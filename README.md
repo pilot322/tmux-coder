@@ -108,6 +108,21 @@ If no executable is given, `opencode` is used.
 
 You can use any executable really, but it needs to have an extension or hooks set up so that it passes the agent's state to the daemon. Currently only opencode and claude code have been set up (opencode works much better). More coming soon.
 
+OpenCode agents share one headless server owned by the daemon. Each agent pane
+runs an attached TUI in its own working directory, so concurrent agents avoid
+duplicating the server process. Set `TMUX_CODER_OPENCODE_SERVER_URL` to use an
+already-running server instead.
+
+Configure the bundled OpenCode plugin in `~/.config/opencode/tui.json` so
+activity remains associated with the attached TUI's agent ID. Remove any older
+`tmux-coder.js` entry from `opencode.json`:
+
+```json
+{
+  "plugin": ["file:///path/to/tmux-coder/integrations/opencode"]
+}
+```
+
 Install Claude Code activity hooks again if the binary path changes:
 
 ```sh
