@@ -222,6 +222,27 @@ func TestClientAcquirePort(t *testing.T) {
 	}
 }
 
+func TestClientEnsuresOpenCodeServer(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost || r.URL.Path != "/resources/opencode-server" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"url":"http://127.0.0.1:4567"}`))
+	}))
+	defer server.Close()
+
+	c := httpclient.New(server.URL, server.Client())
+	url, err := c.EnsureOpenCodeServer(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureOpenCodeServer: %v", err)
+	}
+	if url != "http://127.0.0.1:4567" {
+		t.Fatalf("url = %q", url)
+	}
+}
+
 func TestClientListAgentsDecodesStatusChangedAt(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet || r.URL.Path != "/agents" {

@@ -95,6 +95,14 @@ type stubAgentGateway struct {
 	created []stubNewWindowCall
 }
 
+type stubOpenCodeServer struct {
+	url string
+}
+
+func (s *stubOpenCodeServer) Ensure(context.Context) (string, error) {
+	return s.url, nil
+}
+
 type stubPortAvailability struct {
 	occupied map[int]bool
 }
@@ -185,12 +193,13 @@ func newResourceServer(ports *stubPortAvailability) (*http.ServeMux, *memory.Mem
 	agentEvent := usecase.NewAgentEvent(state.Agents(), state.Projects(), state.Sessions(), desktopnotify.NoopNotifier{}, state, obs.Nop())
 	deleteAgent := usecase.NewDeleteAgent(state.Agents(), agentGw, nil, state, obs.Nop())
 	acquirePort := usecase.NewAcquirePort(state.Sessions(), state.Leases(), ports, state, obs.Nop())
+	ensureOpenCodeServer := usecase.NewEnsureOpenCodeServer(&stubOpenCodeServer{url: "http://127.0.0.1:4567"})
 
 	return httpapi.NewRouter(
 		httpapi.NewProjectController(create, list, del),
 		httpapi.NewSessionController(createSession, listSessions, deleteSession),
 		httpapi.NewAgentController(createAgent, listAgents, renameAgent, agentEvent, deleteAgent),
-		httpapi.NewResourceController(acquirePort),
+		httpapi.NewResourceController(acquirePort, ensureOpenCodeServer),
 	), state.Leases()
 }
 
@@ -295,6 +304,23 @@ func TestPostAcquirePortWithHookToken(t *testing.T) {
 	}
 	if resp.Port != 8001 {
 		t.Fatalf("port = %d, want 8001", resp.Port)
+	}
+}
+
+func TestPostEnsureOpenCodeServer(t *testing.T) {
+	mux, _ := newResourceServer(&stubPortAvailability{})
+	rec := do(t, mux, "POST", "/resources/opencode-server", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("POST status = %d, want 200 (body: %s)", rec.Code, rec.Body)
+	}
+	var resp struct {
+		URL string `json:"url"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.URL != "http://127.0.0.1:4567" {
+		t.Fatalf("url = %q", resp.URL)
 	}
 }
 

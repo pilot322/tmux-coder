@@ -18,6 +18,7 @@ import (
 	"github.com/pilot322/tmux-coder/internal/infra/hookexec"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
 	"github.com/pilot322/tmux-coder/internal/infra/netport"
+	"github.com/pilot322/tmux-coder/internal/infra/opencodeserver"
 	processinfra "github.com/pilot322/tmux-coder/internal/infra/process"
 	"github.com/pilot322/tmux-coder/internal/infra/tmux"
 	"github.com/pilot322/tmux-coder/internal/obs"
@@ -49,6 +50,7 @@ func main() {
 	ports := netport.NewChecker(logger)
 	processGw := processinfra.NewProcessGateway(logger)
 	notifier := desktopnotify.NewNotifier(desktopnotify.SoundEnabled(os.Getenv))
+	openCodeServer := opencodeserver.NewManager(logger)
 
 	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gateway, git, state, state.Config(), logger)
 	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state, logger)
@@ -62,15 +64,17 @@ func main() {
 	agentEvent := usecase.NewAgentEvent(state.Agents(), state.Projects(), state.Sessions(), notifier, state, logger)
 	deleteAgent := usecase.NewDeleteAgent(state.Agents(), gateway, processGw, state, logger)
 	acquirePort := usecase.NewAcquirePort(state.Sessions(), state.Leases(), ports, state, logger)
+	ensureOpenCodeServer := usecase.NewEnsureOpenCodeServer(openCodeServer)
 
 	controller := httpapi.NewProjectController(create, list, del)
 	sessionController := httpapi.NewSessionController(createSession, listSessions, deleteSession)
 	agentController := httpapi.NewAgentController(createAgent, listAgents, renameAgent, agentEvent, deleteAgent)
-	resourceController := httpapi.NewResourceController(acquirePort)
+	resourceController := httpapi.NewResourceController(acquirePort, ensureOpenCodeServer)
 	router := httpapi.NewRouter(controller, sessionController, agentController, resourceController)
 
 	logger.Info(ctx, "tmux-coderd listening", "addr", addr)
 	if err := http.ListenAndServe(addr, obs.AccessLog(logger)(router)); err != nil {
+		openCodeServer.Close()
 		logger.Error(ctx, "http server stopped", "err", err.Error())
 		os.Exit(1)
 	}

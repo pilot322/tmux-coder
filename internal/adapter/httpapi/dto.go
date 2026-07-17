@@ -80,6 +80,10 @@ type acquirePortResponse struct {
 	Port int `json:"port"`
 }
 
+type openCodeServerResponse struct {
+	URL string `json:"url"`
+}
+
 type createAgentRequest struct {
 	ProjectID   int     `json:"projectId"`
 	SessionID   int     `json:"sessionId"`

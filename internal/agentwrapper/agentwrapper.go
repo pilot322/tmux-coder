@@ -22,10 +22,11 @@ import (
 )
 
 // AgentEventClient is the small subset of the daemon HTTP client needed by the
-// wrapper to report lifecycle events.
+// wrapper to prepare and report an agent process.
 type AgentEventClient interface {
 	SendAgentStarted(ctx context.Context, id int, pgid int) error
 	SendAgentEvent(ctx context.Context, id int, event string) error
+	EnsureOpenCodeServer(ctx context.Context) (string, error)
 }
 
 // CommandRunner matches exec.CommandContext so tests can substitute process
@@ -77,7 +78,25 @@ func Run(cfg RunConfig) int {
 
 	api := cfg.NewClient(daemonAddr, nil)
 
-	cmd := cfg.CommandContext(context.Background(), kind)
+	commandArgs := []string{}
+	if kind == "opencode" {
+		serverURL := configValue(cfg.Getenv, env, "TMUX_CODER_OPENCODE_SERVER_URL")
+		if serverURL == "" {
+			serverCtx, serverCancel := context.WithTimeout(context.Background(), 15*time.Second)
+			serverURL, err = api.EnsureOpenCodeServer(serverCtx)
+			serverCancel()
+			if err != nil {
+				fmt.Fprintf(cfg.Stderr, "failed to start shared OpenCode server: %v\n", err)
+				return 1
+			}
+		}
+		commandArgs = append(commandArgs, "attach", serverURL)
+		if workingDir, err := os.Getwd(); err == nil {
+			commandArgs = append(commandArgs, "--dir", workingDir)
+		}
+	}
+
+	cmd := cfg.CommandContext(context.Background(), kind, commandArgs...)
 	cmd.Stdin = cfg.Stdin
 	cmd.Stdout = cfg.Stdout
 	cmd.Stderr = cfg.Stderr

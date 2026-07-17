@@ -258,6 +258,20 @@ func (c *Client) AcquirePort(ctx context.Context, in AcquirePortInput) (int, err
 	return resp.Port, nil
 }
 
+func (c *Client) EnsureOpenCodeServer(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/resources/opencode-server", nil)
+	if err != nil {
+		return "", err
+	}
+	var resp struct {
+		URL string `json:"url"`
+	}
+	if err := c.doJSON(req, http.StatusOK, &resp); err != nil {
+		return "", err
+	}
+	return resp.URL, nil
+}
+
 func (c *Client) ListAgents(ctx context.Context, in ListAgentsInput) ([]Agent, error) {
 	values := url.Values{}
 	if in.ProjectID != nil {

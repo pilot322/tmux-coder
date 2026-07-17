@@ -17,8 +17,11 @@ import (
 )
 
 type fakeClient struct {
-	started chan int
-	events  []string
+	started     chan int
+	events      []string
+	serverURL   string
+	serverErr   error
+	ensureCalls int
 }
 
 func (c *fakeClient) SendAgentStarted(ctx context.Context, id int, pgid int) error {
@@ -29,6 +32,96 @@ func (c *fakeClient) SendAgentStarted(ctx context.Context, id int, pgid int) err
 func (c *fakeClient) SendAgentEvent(ctx context.Context, id int, event string) error {
 	c.events = append(c.events, event)
 	return nil
+}
+
+func (c *fakeClient) EnsureOpenCodeServer(ctx context.Context) (string, error) {
+	c.ensureCalls++
+	return c.serverURL, c.serverErr
+}
+
+func TestRunOpencodeAttachesSharedServer(t *testing.T) {
+	script := writeExecutable(t, "opencode", "#!/bin/sh\nexit 0\n")
+	client := &fakeClient{started: make(chan int, 1), serverURL: "http://127.0.0.1:4567"}
+	var name string
+	var args []string
+
+	code := agentwrapper.Run(agentwrapper.RunConfig{
+		Args:   []string{"7", "opencode"},
+		Getenv: func(string) string { return "" },
+		Stdout: &bytes.Buffer{},
+		Stderr: &bytes.Buffer{},
+		CommandContext: func(ctx context.Context, command string, commandArgs ...string) *exec.Cmd {
+			name = command
+			args = append([]string{}, commandArgs...)
+			return exec.CommandContext(ctx, script)
+		},
+		NewClient: func(string, *http.Client) agentwrapper.AgentEventClient { return client },
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if name != "opencode" {
+		t.Fatalf("command = %q, want opencode", name)
+	}
+	if len(args) != 4 || args[0] != "attach" || args[1] != client.serverURL || args[2] != "--dir" || args[3] == "" {
+		t.Fatalf("args = %#v, want attach URL and working directory", args)
+	}
+	if client.ensureCalls != 1 {
+		t.Fatalf("EnsureOpenCodeServer calls = %d, want 1", client.ensureCalls)
+	}
+}
+
+func TestRunOpencodeUsesConfiguredServerURL(t *testing.T) {
+	script := writeExecutable(t, "opencode", "#!/bin/sh\nexit 0\n")
+	client := &fakeClient{started: make(chan int, 1)}
+	var args []string
+
+	code := agentwrapper.Run(agentwrapper.RunConfig{
+		Args:   []string{"7", "opencode"},
+		Env:    []string{"TMUX_CODER_OPENCODE_SERVER_URL=http://127.0.0.1:9876"},
+		Stdout: &bytes.Buffer{},
+		Stderr: &bytes.Buffer{},
+		CommandContext: func(ctx context.Context, _ string, commandArgs ...string) *exec.Cmd {
+			args = append([]string{}, commandArgs...)
+			return exec.CommandContext(ctx, script)
+		},
+		NewClient: func(string, *http.Client) agentwrapper.AgentEventClient { return client },
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if len(args) < 2 || args[1] != "http://127.0.0.1:9876" {
+		t.Fatalf("args = %#v, want configured URL", args)
+	}
+	if client.ensureCalls != 0 {
+		t.Fatalf("EnsureOpenCodeServer calls = %d, want 0", client.ensureCalls)
+	}
+}
+
+func TestRunNonOpencodeKeepsZeroArgumentCommand(t *testing.T) {
+	script := writeExecutable(t, "claude", "#!/bin/sh\nexit 0\n")
+	client := &fakeClient{started: make(chan int, 1)}
+	var name string
+	var args []string
+
+	code := agentwrapper.Run(agentwrapper.RunConfig{
+		Args:   []string{"7", "claude"},
+		Getenv: func(string) string { return "" },
+		Stdout: &bytes.Buffer{},
+		Stderr: &bytes.Buffer{},
+		CommandContext: func(ctx context.Context, command string, commandArgs ...string) *exec.Cmd {
+			name = command
+			args = append([]string{}, commandArgs...)
+			return exec.CommandContext(ctx, script)
+		},
+		NewClient: func(string, *http.Client) agentwrapper.AgentEventClient { return client },
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d", code)
+	}
+	if name != "claude" || len(args) != 0 {
+		t.Fatalf("command = %q, args = %#v; want claude with no arguments", name, args)
+	}
 }
 
 func TestRunInjectsPaneEnvAndDispatchesEvents(t *testing.T) {

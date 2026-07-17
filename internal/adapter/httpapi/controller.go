@@ -107,15 +107,16 @@ type AgentController struct {
 }
 
 type ResourceController struct {
-	acquirePort *usecase.AcquirePort
+	acquirePort          *usecase.AcquirePort
+	ensureOpenCodeServer *usecase.EnsureOpenCodeServer
 }
 
 func NewAgentController(c *usecase.CreateAgent, l *usecase.GetAgents, u *usecase.RenameAgent, e *usecase.AgentEvent, d *usecase.DeleteAgent) *AgentController {
 	return &AgentController{create: c, list: l, update: u, event: e, delete: d}
 }
 
-func NewResourceController(acquirePort *usecase.AcquirePort) *ResourceController {
-	return &ResourceController{acquirePort: acquirePort}
+func NewResourceController(acquirePort *usecase.AcquirePort, ensureOpenCodeServer *usecase.EnsureOpenCodeServer) *ResourceController {
+	return &ResourceController{acquirePort: acquirePort, ensureOpenCodeServer: ensureOpenCodeServer}
 }
 
 func (sc *SessionController) List(w http.ResponseWriter, r *http.Request) {
@@ -271,6 +272,15 @@ func (rc *ResourceController) AcquirePort(w http.ResponseWriter, r *http.Request
 		return
 	}
 	writeJSON(w, http.StatusOK, acquirePortResponse{Port: out.Port})
+}
+
+func (rc *ResourceController) EnsureOpenCodeServer(w http.ResponseWriter, r *http.Request) {
+	url, err := rc.ensureOpenCodeServer.Execute(r.Context())
+	if err != nil {
+		writeUsecaseError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, openCodeServerResponse{URL: url})
 }
 
 func (ac *AgentController) List(w http.ResponseWriter, r *http.Request) {
