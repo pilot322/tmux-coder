@@ -58,6 +58,20 @@ func TestModelFilterCursorRestsOnBestMatch(t *testing.T) {
 	}
 }
 
+func TestModelFilterRendersBellForArmedDiscordNotification(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 1, MainSessionName: "main"}},
+		sessions: []httpclient.Session{{ID: 10, ProjectID: 1, SessionName: "main", Type: "main"}},
+		agents:   []httpclient.Agent{{ID: 1, ProjectID: 1, SessionID: 10, DisplayName: "reviewer", Status: "idle", DiscordNotificationArmed: true}},
+	})
+	m = press(m, runes("3"))
+	m = press(m, runes("f"))
+
+	if view := m.View(); !strings.Contains(view, "reviewer 🔔") {
+		t.Fatalf("filtered armed agent missing bell: %q", view)
+	}
+}
+
 func TestModelFilterCtrlNMovesWithinMatches(t *testing.T) {
 	m := loaded(t, listMsg{
 		projects: []httpclient.Project{{ID: 1, MainSessionName: "main"}},

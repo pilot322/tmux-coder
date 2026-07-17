@@ -392,6 +392,25 @@ func TestModelOverviewRendersAgentsUnderSessions(t *testing.T) {
 	}
 }
 
+func TestModelRendersBellForArmedDiscordNotification(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 1, Title: "Backend API", MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{{ID: 10, ProjectID: 1, SessionName: "api-main", Type: "main"}},
+		agents: []httpclient.Agent{
+			{ID: 20, ProjectID: 1, SessionID: 10, DisplayName: "armed", Status: "running", DiscordNotificationArmed: true},
+			{ID: 21, ProjectID: 1, SessionID: 10, DisplayName: "unarmed", Status: "running"},
+		},
+	})
+
+	if view := m.View(); !strings.Contains(view, "armed 🔔 [running]") || strings.Contains(view, "unarmed 🔔") {
+		t.Fatalf("overview notification indicators = %q", view)
+	}
+	m = press(m, runes("3"))
+	if view := m.View(); !strings.Contains(view, "● armed 🔔 · api-main") || strings.Contains(view, "● unarmed 🔔") {
+		t.Fatalf("agents notification indicators = %q", view)
+	}
+}
+
 func TestModelOverviewIndentsAgentsUnderSecondarySessions(t *testing.T) {
 	m := loaded(t, listMsg{
 		projects: []httpclient.Project{{ID: 1, Title: "Backend API", FullPath: "/work/api", MainSessionName: "api-main"}},

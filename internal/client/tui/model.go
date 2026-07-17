@@ -252,6 +252,8 @@ const noProjectsMsg = "No projects yet. Run `tmux-coder open` or `tmux-coder o` 
 
 const defaultAgentExecutable = "opencode"
 
+const discordNotificationBell = "🔔"
+
 const helpText = "Keys: j/k or ctrl+n/ctrl+p or arrows move, g/G jump, 0-3 switch tab, enter attach, a agent, n notifications (Overview/Agents), u rename (Agents), X delete, w worktree (off session), W base worktree (off ref), s secondary (Sessions), S fold all, space fold, o group (Agents), f filter, r refresh, ? help, q quit"
 
 var keys = struct {
@@ -963,6 +965,7 @@ func (m Model) agentRowLabel(a httpclient.Agent) string {
 	if name == "" {
 		name = fmt.Sprintf("agent-%d", a.ID)
 	}
+	name = agentNameWithDiscordNotification(name, a)
 	icon := agentStatusStyle(a.Status).Render(agentStatusIcon(a.Status))
 	meta := m.agentSession(a)
 	if age := agentUpdatedAge(time.Now(), a.StatusChangedAt); age != "" {
@@ -1696,6 +1699,7 @@ func (m Model) rowFilterSegments(r viewRow) []filterSeg {
 		if name == "" {
 			name = fmt.Sprintf("agent-%d", r.agent.ID)
 		}
+		name = agentNameWithDiscordNotification(name, r.agent)
 		ctx := ""
 		if r.agent.Status != "" {
 			ctx += "  " + r.agent.Status
@@ -2514,10 +2518,18 @@ func agentLabel(a httpclient.Agent) string {
 	if name == "" {
 		name = fmt.Sprintf("agent-%d-%s", a.ID, a.Kind)
 	}
+	name = agentNameWithDiscordNotification(name, a)
 	if a.Status == "" {
 		return name
 	}
 	return agentStatusStyle(a.Status).Render(fmt.Sprintf("%s [%s]", name, a.Status))
+}
+
+func agentNameWithDiscordNotification(name string, a httpclient.Agent) string {
+	if a.DiscordNotificationArmed {
+		return name + " " + discordNotificationBell
+	}
+	return name
 }
 
 // agentStatusIcon maps an agent status to a compact glyph shown at the start of
