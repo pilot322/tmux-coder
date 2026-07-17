@@ -99,11 +99,12 @@ func NewSessionController(c *usecase.CreateSession, l *usecase.GetSessions, d *u
 }
 
 type AgentController struct {
-	create *usecase.CreateAgent
-	list   *usecase.GetAgents
-	update *usecase.RenameAgent
-	event  *usecase.AgentEvent
-	delete *usecase.DeleteAgent
+	create                 *usecase.CreateAgent
+	list                   *usecase.GetAgents
+	update                 *usecase.RenameAgent
+	setDiscordNotification *usecase.SetAgentDiscordNotification
+	event                  *usecase.AgentEvent
+	delete                 *usecase.DeleteAgent
 }
 
 type ResourceController struct {
@@ -111,8 +112,8 @@ type ResourceController struct {
 	ensureOpenCodeServer *usecase.EnsureOpenCodeServer
 }
 
-func NewAgentController(c *usecase.CreateAgent, l *usecase.GetAgents, u *usecase.RenameAgent, e *usecase.AgentEvent, d *usecase.DeleteAgent) *AgentController {
-	return &AgentController{create: c, list: l, update: u, event: e, delete: d}
+func NewAgentController(c *usecase.CreateAgent, l *usecase.GetAgents, u *usecase.RenameAgent, n *usecase.SetAgentDiscordNotification, e *usecase.AgentEvent, d *usecase.DeleteAgent) *AgentController {
+	return &AgentController{create: c, list: l, update: u, setDiscordNotification: n, event: e, delete: d}
 }
 
 func NewResourceController(acquirePort *usecase.AcquirePort, ensureOpenCodeServer *usecase.EnsureOpenCodeServer) *ResourceController {
@@ -339,6 +340,32 @@ func (ac *AgentController) Update(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, agentViewToDTO(view))
 }
 
+func (ac *AgentController) SetDiscordNotification(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "id must be an integer")
+		return
+	}
+	var req setAgentDiscordNotificationRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if req.Enabled == nil {
+		writeError(w, http.StatusBadRequest, "enabled is required")
+		return
+	}
+	view, err := ac.setDiscordNotification.Execute(r.Context(), usecase.SetAgentDiscordNotificationInput{
+		AgentID: id,
+		Enabled: *req.Enabled,
+	})
+	if err != nil {
+		writeUsecaseError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, agentViewToDTO(view))
+}
+
 func (ac *AgentController) Event(w http.ResponseWriter, r *http.Request) {
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
@@ -457,31 +484,33 @@ func sessionTypeString(kind domain.SessionType) string {
 
 func agentToDTO(a *domain.Agent) agentResponse {
 	return agentResponse{
-		ID:                  a.ID(),
-		ProjectID:           a.ProjectID(),
-		SessionID:           a.SessionID(),
-		Kind:                a.Kind(),
-		DisplayName:         a.DisplayName(),
-		TmuxPaneID:          a.TmuxPaneID(),
-		PaneOwned:           a.PaneOwned(),
-		Status:              string(a.Status()),
-		StatusChangedAt:     a.StatusChangedAt(),
-		ChildProcessGroupID: a.ChildProcessGroupID(),
+		ID:                       a.ID(),
+		ProjectID:                a.ProjectID(),
+		SessionID:                a.SessionID(),
+		Kind:                     a.Kind(),
+		DisplayName:              a.DisplayName(),
+		TmuxPaneID:               a.TmuxPaneID(),
+		PaneOwned:                a.PaneOwned(),
+		Status:                   string(a.Status()),
+		StatusChangedAt:          a.StatusChangedAt(),
+		ChildProcessGroupID:      a.ChildProcessGroupID(),
+		DiscordNotificationArmed: a.DiscordNotificationArmed(),
 	}
 }
 
 func agentViewToDTO(v usecase.AgentView) agentResponse {
 	return agentResponse{
-		ID:                  v.Agent.ID(),
-		ProjectID:           v.Agent.ProjectID(),
-		SessionID:           v.Agent.SessionID(),
-		Kind:                v.Agent.Kind(),
-		DisplayName:         v.Agent.DisplayName(),
-		TmuxPaneID:          v.Agent.TmuxPaneID(),
-		PaneOwned:           v.Agent.PaneOwned(),
-		Status:              string(v.Agent.Status()),
-		StatusChangedAt:     v.Agent.StatusChangedAt(),
-		ChildProcessGroupID: v.Agent.ChildProcessGroupID(),
+		ID:                       v.Agent.ID(),
+		ProjectID:                v.Agent.ProjectID(),
+		SessionID:                v.Agent.SessionID(),
+		Kind:                     v.Agent.Kind(),
+		DisplayName:              v.Agent.DisplayName(),
+		TmuxPaneID:               v.Agent.TmuxPaneID(),
+		PaneOwned:                v.Agent.PaneOwned(),
+		Status:                   string(v.Agent.Status()),
+		StatusChangedAt:          v.Agent.StatusChangedAt(),
+		ChildProcessGroupID:      v.Agent.ChildProcessGroupID(),
+		DiscordNotificationArmed: v.Agent.DiscordNotificationArmed(),
 		Project: projectResponse{
 			ID:                  v.Project.ID(),
 			Title:               v.Project.Title(),

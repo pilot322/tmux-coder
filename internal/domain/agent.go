@@ -16,16 +16,17 @@ const (
 )
 
 type Agent struct {
-	id              int
-	projectID       int
-	sessionID       int
-	kind            string
-	displayName     string
-	tmuxPaneID      string
-	paneOwned       bool
-	status          AgentStatus
-	statusChangedAt time.Time
-	childPGID       int
+	id                       int
+	projectID                int
+	sessionID                int
+	kind                     string
+	displayName              string
+	tmuxPaneID               string
+	paneOwned                bool
+	status                   AgentStatus
+	statusChangedAt          time.Time
+	childPGID                int
+	discordNotificationArmed bool
 }
 
 func NewAgent(id, projectID, sessionID int, kind, displayName, tmuxPaneID string, paneOwned bool, status AgentStatus, statusChangedAt ...time.Time) *Agent {
@@ -46,16 +47,17 @@ func NewAgent(id, projectID, sessionID int, kind, displayName, tmuxPaneID string
 	}
 }
 
-func (a *Agent) ID() int                    { return a.id }
-func (a *Agent) ProjectID() int             { return a.projectID }
-func (a *Agent) SessionID() int             { return a.sessionID }
-func (a *Agent) Kind() string               { return a.kind }
-func (a *Agent) DisplayName() string        { return a.displayName }
-func (a *Agent) TmuxPaneID() string         { return a.tmuxPaneID }
-func (a *Agent) PaneOwned() bool            { return a.paneOwned }
-func (a *Agent) Status() AgentStatus        { return a.status }
-func (a *Agent) StatusChangedAt() time.Time { return a.statusChangedAt }
-func (a *Agent) ChildProcessGroupID() int   { return a.childPGID }
+func (a *Agent) ID() int                        { return a.id }
+func (a *Agent) ProjectID() int                 { return a.projectID }
+func (a *Agent) SessionID() int                 { return a.sessionID }
+func (a *Agent) Kind() string                   { return a.kind }
+func (a *Agent) DisplayName() string            { return a.displayName }
+func (a *Agent) TmuxPaneID() string             { return a.tmuxPaneID }
+func (a *Agent) PaneOwned() bool                { return a.paneOwned }
+func (a *Agent) Status() AgentStatus            { return a.status }
+func (a *Agent) StatusChangedAt() time.Time     { return a.statusChangedAt }
+func (a *Agent) ChildProcessGroupID() int       { return a.childPGID }
+func (a *Agent) DiscordNotificationArmed() bool { return a.discordNotificationArmed }
 
 func (a *Agent) WithStatus(status AgentStatus, statusChangedAt ...time.Time) *Agent {
 	changedAt := a.statusChangedAt
@@ -66,61 +68,81 @@ func (a *Agent) WithStatus(status AgentStatus, statusChangedAt ...time.Time) *Ag
 		}
 	}
 	return &Agent{
-		id:              a.id,
-		projectID:       a.projectID,
-		sessionID:       a.sessionID,
-		kind:            a.kind,
-		displayName:     a.displayName,
-		tmuxPaneID:      a.tmuxPaneID,
-		paneOwned:       a.paneOwned,
-		status:          status,
-		statusChangedAt: changedAt,
-		childPGID:       a.childPGID,
+		id:                       a.id,
+		projectID:                a.projectID,
+		sessionID:                a.sessionID,
+		kind:                     a.kind,
+		displayName:              a.displayName,
+		tmuxPaneID:               a.tmuxPaneID,
+		paneOwned:                a.paneOwned,
+		status:                   status,
+		statusChangedAt:          changedAt,
+		childPGID:                a.childPGID,
+		discordNotificationArmed: a.discordNotificationArmed,
 	}
 }
 
 func (a *Agent) WithTmuxPaneID(paneID string) *Agent {
 	return &Agent{
-		id:              a.id,
-		projectID:       a.projectID,
-		sessionID:       a.sessionID,
-		kind:            a.kind,
-		displayName:     a.displayName,
-		tmuxPaneID:      paneID,
-		paneOwned:       a.paneOwned,
-		status:          a.status,
-		statusChangedAt: a.statusChangedAt,
-		childPGID:       a.childPGID,
+		id:                       a.id,
+		projectID:                a.projectID,
+		sessionID:                a.sessionID,
+		kind:                     a.kind,
+		displayName:              a.displayName,
+		tmuxPaneID:               paneID,
+		paneOwned:                a.paneOwned,
+		status:                   a.status,
+		statusChangedAt:          a.statusChangedAt,
+		childPGID:                a.childPGID,
+		discordNotificationArmed: a.discordNotificationArmed,
 	}
 }
 
 func (a *Agent) WithDisplayName(name string) *Agent {
 	return &Agent{
-		id:              a.id,
-		projectID:       a.projectID,
-		sessionID:       a.sessionID,
-		kind:            a.kind,
-		displayName:     name,
-		tmuxPaneID:      a.tmuxPaneID,
-		paneOwned:       a.paneOwned,
-		status:          a.status,
-		statusChangedAt: a.statusChangedAt,
-		childPGID:       a.childPGID,
+		id:                       a.id,
+		projectID:                a.projectID,
+		sessionID:                a.sessionID,
+		kind:                     a.kind,
+		displayName:              name,
+		tmuxPaneID:               a.tmuxPaneID,
+		paneOwned:                a.paneOwned,
+		status:                   a.status,
+		statusChangedAt:          a.statusChangedAt,
+		childPGID:                a.childPGID,
+		discordNotificationArmed: a.discordNotificationArmed,
 	}
 }
 
 func (a *Agent) WithChildProcessGroupID(pgid int) *Agent {
 	return &Agent{
-		id:              a.id,
-		projectID:       a.projectID,
-		sessionID:       a.sessionID,
-		kind:            a.kind,
-		displayName:     a.displayName,
-		tmuxPaneID:      a.tmuxPaneID,
-		paneOwned:       a.paneOwned,
-		status:          a.status,
-		statusChangedAt: a.statusChangedAt,
-		childPGID:       pgid,
+		id:                       a.id,
+		projectID:                a.projectID,
+		sessionID:                a.sessionID,
+		kind:                     a.kind,
+		displayName:              a.displayName,
+		tmuxPaneID:               a.tmuxPaneID,
+		paneOwned:                a.paneOwned,
+		status:                   a.status,
+		statusChangedAt:          a.statusChangedAt,
+		childPGID:                pgid,
+		discordNotificationArmed: a.discordNotificationArmed,
+	}
+}
+
+func (a *Agent) WithDiscordNotificationArmed(armed bool) *Agent {
+	return &Agent{
+		id:                       a.id,
+		projectID:                a.projectID,
+		sessionID:                a.sessionID,
+		kind:                     a.kind,
+		displayName:              a.displayName,
+		tmuxPaneID:               a.tmuxPaneID,
+		paneOwned:                a.paneOwned,
+		status:                   a.status,
+		statusChangedAt:          a.statusChangedAt,
+		childPGID:                a.childPGID,
+		discordNotificationArmed: armed,
 	}
 }
 

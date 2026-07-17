@@ -21,12 +21,16 @@ type DaemonState struct {
 }
 
 func NewDaemonState() *DaemonState {
+	return NewDaemonStateWithConfig(domain.DefaultDaemonConfig())
+}
+
+func NewDaemonStateWithConfig(config domain.DaemonConfig) *DaemonState {
 	return &DaemonState{
 		projects: NewMemoryProjectRepository(),
 		sessions: NewMemorySessionRepository(),
 		agents:   NewMemoryAgentRepository(),
 		leases:   NewMemoryResourceLeaseRepository(),
-		config:   domain.DefaultDaemonConfig(),
+		config:   config,
 	}
 }
 

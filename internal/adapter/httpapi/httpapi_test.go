@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pilot322/tmux-coder/internal/adapter/httpapi"
+	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/infra/desktopnotify"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
 	"github.com/pilot322/tmux-coder/internal/obs"
@@ -154,7 +155,15 @@ func newServer() *http.ServeMux {
 }
 
 func newServerWithGit(git *stubGit) *http.ServeMux {
-	state := memory.NewDaemonState()
+	return newServerWithGitAndConfig(git, domain.DefaultDaemonConfig())
+}
+
+func newServerWithConfig(config domain.DaemonConfig) *http.ServeMux {
+	return newServerWithGitAndConfig(&stubGit{paths: make(map[string]bool)}, config)
+}
+
+func newServerWithGitAndConfig(git *stubGit, config domain.DaemonConfig) *http.ServeMux {
+	state := memory.NewDaemonStateWithConfig(config)
 	gw := &stubGateway{exists: make(map[string]bool)}
 	agentGw := &stubAgentGateway{panes: make(map[string]bool)}
 	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gw, git, state, state.Config(), obs.Nop())
@@ -166,13 +175,14 @@ func newServerWithGit(git *stubGit) *http.ServeMux {
 	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
 	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
 	renameAgent := usecase.NewRenameAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
+	setAgentDiscordNotification := usecase.NewSetAgentDiscordNotification(state.Agents(), state.Projects(), state.Sessions(), state.Config(), state)
 	agentEvent := usecase.NewAgentEvent(state.Agents(), state.Projects(), state.Sessions(), desktopnotify.NoopNotifier{}, state, obs.Nop())
 	deleteAgent := usecase.NewDeleteAgent(state.Agents(), agentGw, nil, state, obs.Nop())
 
 	return httpapi.NewRouter(
 		httpapi.NewProjectController(create, list, del),
 		httpapi.NewSessionController(createSession, listSessions, deleteSession),
-		httpapi.NewAgentController(createAgent, listAgents, renameAgent, agentEvent, deleteAgent),
+		httpapi.NewAgentController(createAgent, listAgents, renameAgent, setAgentDiscordNotification, agentEvent, deleteAgent),
 	)
 }
 
@@ -190,6 +200,7 @@ func newResourceServer(ports *stubPortAvailability) (*http.ServeMux, *memory.Mem
 	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
 	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
 	renameAgent := usecase.NewRenameAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
+	setAgentDiscordNotification := usecase.NewSetAgentDiscordNotification(state.Agents(), state.Projects(), state.Sessions(), state.Config(), state)
 	agentEvent := usecase.NewAgentEvent(state.Agents(), state.Projects(), state.Sessions(), desktopnotify.NoopNotifier{}, state, obs.Nop())
 	deleteAgent := usecase.NewDeleteAgent(state.Agents(), agentGw, nil, state, obs.Nop())
 	acquirePort := usecase.NewAcquirePort(state.Sessions(), state.Leases(), ports, state, obs.Nop())
@@ -198,7 +209,7 @@ func newResourceServer(ports *stubPortAvailability) (*http.ServeMux, *memory.Mem
 	return httpapi.NewRouter(
 		httpapi.NewProjectController(create, list, del),
 		httpapi.NewSessionController(createSession, listSessions, deleteSession),
-		httpapi.NewAgentController(createAgent, listAgents, renameAgent, agentEvent, deleteAgent),
+		httpapi.NewAgentController(createAgent, listAgents, renameAgent, setAgentDiscordNotification, agentEvent, deleteAgent),
 		httpapi.NewResourceController(acquirePort, ensureOpenCodeServer),
 	), state.Leases()
 }
@@ -814,6 +825,65 @@ func TestPatchAgent_RejectsEmptyName(t *testing.T) {
 	rec := do(t, mux, "PATCH", "/agents/"+strconv.Itoa(agentID), `{"displayName":"  "}`)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("PATCH empty displayName status = %d, want 400", rec.Code)
+	}
+}
+
+func TestPutAgentDiscordNotificationSetsExplicitState(t *testing.T) {
+	config := domain.DefaultDaemonConfig()
+	config.DiscordWebhookNotify = "https://discord.com/api/webhooks/1/token"
+	mux := newServerWithConfig(config)
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	agentID := createAgent(t, mux, projectID, sessionID)
+
+	for _, enabled := range []bool{true, false} {
+		rec := do(t, mux, http.MethodPut, "/agents/"+strconv.Itoa(agentID)+"/discord-notification", fmt.Sprintf(`{"enabled":%t}`, enabled))
+		if rec.Code != http.StatusOK {
+			t.Fatalf("PUT enabled=%v status=%d body=%s", enabled, rec.Code, rec.Body)
+		}
+		var agent struct {
+			ID                       int  `json:"id"`
+			DiscordNotificationArmed bool `json:"discordNotificationArmed"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &agent); err != nil {
+			t.Fatal(err)
+		}
+		if agent.ID != agentID || agent.DiscordNotificationArmed != enabled {
+			t.Fatalf("agent = %+v, enabled=%v", agent, enabled)
+		}
+	}
+}
+
+func TestPutAgentDiscordNotificationRequiresConfiguration(t *testing.T) {
+	mux := newServer()
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	agentID := createAgent(t, mux, projectID, sessionID)
+	rec := do(t, mux, http.MethodPut, "/agents/"+strconv.Itoa(agentID)+"/discord-notification", `{"enabled":true}`)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "~/.tmux-coder/config.yaml") || !strings.Contains(rec.Body.String(), "discord_webhook_notify") {
+		t.Fatalf("response status=%d body=%s", rec.Code, rec.Body)
+	}
+
+	rec = do(t, mux, http.MethodGet, "/agents", "")
+	var listed struct {
+		Agents []struct {
+			DiscordNotificationArmed bool `json:"discordNotificationArmed"`
+		} `json:"agents"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &listed)
+	if len(listed.Agents) != 1 || listed.Agents[0].DiscordNotificationArmed {
+		t.Fatalf("unconfigured request armed agent: %+v", listed.Agents)
+	}
+}
+
+func TestPutAgentDiscordNotificationValidationAndNotFound(t *testing.T) {
+	mux := newServer()
+	if rec := do(t, mux, http.MethodPut, "/agents/1/discord-notification", `{}`); rec.Code != http.StatusBadRequest {
+		t.Fatalf("missing enabled status=%d", rec.Code)
+	}
+	config := domain.DefaultDaemonConfig()
+	config.DiscordWebhookNotify = "https://discord.com/api/webhooks/1/token"
+	mux = newServerWithConfig(config)
+	if rec := do(t, mux, http.MethodPut, "/agents/999/discord-notification", `{"enabled":true}`); rec.Code != http.StatusNotFound {
+		t.Fatalf("missing agent status=%d body=%s", rec.Code, rec.Body)
 	}
 }
 

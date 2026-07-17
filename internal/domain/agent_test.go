@@ -84,6 +84,30 @@ func TestWithDisplayName_ReturnsNewAgent(t *testing.T) {
 	}
 }
 
+func TestDiscordNotificationArmedIsImmutableAndPreserved(t *testing.T) {
+	createdAt := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
+	original := domain.NewAgent(1, 10, 20, "opencode", "test", "%5", true, domain.AgentStarting, createdAt)
+	armed := original.WithDiscordNotificationArmed(true)
+	if original.DiscordNotificationArmed() || !armed.DiscordNotificationArmed() {
+		t.Fatalf("arming mutated original or did not arm copy")
+	}
+	if !armed.StatusChangedAt().Equal(createdAt) {
+		t.Fatalf("arming moved StatusChangedAt to %v", armed.StatusChangedAt())
+	}
+
+	copies := []*domain.Agent{
+		armed.WithStatus(domain.AgentRunning),
+		armed.WithTmuxPaneID("%6"),
+		armed.WithDisplayName("renamed"),
+		armed.WithChildProcessGroupID(123),
+	}
+	for i, copy := range copies {
+		if !copy.DiscordNotificationArmed() {
+			t.Errorf("copy %d lost armed state", i)
+		}
+	}
+}
+
 func TestDefaultAgentDisplayName(t *testing.T) {
 	name := domain.DefaultAgentDisplayName(7, "opencode")
 	if name != "agent-7-opencode" {

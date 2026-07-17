@@ -15,6 +15,7 @@ func NewRouter(pc *ProjectController, sc *SessionController, ac *AgentController
 	mux.HandleFunc("GET /agents", ac.List)
 	mux.HandleFunc("POST /agents", ac.Create)
 	mux.HandleFunc("PATCH /agents/{id}", ac.Update)
+	mux.HandleFunc("PUT /agents/{id}/discord-notification", ac.SetDiscordNotification)
 	mux.HandleFunc("POST /agents/{id}/event", ac.Event)
 	mux.HandleFunc("DELETE /agents/{id}", ac.Delete)
 	if len(resources) > 0 && resources[0] != nil {
