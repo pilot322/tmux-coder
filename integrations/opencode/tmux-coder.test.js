@@ -1,49 +1,81 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-test("a finished subagent does not mark the TC agent idle", async () => {
+async function fixture(name) {
   const originalAgentID = process.env.TMUX_CODER_AGENT_ID;
   const originalFetch = globalThis.fetch;
   const reported = [];
+  const handlers = new Map();
+  const route = { name: "session", params: { sessionID: "primary" } };
 
   process.env.TMUX_CODER_AGENT_ID = "42";
   globalThis.fetch = async (_url, options) => {
     reported.push(JSON.parse(options.body).event);
   };
 
+  const module = await import(`./tui.js?${name}`);
+  const api = {
+    route: { get current() { return route; } },
+    event: {
+      on(type, handler) {
+        handlers.set(type, handler);
+        return () => {};
+      },
+    },
+  };
+  await module.TmuxCoderStatus(api);
+
+  return {
+    module,
+    reported,
+    route,
+    emit(type, properties) {
+      handlers.get(type)?.({ type, properties });
+    },
+    restore() {
+      if (originalAgentID === undefined) delete process.env.TMUX_CODER_AGENT_ID;
+      else process.env.TMUX_CODER_AGENT_ID = originalAgentID;
+      globalThis.fetch = originalFetch;
+    },
+  };
+}
+
+test("reports only the session displayed by this attached TUI", async () => {
+  const app = await fixture("session-filter");
   try {
-    const { TmuxCoderStatus } = await import("./tmux-coder.js?subagent-test");
-    const hooks = await TmuxCoderStatus();
+    assert.equal(app.module.default.id, "tmux-coder-status");
+    assert.deepEqual(app.reported, ["idle"]);
 
-    await hooks["chat.message"]();
-    await hooks.event({
-      event: {
-        type: "session.created",
-        properties: {
-          info: { id: "child", parentID: "primary" },
-        },
-      },
+    app.emit("session.status", {
+      sessionID: "other-agent-session",
+      status: { type: "busy" },
     });
-    await hooks.event({
-      event: {
-        type: "session.idle",
-        properties: { sessionID: "child" },
-      },
+    app.emit("session.status", {
+      sessionID: "primary",
+      status: { type: "busy" },
     });
+    app.emit("session.idle", { sessionID: "child" });
+    app.emit("session.idle", { sessionID: "primary" });
 
-    assert.deepEqual(reported, ["idle", "busy"]);
-
-    await hooks.event({
-      event: {
-        type: "session.idle",
-        properties: { sessionID: "primary" },
-      },
-    });
-
-    assert.deepEqual(reported, ["idle", "busy", "idle"]);
+    assert.deepEqual(app.reported, ["idle", "busy", "idle"]);
   } finally {
-    if (originalAgentID === undefined) delete process.env.TMUX_CODER_AGENT_ID;
-    else process.env.TMUX_CODER_AGENT_ID = originalAgentID;
-    globalThis.fetch = originalFetch;
+    app.restore();
+  }
+});
+
+test("waiting is not clobbered by a busy event before the reply", async () => {
+  const app = await fixture("waiting");
+  try {
+    app.emit("permission.asked", { sessionID: "primary" });
+    app.emit("session.status", {
+      sessionID: "primary",
+      status: { type: "busy" },
+    });
+    assert.deepEqual(app.reported, ["idle", "waiting"]);
+
+    app.emit("permission.replied", { sessionID: "primary" });
+    assert.deepEqual(app.reported, ["idle", "waiting", "busy"]);
+  } finally {
+    app.restore();
   }
 });
