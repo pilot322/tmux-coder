@@ -37,8 +37,16 @@ type WorktreeHookResult struct {
 	LogPath string
 }
 
+// WorktreeHookExecution is a hook already running in its Worktree Session.
+// Wait returns when the script exits. A failed execution remains visible until
+// WaitForAcknowledgement observes the user pressing Enter in its tmux window.
+type WorktreeHookExecution interface {
+	Wait(ctx context.Context) (WorktreeHookResult, error)
+	WaitForAcknowledgement(ctx context.Context) error
+}
+
 type WorktreeHookRunner interface {
-	Run(ctx context.Context, req WorktreeHookRequest) (WorktreeHookResult, error)
+	Start(ctx context.Context, req WorktreeHookRequest) (WorktreeHookExecution, error)
 }
 
 type HookLeaseOwner struct {
@@ -141,8 +149,8 @@ func worktreeHookEnv(projectRoot, worktreeRoot string, projectID int, sessionNam
 
 type missingWorktreeHookRunner struct{}
 
-func (missingWorktreeHookRunner) Run(ctx context.Context, req WorktreeHookRequest) (WorktreeHookResult, error) {
-	return WorktreeHookResult{}, fmt.Errorf("hook runner is not configured")
+func (missingWorktreeHookRunner) Start(ctx context.Context, req WorktreeHookRequest) (WorktreeHookExecution, error) {
+	return nil, fmt.Errorf("hook runner is not configured")
 }
 
 type noopResourceLeaseRepository struct{}

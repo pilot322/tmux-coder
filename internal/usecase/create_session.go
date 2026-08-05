@@ -41,24 +41,45 @@ type CreateSession struct {
 	lock     StateLock
 	hooks    WorktreeHookRunner
 	leases   ResourceLeaseRepository
+	cleaner  SessionDeleter
+	notifier Notifier
 	log      obs.Logger
 
 	creatingMu sync.Mutex
 	creating   map[string]struct{}
 }
 
+type SessionDeleter interface {
+	Execute(ctx context.Context, in DeleteSessionInput) error
+}
+
+type sessionLifecycleCoordinator interface {
+	WithSessionLifecycle(sessionID int, fn func() error) error
+}
+
+type noopNotifier struct{}
+
+func (noopNotifier) Notify(context.Context, Notification) error { return nil }
+
 func NewCreateSession(p IProjectRepository, s ISessionRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock, log obs.Logger) *CreateSession {
 	return NewCreateSessionWithHooks(p, s, tmux, git, l, nil, nil, log)
 }
 
 func NewCreateSessionWithHooks(p IProjectRepository, s ISessionRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock, hooks WorktreeHookRunner, leases ResourceLeaseRepository, log obs.Logger) *CreateSession {
+	return NewCreateSessionWithSetupLifecycle(p, s, tmux, git, l, hooks, leases, nil, noopNotifier{}, log)
+}
+
+func NewCreateSessionWithSetupLifecycle(p IProjectRepository, s ISessionRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock, hooks WorktreeHookRunner, leases ResourceLeaseRepository, cleaner SessionDeleter, notifier Notifier, log obs.Logger) *CreateSession {
 	if hooks == nil {
 		hooks = missingWorktreeHookRunner{}
 	}
 	if leases == nil {
 		leases = noopResourceLeaseRepository{}
 	}
-	return &CreateSession{projects: p, sessions: s, tmux: tmux, git: git, lock: l, hooks: hooks, leases: leases, log: log.With("component", "create-session"), creating: make(map[string]struct{})}
+	if notifier == nil {
+		notifier = noopNotifier{}
+	}
+	return &CreateSession{projects: p, sessions: s, tmux: tmux, git: git, lock: l, hooks: hooks, leases: leases, cleaner: cleaner, notifier: notifier, log: log.With("component", "create-session"), creating: make(map[string]struct{})}
 }
 
 func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*domain.Session, error) {
@@ -245,24 +266,6 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 	}
 
 	tmuxName := domain.DeriveTmuxSessionName(name)
-	var hookToken string
-	if in.CreateWorktree {
-		hookToken, err = uc.runConfiguredWorktreeHook(ctx, project, worktreePath, name, tmuxName, in.Branch)
-		if err != nil {
-			uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
-			return nil, err
-		}
-	}
-	hookPromoted := false
-	if hookToken != "" {
-		defer func() {
-			if !hookPromoted {
-				_ = uc.leases.ReleaseHookLeases(ctx, hookToken)
-				_ = uc.leases.EndHook(ctx, hookToken)
-			}
-		}()
-	}
-
 	if err := uc.tmux.Create(ctx, tmuxName, worktreePath); err != nil {
 		uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
 		return nil, fmt.Errorf("%w: %v", ErrGateway, err)
@@ -278,20 +281,17 @@ func (uc *CreateSession) Execute(ctx context.Context, in CreateSessionInput) (*d
 		uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
 		return nil, err
 	}
-	if hookToken != "" {
-		if err := uc.leases.PromoteHookLeases(ctx, hookToken, session.ID()); err != nil {
-			uc.killTmuxBestEffort(ctx, tmuxName)
-			uc.rollbackCreatedSessionRecord(ctx, session.ID())
-			uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
+	if in.CreateWorktree {
+		execution, hookToken, err := uc.startConfiguredWorktreeHook(ctx, project, worktreePath, name, tmuxName, in.Branch)
+		if err != nil {
+			uc.cleanupFailedWorktreeSetup(ctx, project, session, "", branchCreated)
 			return nil, err
 		}
-		if err := uc.leases.EndHook(ctx, hookToken); err != nil {
-			uc.killTmuxBestEffort(ctx, tmuxName)
-			uc.rollbackCreatedSessionRecord(ctx, session.ID())
-			uc.rollbackCreatedWorktree(ctx, project.FullPath(), worktreePath, in.Branch, worktreeCreated, branchCreated)
-			return nil, err
+		if execution != nil {
+			go uc.finishWorktreeSetup(context.WithoutCancel(ctx), execution, hookToken, project, session, branchCreated)
+			uc.log.Info(ctx, "worktree session available while setup runs", "session_id", session.ID(), "name", name, "branch", in.Branch, "worktree_path", worktreePath)
+			return session, nil
 		}
-		hookPromoted = true
 	}
 
 	// Apply the Config File's declared Secondary Sessions under this Worktree
@@ -498,21 +498,21 @@ func (uc *CreateSession) reserveCreate(projectID int, sessionName string) (func(
 	}, nil
 }
 
-func (uc *CreateSession) runConfiguredWorktreeHook(ctx context.Context, project *domain.Project, worktreePath, sessionName, tmuxName, branch string) (string, error) {
+func (uc *CreateSession) startConfiguredWorktreeHook(ctx context.Context, project *domain.Project, worktreePath, sessionName, tmuxName, branch string) (WorktreeHookExecution, string, error) {
 	cfg, err := config.Load(project.FullPath())
 	if err != nil {
-		return "", translateConfigErr(err)
+		return nil, "", translateConfigErr(err)
 	}
 	scriptPath, err := resolveWorktreeHookScript(project.FullPath(), cfg.Worktree.OnCreateScript)
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	if scriptPath == "" {
-		return "", nil
+		return nil, "", nil
 	}
 	token, err := newWorktreeHookToken()
 	if err != nil {
-		return "", err
+		return nil, "", err
 	}
 	if err := uc.leases.BeginHook(ctx, token, HookLeaseOwner{
 		ProjectID:       project.ID(),
@@ -521,9 +521,9 @@ func (uc *CreateSession) runConfiguredWorktreeHook(ctx context.Context, project 
 		Branch:          branch,
 		WorktreePath:    worktreePath,
 	}); err != nil {
-		return "", err
+		return nil, "", err
 	}
-	result, err := uc.hooks.Run(ctx, WorktreeHookRequest{
+	execution, err := uc.hooks.Start(ctx, WorktreeHookRequest{
 		ScriptPath: scriptPath,
 		WorkingDir: worktreePath,
 		Timeout:    cfg.Worktree.OnCreateTimeout,
@@ -532,16 +532,85 @@ func (uc *CreateSession) runConfiguredWorktreeHook(ctx context.Context, project 
 	if err != nil {
 		_ = uc.leases.ReleaseHookLeases(ctx, token)
 		_ = uc.leases.EndHook(ctx, token)
+		return nil, "", fmt.Errorf("%w: start worktree hook: %v", ErrGateway, err)
+	}
+	return execution, token, nil
+}
+
+func (uc *CreateSession) finishWorktreeSetup(ctx context.Context, execution WorktreeHookExecution, hookToken string, project *domain.Project, session *domain.Session, branchCreated bool) {
+	result, err := execution.Wait(ctx)
+	if err != nil {
 		logSuffix := ""
 		if result.LogPath != "" {
-			logSuffix = fmt.Sprintf(" (log: %s)", result.LogPath)
+			logSuffix = " (log: " + result.LogPath + ")"
 		}
-		if result.Output != "" {
-			return "", fmt.Errorf("%w: worktree hook failed: %v%s: %s", ErrGateway, err, logSuffix, result.Output)
+		uc.log.Error(ctx, "worktree setup failed", "session_id", session.ID(), "name", session.Name(), "err", err.Error(), "hook_log", result.LogPath)
+		_ = uc.notifier.Notify(ctx, Notification{
+			Title:     session.Name() + " setup needs input",
+			Body:      project.Title() + " · " + session.Name() + logSuffix,
+			Urgency:   UrgencyCritical,
+			Sound:     true,
+			SoundName: "agent-waiting",
+		})
+		if ackErr := execution.WaitForAcknowledgement(ctx); ackErr != nil {
+			uc.log.Error(ctx, "wait for worktree setup acknowledgement failed", "session_id", session.ID(), "err", ackErr.Error())
+			return
 		}
-		return "", fmt.Errorf("%w: worktree hook failed: %v%s", ErrGateway, err, logSuffix)
+		uc.cleanupFailedWorktreeSetup(ctx, project, session, hookToken, branchCreated)
+		return
 	}
-	return token, nil
+
+	finalize := func() error {
+		if err := uc.lock.WithRead(func() error {
+			_, err := uc.sessions.GetByID(ctx, session.ID())
+			return err
+		}); err != nil {
+			return err
+		}
+		if err := uc.leases.PromoteHookLeases(ctx, hookToken, session.ID()); err != nil {
+			return err
+		}
+		if err := uc.leases.EndHook(ctx, hookToken); err != nil {
+			return err
+		}
+		return materializeSecondarySessions(ctx, uc.sessions, uc.tmux, uc.lock, project.FullPath(), session, session.WorktreePath())
+	}
+	if coordinator, ok := uc.cleaner.(sessionLifecycleCoordinator); ok {
+		err = coordinator.WithSessionLifecycle(session.ID(), finalize)
+	} else {
+		err = finalize()
+	}
+	if errors.Is(err, ErrSessionNotFound) {
+		_ = uc.leases.ReleaseHookLeases(ctx, hookToken)
+		_ = uc.leases.EndHook(ctx, hookToken)
+		return
+	}
+	if err != nil {
+		uc.log.Error(ctx, "finalize worktree setup failed", "session_id", session.ID(), "name", session.Name(), "err", err.Error())
+		_ = uc.notifier.Notify(ctx, Notification{Title: session.Name() + " setup failed", Body: project.Title() + " · " + session.Name(), Urgency: UrgencyCritical, Sound: true, SoundName: "agent-waiting"})
+		uc.cleanupFailedWorktreeSetup(ctx, project, session, hookToken, branchCreated)
+		return
+	}
+	uc.log.Info(ctx, "worktree setup completed", "session_id", session.ID(), "name", session.Name(), "branch", session.Branch())
+}
+
+func (uc *CreateSession) cleanupFailedWorktreeSetup(ctx context.Context, project *domain.Project, session *domain.Session, hookToken string, branchCreated bool) {
+	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	_ = uc.leases.ReleaseHookLeases(cleanupCtx, hookToken)
+	_ = uc.leases.EndHook(cleanupCtx, hookToken)
+	if uc.cleaner != nil {
+		if err := uc.cleaner.Execute(cleanupCtx, DeleteSessionInput{ID: session.ID(), Force: true}); err != nil && !errors.Is(err, ErrSessionNotFound) {
+			uc.log.Error(cleanupCtx, "failed worktree setup cleanup failed", "session_id", session.ID(), "err", err.Error())
+		}
+	} else {
+		uc.killTmuxBestEffort(cleanupCtx, session.TmuxName())
+		uc.rollbackCreatedSessionRecord(cleanupCtx, session.ID())
+		uc.rollbackCreatedWorktree(cleanupCtx, project.FullPath(), session.WorktreePath(), session.Branch(), true, false)
+	}
+	if branchCreated {
+		_ = uc.git.DeleteBranch(cleanupCtx, project.FullPath(), session.Branch())
+	}
 }
 
 // worktreeAtPath reports whether target is one of repo's worktrees and, if so,

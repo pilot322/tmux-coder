@@ -25,13 +25,17 @@ Git's hook system — it has nothing to do with `.git/hooks`.
 When you create a worktree, tmux-coder:
 
 1. Creates the git worktree at a new path.
-2. **Runs your hook** in that new worktree's directory (this guide's subject).
-3. Records the Worktree Session and starts its tmux session.
+2. Records the Worktree Session and starts its tmux session.
+3. **Runs your hook** in a dedicated `worktree-setup` window in that Session
+   (this guide's subject).
 
-If the hook exits non-zero or times out, tmux-coder **rolls the whole creation
-back**: the worktree is removed, a newly created branch is deleted, and no session
-is recorded. So a failing hook fails safe — you never end up with a half-configured
-worktree.
+The Worktree Session is listed immediately, so you can attach to it or create a
+TC Agent while setup continues. A successful hook closes `worktree-setup`
+automatically. If the hook exits non-zero or times out, tmux-coder raises a
+critical Desktop Notification and leaves the window open with its output. Press
+Enter there after inspecting the failure; tmux-coder then removes the Session,
+its TC Agents, the worktree, and a branch created for it. A failing hook therefore
+remains inspectable without leaving a half-configured Session behind.
 
 ---
 
@@ -63,6 +67,10 @@ Rules enforced by tmux-coder (a violation fails worktree creation loudly):
 
 Unknown keys are a hard error, so a typo surfaces immediately rather than being
 silently ignored.
+
+The setup window supervisor requires `bash`, `timeout` (GNU coreutils), and
+`tee` on the host in addition to tmux. These commands enforce the configured
+timeout while preserving combined stdout/stderr in both the window and hook log.
 
 Check this file into version control — that's how every clone and every worktree
 inherits the same setup behavior.

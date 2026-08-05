@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sync"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/obs"
@@ -15,13 +16,14 @@ type DeleteSessionInput struct {
 }
 
 type DeleteSession struct {
-	sessions ISessionRepository
-	agents   IAgentRepository
-	tmux     SessionGateway
-	git      GitWorktreeGateway
-	lock     StateLock
-	leases   ResourceLeaseRepository
-	log      obs.Logger
+	sessions  ISessionRepository
+	agents    IAgentRepository
+	tmux      SessionGateway
+	git       GitWorktreeGateway
+	lock      StateLock
+	leases    ResourceLeaseRepository
+	log       obs.Logger
+	lifecycle [32]sync.Mutex
 }
 
 func NewDeleteSession(s ISessionRepository, a IAgentRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock, log obs.Logger) *DeleteSession {
@@ -36,6 +38,25 @@ func NewDeleteSessionWithLeases(s ISessionRepository, a IAgentRepository, tmux S
 }
 
 func (uc *DeleteSession) Execute(ctx context.Context, in DeleteSessionInput) error {
+	return uc.WithSessionLifecycle(in.ID, func() error {
+		return uc.execute(ctx, in)
+	})
+}
+
+// WithSessionLifecycle serializes deletion with post-hook finalization for one
+// Session. Striped mutexes avoid unbounded per-Session lock retention while
+// allowing unrelated Session lifecycles to proceed concurrently.
+func (uc *DeleteSession) WithSessionLifecycle(sessionID int, fn func() error) error {
+	index := sessionID % len(uc.lifecycle)
+	if index < 0 {
+		index = -index
+	}
+	uc.lifecycle[index].Lock()
+	defer uc.lifecycle[index].Unlock()
+	return fn()
+}
+
+func (uc *DeleteSession) execute(ctx context.Context, in DeleteSessionInput) error {
 	if err := reconcileWorktreeSessions(ctx, uc.sessions, uc.git, uc.tmux, uc.lock, uc.leases); err != nil {
 		return err
 	}

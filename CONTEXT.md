@@ -85,7 +85,7 @@ The process by which the **Daemon** heals drift between its in-memory record of 
 _Avoid_: Sync, refresh, resync
 
 **Worktree Hook**:
-A **Project**-declared lifecycle script that customizes setup around a **Worktree Session**. It belongs to tmux-coder's lifecycle, not Git's hook system.
+A **Project**-declared lifecycle script that customizes setup around a **Worktree Session**. It belongs to tmux-coder's lifecycle, not Git's hook system. On creation it runs asynchronously in that Session's `worktree-setup` tmux window; failure remains visible until acknowledged and then tears down the failed Session and worktree.
 _Avoid_: Git hook, shell command
 
 **Worktree Adoption**:

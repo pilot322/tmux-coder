@@ -7,10 +7,12 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/pilot322/tmux-coder/internal/obs"
+	"github.com/pilot322/tmux-coder/internal/tmuxserver"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -19,14 +21,25 @@ var _ usecase.WorktreeHookRunner = (*Runner)(nil)
 const hookLogRetentionAge = 14 * 24 * time.Hour
 
 type Runner struct {
-	log obs.Logger
+	binary      string
+	serverLabel string
+	log         obs.Logger
 }
 
 func NewRunner(log obs.Logger) *Runner {
-	return &Runner{log: log.With("component", "hookexec")}
+	return &Runner{binary: "tmux", serverLabel: tmuxserver.Label(os.Getenv), log: log.With("component", "hookexec")}
 }
 
-func (r *Runner) Run(ctx context.Context, req usecase.WorktreeHookRequest) (usecase.WorktreeHookResult, error) {
+type execution struct {
+	binary      string
+	serverLabel string
+	paneID      string
+	statusPath  string
+	ackPath     string
+	logPath     string
+}
+
+func (r *Runner) Start(ctx context.Context, req usecase.WorktreeHookRequest) (usecase.WorktreeHookExecution, error) {
 	timeout := req.Timeout
 	if timeout <= 0 {
 		timeout = 2 * time.Minute
@@ -35,30 +48,130 @@ func (r *Runner) Run(ctx context.Context, req usecase.WorktreeHookRequest) (usec
 	if logErr != nil {
 		r.log.Warn(ctx, "worktree hook log unavailable", "err", logErr.Error())
 	}
-	runCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-
-	r.log.Debug(ctx, "running worktree hook", "script", req.ScriptPath, "dir", req.WorkingDir, "timeout", timeout.String(), "hook_log", logPath)
-	cmd := exec.CommandContext(runCtx, req.ScriptPath)
-	cmd.Dir = req.WorkingDir
-	cmd.Env = append(os.Environ(), envMapToList(req.Env)...)
-	output, err := cmd.CombinedOutput()
-	result := usecase.WorktreeHookResult{Output: string(output), LogPath: logPath}
 	if logPath != "" {
 		requestID, _ := obs.RequestIDFrom(ctx)
-		if err := writeHookLog(logPath, req, timeout, requestID, output, time.Now()); err != nil {
+		if err := writeHookLogHeader(logPath, req, timeout, requestID, time.Now()); err != nil {
 			r.log.Warn(ctx, "write worktree hook log failed", "hook_log", logPath, "err", err.Error())
-			result.LogPath = ""
+			logPath = ""
 		}
 	}
-	if runCtx.Err() == context.DeadlineExceeded {
-		r.log.Error(ctx, "worktree hook timed out", "script", req.ScriptPath, "timeout", timeout.String(), "hook_log", result.LogPath)
-		return result, fmt.Errorf("hook timed out after %s", timeout)
+	stateBase := logPath
+	if stateBase == "" {
+		stateBase = filepath.Join(os.TempDir(), "tmux-coder-hook-"+obs.NewRequestID())
+	}
+	statusPath := stateBase + ".status"
+	ackPath := stateBase + ".ack"
+	command := hookCommand(req.ScriptPath, logPath, statusPath, ackPath, timeout)
+	args := []string{"-L", r.serverLabel, "new-window", "-d", "-t", req.Env["TMUX_CODER_TMUX_SESSION_NAME"], "-n", "worktree-setup", "-c", req.WorkingDir, "-P", "-F", "#{pane_id}"}
+	for _, value := range envMapToList(req.Env) {
+		args = append(args, "-e", value)
+	}
+	args = append(args, command)
+	r.log.Debug(ctx, "starting worktree hook window", "script", req.ScriptPath, "dir", req.WorkingDir, "timeout", timeout.String(), "hook_log", logPath)
+	output, err := exec.CommandContext(ctx, r.binary, args...).CombinedOutput()
+	if err != nil {
+		_ = os.Remove(statusPath)
+		_ = os.Remove(ackPath)
+		return nil, fmt.Errorf("start worktree setup window: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return &execution{binary: r.binary, serverLabel: r.serverLabel, paneID: strings.TrimSpace(string(output)), statusPath: statusPath, ackPath: ackPath, logPath: logPath}, nil
+}
+
+func (e *execution) Wait(ctx context.Context) (usecase.WorktreeHookResult, error) {
+	contents, err := e.waitForFile(ctx, e.statusPath, false)
+	result := usecase.WorktreeHookResult{LogPath: e.logPath}
+	if e.logPath != "" {
+		if output, readErr := os.ReadFile(e.logPath); readErr == nil {
+			result.Output = string(output)
+		}
 	}
 	if err != nil {
-		r.log.Error(ctx, "worktree hook failed", "script", req.ScriptPath, "err", err.Error(), "hook_log", result.LogPath)
+		return result, err
 	}
-	return result, err
+	status, err := strconv.Atoi(strings.TrimSpace(string(contents)))
+	if err != nil {
+		return result, fmt.Errorf("read hook status: %w", err)
+	}
+	if status == 0 {
+		e.closeWindow(ctx)
+		e.cleanup()
+		return result, nil
+	}
+	if status == 124 {
+		return result, fmt.Errorf("hook timed out")
+	}
+	return result, fmt.Errorf("hook exited with status %d", status)
+}
+
+func (e *execution) WaitForAcknowledgement(ctx context.Context) error {
+	_, err := e.waitForFile(ctx, e.ackPath, true)
+	e.cleanup()
+	return err
+}
+
+func (e *execution) cleanup() {
+	_ = os.Remove(e.statusPath)
+	_ = os.Remove(e.ackPath)
+}
+
+func (e *execution) waitForFile(ctx context.Context, path string, paneGoneIsAcknowledgement bool) ([]byte, error) {
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		contents, err := os.ReadFile(path)
+		if err == nil {
+			return contents, nil
+		}
+		if !os.IsNotExist(err) {
+			return nil, err
+		}
+		if e.paneID != "" && !e.paneExists(ctx) {
+			if paneGoneIsAcknowledgement {
+				return nil, nil
+			}
+			return nil, fmt.Errorf("worktree setup window closed before the hook completed")
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-ticker.C:
+		}
+	}
+}
+
+func (e *execution) paneExists(ctx context.Context) bool {
+	return exec.CommandContext(ctx, e.binary, "-L", e.serverLabel, "list-panes", "-t", e.paneID).Run() == nil
+}
+
+func (e *execution) closeWindow(ctx context.Context) {
+	if e.paneID != "" {
+		_ = exec.CommandContext(ctx, e.binary, "-L", e.serverLabel, "kill-window", "-t", e.paneID).Run()
+	}
+}
+
+func hookCommand(scriptPath, logPath, statusPath, ackPath string, timeout time.Duration) string {
+	logTarget := logPath
+	if logTarget == "" {
+		logTarget = "/dev/null"
+	}
+	body := `set -o pipefail
+timeout --signal=TERM --kill-after=5s "$1" "$2" 2>&1 | tee -a "$3"
+status=${PIPESTATUS[0]}
+tmp="$4.tmp.$$"
+printf '%s\n' "$status" > "$tmp"
+mv "$tmp" "$4"
+if [ "$status" -eq 0 ]; then
+  exit 0
+fi
+printf '\nWorktree setup failed. Press Enter to remove this Worktree Session.\n'
+IFS= read -r _
+: > "$5"`
+	seconds := strconv.FormatFloat(timeout.Seconds(), 'f', 3, 64) + "s"
+	return "bash -c " + shellQuote(body) + " worktree-setup " + shellQuote(seconds) + " " + shellQuote(scriptPath) + " " + shellQuote(logTarget) + " " + shellQuote(statusPath) + " " + shellQuote(ackPath)
+}
+
+func shellQuote(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
 func newHookLogPath() (string, error) {
@@ -95,7 +208,7 @@ func sweepHookLogs(dir string, maxAge time.Duration, now time.Time) error {
 	return nil
 }
 
-func writeHookLog(path string, req usecase.WorktreeHookRequest, timeout time.Duration, requestID string, output []byte, now time.Time) error {
+func writeHookLogHeader(path string, req usecase.WorktreeHookRequest, timeout time.Duration, requestID string, now time.Time) error {
 	var b strings.Builder
 	fprintf := func(format string, args ...any) { _, _ = fmt.Fprintf(&b, format, args...) }
 	fprintf("timestamp: %s\n", now.UTC().Format(time.RFC3339Nano))
@@ -108,10 +221,6 @@ func writeHookLog(path string, req usecase.WorktreeHookRequest, timeout time.Dur
 	fprintf("timeout: %s\n", timeout)
 	writeEnvSummary(&b, req.Env)
 	fprintf("--- output ---\n")
-	b.Write(output)
-	if len(output) == 0 || output[len(output)-1] != '\n' {
-		b.WriteByte('\n')
-	}
 	return os.WriteFile(path, []byte(b.String()), 0o600)
 }
 

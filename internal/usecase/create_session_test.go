@@ -7,7 +7,6 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,7 +17,7 @@ import (
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
-func TestCreateSessionRunsConfiguredHookBeforeTmuxCreate(t *testing.T) {
+func TestCreateSessionStartsConfiguredHookAfterMakingSessionAvailable(t *testing.T) {
 	ctx := context.Background()
 	parent := t.TempDir()
 	projectRoot := filepath.Join(parent, "api")
@@ -58,13 +57,14 @@ func TestCreateSessionRunsConfiguredHookBeforeTmuxCreate(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
+	hooks.wait(t)
 
 	worktreePath := filepath.Join(parent, "api.feature-login")
 	if session.Name() != "api.feature-login" || session.TmuxName() != "api_feature-login" || session.WorktreePath() != worktreePath {
 		t.Fatalf("unexpected session: name=%q tmux=%q worktree=%q", session.Name(), session.TmuxName(), session.WorktreePath())
 	}
-	if !reflect.DeepEqual(events, []string{"git:add", "hook:run", "tmux:create"}) {
-		t.Fatalf("events = %v, want git add, hook, tmux create", events)
+	if !reflect.DeepEqual(events, []string{"git:add", "tmux:create", "hook:start"}) {
+		t.Fatalf("events = %v, want git add, tmux create, hook start", events)
 	}
 	if len(hooks.calls) != 1 {
 		t.Fatalf("hook calls = %d, want 1", len(hooks.calls))
@@ -148,12 +148,19 @@ func TestCreateSessionMaterializesSecondariesUnderWorktreeAfterHook(t *testing.T
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
-	// The hook runs before the secondary's tmux is created.
-	if !reflect.DeepEqual(events, []string{"git:add", "hook:run", "tmux:create", "tmux:create"}) {
-		t.Fatalf("events = %v, want git add, hook, worktree tmux, secondary tmux", events)
+	hooks.wait(t)
+	var secs []*domain.Session
+	eventually(t, func() bool {
+		_ = lock.WithRead(func() error {
+			secs = secondariesOf(t, sessions)
+			return nil
+		})
+		return len(secs) == 1
+	})
+	if !reflect.DeepEqual(events, []string{"git:add", "tmux:create", "hook:start", "tmux:create"}) {
+		t.Fatalf("events = %v, want worktree tmux and setup window before secondary tmux", events)
 	}
 
-	secs := secondariesOf(t, sessions)
 	if len(secs) != 1 {
 		t.Fatalf("secondary sessions = %d, want 1", len(secs))
 	}
@@ -231,7 +238,7 @@ func TestCreateSessionSecondaryFailureRollsBackWorktreeBranchAndSession(t *testi
 	}
 }
 
-func TestCreateSessionHookFailureRollsBackWorktreeAndBranch(t *testing.T) {
+func TestCreateSessionHookFailureWaitsForAcknowledgementThenRollsBack(t *testing.T) {
 	ctx := context.Background()
 	parent := t.TempDir()
 	projectRoot := filepath.Join(parent, "api")
@@ -255,8 +262,17 @@ func TestCreateSessionHookFailureRollsBackWorktreeAndBranch(t *testing.T) {
 	var events []string
 	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
 	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
-	hooks := &fakeWorktreeHookRunner{events: &events, err: errors.New("exit status 1"), logPath: "/tmp/tmux-coder-hook.log"}
-	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository(), obs.Nop())
+	hooks := &fakeWorktreeHookRunner{events: &events, err: errors.New("exit status 1"), logPath: "/tmp/tmux-coder-hook.log", ack: make(chan struct{})}
+	agents := memory.NewMemoryAgentRepository()
+	leases := memory.NewMemoryResourceLeaseRepository()
+	cleaner := usecase.NewDeleteSessionWithLeases(sessions, agents, tmux, git, lock, leases, obs.Nop())
+	notified := make(chan struct{})
+	notifier := &fakeNotifier{onNotify: func() { close(notified) }}
+	removed := make(chan struct{})
+	branchDeleted := make(chan struct{})
+	git.removedDone = removed
+	git.deletedDone = branchDeleted
+	uc := usecase.NewCreateSessionWithSetupLifecycle(projects, sessions, tmux, git, lock, hooks, leases, cleaner, notifier, obs.Nop())
 	var project *domain.Project
 	if err := lock.WithWrite(func() error {
 		var err error
@@ -266,19 +282,36 @@ func TestCreateSessionHookFailureRollsBackWorktreeAndBranch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	_, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
-	if !errors.Is(err, usecase.ErrGateway) {
-		t.Fatalf("Execute error = %v, want ErrGateway", err)
+	session, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
 	}
-	if !strings.Contains(err.Error(), "log: /tmp/tmux-coder-hook.log") {
-		t.Fatalf("Execute error = %v, want hook log path", err)
-	}
+	hooks.wait(t)
 	worktreePath := filepath.Join(parent, "api.feature-login")
-	if !reflect.DeepEqual(events, []string{"git:add", "hook:run"}) {
-		t.Fatalf("events = %v, want git add then hook only", events)
+	if !git.paths[worktreePath] || !tmux.exists[session.TmuxName()] {
+		t.Fatal("failed setup was removed before acknowledgement")
+	}
+	select {
+	case <-notified:
+	case <-time.After(time.Second):
+		t.Fatal("setup failure did not notify")
+	}
+	if notifier.calls[0].Urgency != usecase.UrgencyCritical || !notifier.calls[0].Sound || notifier.calls[0].SoundName != "agent-waiting" {
+		t.Fatalf("notifications = %+v, want one critical blocker notification", notifier.calls)
+	}
+	close(hooks.ack)
+	select {
+	case <-removed:
+	case <-time.After(time.Second):
+		t.Fatal("worktree was not removed after acknowledgement")
+	}
+	select {
+	case <-branchDeleted:
+	case <-time.After(time.Second):
+		t.Fatal("branch was not deleted after acknowledgement")
 	}
 	if git.paths[worktreePath] {
-		t.Fatalf("worktree path still exists after rollback")
+		t.Fatal("worktree path still exists after rollback")
 	}
 	if !reflect.DeepEqual(git.removed, []string{worktreePath}) {
 		t.Fatalf("removed worktrees = %v, want %v", git.removed, []string{worktreePath})
@@ -286,13 +319,70 @@ func TestCreateSessionHookFailureRollsBackWorktreeAndBranch(t *testing.T) {
 	if !reflect.DeepEqual(git.deletedBranches, []string{"feature/login"}) {
 		t.Fatalf("deleted branches = %v, want feature/login", git.deletedBranches)
 	}
-	if all, _ := sessions.GetAll(ctx); len(all) != 0 {
+	var all []*domain.Session
+	_ = lock.WithRead(func() error {
+		all, _ = sessions.GetAll(ctx)
+		return nil
+	})
+	if len(all) != 0 {
 		t.Fatalf("sessions stored after failed hook = %d, want 0", len(all))
 	}
 }
 
-func TestCreateSessionRejectsDuplicateWhileCreateInProgress(t *testing.T) {
+func TestCreateSessionHookStartupFailureCascadesPublishedAgents(t *testing.T) {
 	ctx := context.Background()
+	parent := t.TempDir()
+	projectRoot := filepath.Join(parent, "api")
+	if err := os.MkdirAll(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, "hook.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non-create-script = \"hook.sh\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	projects := memory.NewMemoryProjectRepository()
+	sessions := memory.NewMemorySessionRepository()
+	agents := memory.NewMemoryAgentRepository()
+	lock := &spyLock{}
+	var events []string
+	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
+	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
+	leases := memory.NewMemoryResourceLeaseRepository()
+	cleaner := usecase.NewDeleteSessionWithLeases(sessions, agents, tmux, git, lock, leases, obs.Nop())
+	hooks := &fakeWorktreeHookRunner{events: &events, startErr: errors.New("tmux new-window failed")}
+	project, err := projects.Create(ctx, domain.NewProject(0, projectRoot, "api"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	hooks.onStart = func() {
+		_ = lock.WithWrite(func() error {
+			all, _ := sessions.GetAll(ctx)
+			_, err := agents.Create(ctx, domain.NewAgent(0, project.ID(), all[0].ID(), "opencode", "setup-agent", "%42", true, domain.AgentRunning))
+			return err
+		})
+	}
+	uc := usecase.NewCreateSessionWithSetupLifecycle(projects, sessions, tmux, git, lock, hooks, leases, cleaner, &fakeNotifier{}, obs.Nop())
+
+	_, err = uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
+	if !errors.Is(err, usecase.ErrGateway) {
+		t.Fatalf("Execute error = %v, want ErrGateway", err)
+	}
+	allAgents, _ := agents.GetAll(ctx)
+	if len(allAgents) != 0 {
+		t.Fatalf("agents after startup rollback = %d, want 0", len(allAgents))
+	}
+	allSessions, _ := sessions.GetAll(ctx)
+	if len(allSessions) != 0 {
+		t.Fatalf("sessions after startup rollback = %d, want 0", len(allSessions))
+	}
+}
+
+func TestCreateSessionIsVisibleAndRejectsDuplicateWhileSetupRuns(t *testing.T) {
+	ctx := context.Background()
+	installFakeTmuxCoder(t)
 	parent := t.TempDir()
 	projectRoot := filepath.Join(parent, "api")
 	if err := os.Mkdir(projectRoot, 0o755); err != nil {
@@ -314,19 +404,28 @@ func TestCreateSessionRejectsDuplicateWhileCreateInProgress(t *testing.T) {
 	var events []string
 	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
 	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
-	hooks := &fakeWorktreeHookRunner{events: &events, started: make(chan struct{}), release: make(chan struct{})}
+	hooks := &fakeWorktreeHookRunner{events: &events, started: make(chan struct{}), running: make(chan struct{}), release: make(chan struct{})}
 	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository(), obs.Nop())
 	project, err := projects.Create(ctx, domain.NewProject(0, projectRoot, "api"))
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	firstErr := make(chan error, 1)
-	go func() {
-		_, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
-		firstErr <- err
-	}()
+	created, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
+	if err != nil {
+		t.Fatalf("first Execute: %v", err)
+	}
 	<-hooks.started
+	<-hooks.running
+	if stored, getErr := sessions.GetByID(ctx, created.ID()); getErr != nil || stored.ID() != created.ID() {
+		t.Fatalf("session was not visible while setup ran: session=%v err=%v", stored, getErr)
+	}
+	agents := memory.NewMemoryAgentRepository()
+	createAgent := usecase.NewCreateAgent(agents, projects, sessions, tmux, lock, obs.Nop())
+	if _, agentErr := createAgent.Execute(ctx, usecase.CreateAgentInput{ProjectID: project.ID(), SessionID: created.ID(), Kind: "opencode"}); agentErr != nil {
+		close(hooks.release)
+		t.Fatalf("create agent while setup runs: %v", agentErr)
+	}
 
 	_, err = uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
 	if !errors.Is(err, usecase.ErrConflict) {
@@ -334,9 +433,9 @@ func TestCreateSessionRejectsDuplicateWhileCreateInProgress(t *testing.T) {
 		t.Fatalf("duplicate Execute error = %v, want ErrConflict", err)
 	}
 	var conflict *usecase.StateConflictError
-	if !errors.As(err, &conflict) || conflict.Code != usecase.CodeSessionCreating {
+	if !errors.As(err, &conflict) || conflict.Code != usecase.CodeSessionExists {
 		close(hooks.release)
-		t.Fatalf("duplicate conflict = %#v, want code %q", err, usecase.CodeSessionCreating)
+		t.Fatalf("duplicate conflict = %#v, want code %q", err, usecase.CodeSessionExists)
 	}
 	if len(git.addCalls) != 1 {
 		close(hooks.release)
@@ -344,9 +443,7 @@ func TestCreateSessionRejectsDuplicateWhileCreateInProgress(t *testing.T) {
 	}
 
 	close(hooks.release)
-	if err := <-firstErr; err != nil {
-		t.Fatalf("first Execute: %v", err)
-	}
+	hooks.wait(t)
 }
 
 // TestCreateSessionRollsBackWorktreeWhenRequestCancelledMidHook reproduces the
@@ -355,7 +452,7 @@ func TestCreateSessionRejectsDuplicateWhileCreateInProgress(t *testing.T) {
 // rollback must still remove the worktree it added. Because git is shelled out
 // via exec.CommandContext, a rollback that reuses the cancelled context runs no
 // git at all and the worktree leaks on disk with no Session created.
-func TestCreateSessionRollsBackWorktreeWhenRequestCancelledMidHook(t *testing.T) {
+func TestCreateSessionSetupSurvivesRequestCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	parent := t.TempDir()
 	projectRoot := filepath.Join(parent, "api")
@@ -381,7 +478,7 @@ func TestCreateSessionRollsBackWorktreeWhenRequestCancelledMidHook(t *testing.T)
 	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
 	// The client disconnects mid-hook: cancel the request context, then surface
 	// the error a hook process gets when its context dies.
-	hooks := &fakeWorktreeHookRunner{events: &events, cancel: cancel, err: context.Canceled}
+	hooks := &fakeWorktreeHookRunner{events: &events, cancel: cancel}
 	uc := usecase.NewCreateSessionWithHooks(projects, sessions, tmux, git, lock, hooks, memory.NewMemoryResourceLeaseRepository(), obs.Nop())
 	var project *domain.Project
 	if err := lock.WithWrite(func() error {
@@ -392,19 +489,17 @@ func TestCreateSessionRollsBackWorktreeWhenRequestCancelledMidHook(t *testing.T)
 		t.Fatal(err)
 	}
 
-	_, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
-	if err == nil {
-		t.Fatal("Execute succeeded, want failure after the request was cancelled mid-hook")
+	session, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
 	}
+	hooks.wait(t)
 	worktreePath := filepath.Join(parent, "api.feature-login")
-	if git.paths[worktreePath] {
-		t.Errorf("worktree leaked: still on disk after a cancelled create")
+	if !git.paths[worktreePath] {
+		t.Error("request cancellation removed a setup owned by the daemon")
 	}
-	if !reflect.DeepEqual(git.removed, []string{worktreePath}) {
-		t.Errorf("removed worktrees = %v, want %v (rollback must clean up despite request cancellation)", git.removed, []string{worktreePath})
-	}
-	if all, _ := sessions.GetAll(ctx); len(all) != 0 {
-		t.Errorf("sessions stored after cancelled create = %d, want 0", len(all))
+	if stored, getErr := sessions.GetByID(context.Background(), session.ID()); getErr != nil || stored.ID() != session.ID() {
+		t.Fatalf("session missing after request cancellation: session=%v err=%v", stored, getErr)
 	}
 }
 
@@ -552,7 +647,7 @@ func TestCreateSessionRejectsInvalidConfiguredHookScript(t *testing.T) {
 	}
 }
 
-func TestCreateSessionTmuxFailureAfterHookReleasesProvisionalLeases(t *testing.T) {
+func TestCreateSessionTmuxFailureDoesNotStartHook(t *testing.T) {
 	ctx := context.Background()
 	parent := t.TempDir()
 	projectRoot := filepath.Join(parent, "api")
@@ -591,6 +686,9 @@ func TestCreateSessionTmuxFailureAfterHookReleasesProvisionalLeases(t *testing.T
 	_, err := uc.Execute(ctx, usecase.CreateSessionInput{ProjectID: project.ID(), Type: domain.WorktreeSession, Branch: "feature/login", CreateWorktree: true, CreateBranch: true, BaseBranch: "main"})
 	if !errors.Is(err, usecase.ErrGateway) {
 		t.Fatalf("Execute error = %v, want ErrGateway", err)
+	}
+	if len(hooks.calls) != 0 {
+		t.Fatalf("hook calls = %d, want none when tmux creation fails", len(hooks.calls))
 	}
 	if err := leases.BeginHook(ctx, "next-hook", usecase.HookLeaseOwner{ProjectID: project.ID()}); err != nil {
 		t.Fatal(err)
@@ -644,6 +742,11 @@ func TestCreateSessionPromotesHookLeasesToCreatedSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
+	hooks.wait(t)
+	eventually(t, func() bool {
+		_, err := leases.AcquirePort(ctx, usecase.PortLeaseRequest{ProjectID: project.ID(), OwnerKind: usecase.ResourceLeaseOwnerSession, SessionID: session.ID(), Key: "web", Start: 8000, End: 8000}, func(int) bool { return false })
+		return err == nil
+	})
 	acquire := usecase.NewAcquirePort(sessions, leases, &fakePortAvailability{occupied: map[int]bool{8000: true}}, lock, obs.Nop())
 	out, err := acquire.Execute(ctx, usecase.AcquirePortInput{ProjectID: project.ID(), SessionID: session.ID(), Key: "web", Start: 8000, End: 8000})
 	if err != nil {
@@ -877,8 +980,9 @@ func TestCreateSessionExistingBranchAddsWorktreeWithoutCreatingBranchAndRunsHook
 	if session.Branch() != "feature/login" {
 		t.Fatalf("session branch = %q, want feature/login", session.Branch())
 	}
-	if !reflect.DeepEqual(*f.events, []string{"git:add", "hook:run", "tmux:create"}) {
-		t.Fatalf("events = %v, want git add, hook, tmux create", *f.events)
+	f.hooks.wait(t)
+	if !reflect.DeepEqual(*f.events, []string{"git:add", "tmux:create", "hook:start"}) {
+		t.Fatalf("events = %v, want git add, tmux create, hook start", *f.events)
 	}
 	if len(f.git.addCalls) != 1 || f.git.addCalls[0].createBranch {
 		t.Fatalf("AddWorktree calls = %+v, want one with createBranch=false", f.git.addCalls)
@@ -1248,26 +1352,65 @@ func TestCreateSecondaryDepthCapStillEnforcedFromWorktreeRoot(t *testing.T) {
 }
 
 type fakeWorktreeHookRunner struct {
-	events      *[]string
-	calls       []usecase.WorktreeHookRequest
-	err         error
-	logPath     string
-	cancel      context.CancelFunc // models a client disconnecting while the hook runs
-	leases      usecase.ResourceLeaseRepository
-	acquirePort bool
-	started     chan struct{}
-	release     chan struct{}
-	startOnce   sync.Once
+	events       *[]string
+	calls        []usecase.WorktreeHookRequest
+	err          error
+	startErr     error
+	logPath      string
+	onStart      func()
+	cancel       context.CancelFunc // models a client disconnecting while the hook runs
+	leases       usecase.ResourceLeaseRepository
+	acquirePort  bool
+	started      chan struct{}
+	running      chan struct{}
+	release      chan struct{}
+	ack          chan struct{}
+	completed    chan struct{}
+	startOnce    sync.Once
+	completeOnce sync.Once
 }
 
-func (r *fakeWorktreeHookRunner) Run(ctx context.Context, req usecase.WorktreeHookRequest) (usecase.WorktreeHookResult, error) {
-	*r.events = append(*r.events, "hook:run")
+func (r *fakeWorktreeHookRunner) Start(ctx context.Context, req usecase.WorktreeHookRequest) (usecase.WorktreeHookExecution, error) {
+	*r.events = append(*r.events, "hook:start")
 	r.calls = append(r.calls, req)
-	if r.cancel != nil {
-		r.cancel()
+	if r.onStart != nil {
+		r.onStart()
 	}
+	if r.startErr != nil {
+		return nil, r.startErr
+	}
+	r.completed = make(chan struct{})
 	if r.started != nil {
 		r.startOnce.Do(func() { close(r.started) })
+	}
+	return &fakeWorktreeHookExecution{runner: r, req: req}, nil
+}
+
+func (r *fakeWorktreeHookRunner) wait(t *testing.T) {
+	t.Helper()
+	if r.completed == nil {
+		t.Fatal("hook was not started")
+	}
+	select {
+	case <-r.completed:
+	case <-time.After(time.Second):
+		t.Fatal("timed out waiting for hook completion")
+	}
+}
+
+type fakeWorktreeHookExecution struct {
+	runner *fakeWorktreeHookRunner
+	req    usecase.WorktreeHookRequest
+}
+
+func (e *fakeWorktreeHookExecution) Wait(ctx context.Context) (usecase.WorktreeHookResult, error) {
+	r := e.runner
+	if r.running != nil {
+		close(r.running)
+	}
+	defer r.completeOnce.Do(func() { close(r.completed) })
+	if r.cancel != nil {
+		r.cancel()
 	}
 	if r.release != nil {
 		select {
@@ -1277,7 +1420,7 @@ func (r *fakeWorktreeHookRunner) Run(ctx context.Context, req usecase.WorktreeHo
 		}
 	}
 	if r.acquirePort {
-		if _, err := r.leases.AcquirePort(ctx, usecase.PortLeaseRequest{OwnerKind: usecase.ResourceLeaseOwnerHook, HookToken: req.Env["TMUX_CODER_HOOK_TOKEN"], Key: "web", Start: 8000, End: 8000}, func(int) bool { return true }); err != nil {
+		if _, err := r.leases.AcquirePort(ctx, usecase.PortLeaseRequest{OwnerKind: usecase.ResourceLeaseOwnerHook, HookToken: e.req.Env["TMUX_CODER_HOOK_TOKEN"], Key: "web", Start: 8000, End: 8000}, func(int) bool { return true }); err != nil {
 			return usecase.WorktreeHookResult{Output: "acquire port failed"}, err
 		}
 	}
@@ -1285,6 +1428,30 @@ func (r *fakeWorktreeHookRunner) Run(ctx context.Context, req usecase.WorktreeHo
 		return usecase.WorktreeHookResult{Output: "hook failed", LogPath: r.logPath}, r.err
 	}
 	return usecase.WorktreeHookResult{Output: "hook ok"}, nil
+}
+
+func (e *fakeWorktreeHookExecution) WaitForAcknowledgement(ctx context.Context) error {
+	if e.runner.ack == nil {
+		return nil
+	}
+	select {
+	case <-e.runner.ack:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func eventually(t *testing.T, condition func() bool) {
+	t.Helper()
+	deadline := time.Now().Add(time.Second)
+	for time.Now().Before(deadline) {
+		if condition() {
+			return
+		}
+		time.Sleep(time.Millisecond)
+	}
+	t.Fatal("condition was not met before timeout")
 }
 
 type switchCall struct {
@@ -1328,6 +1495,28 @@ func (g *eventTmuxGateway) SwitchClients(ctx context.Context, from, to string) e
 	return nil
 }
 
+func (g *eventTmuxGateway) NewWindow(ctx context.Context, sessionName, windowName, workingDir, command string, env []string) (string, error) {
+	*g.events = append(*g.events, "tmux:new-window:"+windowName)
+	return "%42", nil
+}
+
+func (g *eventTmuxGateway) RenameWindow(context.Context, string, string) error { return nil }
+func (g *eventTmuxGateway) PaneExists(context.Context, string) (bool, error)   { return true, nil }
+func (g *eventTmuxGateway) KillPane(context.Context, string) error             { return nil }
+func (g *eventTmuxGateway) ListPanes(context.Context, string) ([]string, error) {
+	return []string{"%42"}, nil
+}
+
+func installFakeTmuxCoder(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "tmux-coder")
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 type addWorktreeCall struct {
 	worktreePath string
 	branch       string
@@ -1343,6 +1532,8 @@ type fakeWorktreeGit struct {
 	addCalls        []addWorktreeCall
 	removed         []string
 	deletedBranches []string
+	removedDone     chan struct{}
+	deletedDone     chan struct{}
 	currentBranch   string          // returned by CurrentBranch ("" models detached HEAD)
 	unresolvable    map[string]bool // refs ResolveCommit reports as not resolving
 }
@@ -1383,6 +1574,9 @@ func (g *fakeWorktreeGit) RemoveWorktree(ctx context.Context, worktreePath strin
 	}
 	g.removed = append(g.removed, worktreePath)
 	delete(g.paths, worktreePath)
+	if g.removedDone != nil {
+		close(g.removedDone)
+	}
 	return nil
 }
 
@@ -1391,6 +1585,9 @@ func (g *fakeWorktreeGit) DeleteBranch(ctx context.Context, repoPath, branch str
 		return err
 	}
 	g.deletedBranches = append(g.deletedBranches, branch)
+	if g.deletedDone != nil {
+		close(g.deletedDone)
+	}
 	return nil
 }
 
