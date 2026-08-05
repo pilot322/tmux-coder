@@ -43,8 +43,7 @@ tmux_servers=()
 
 # env_from_proc prints a variable from a process's launch-time environment, or
 # nothing if it is unset. /proc/<pid>/environ only reflects the environment that
-# existed at exec, so it misses any var the daemon sets later (loadEnvFile in
-# cmd/tmux-coderd reads the worktree .env via os.Setenv after start-up).
+# existed at exec, so it misses any var the daemon sets later from its env file.
 env_from_proc() {
   local pid="$1"
   local name="$2"
@@ -60,9 +59,7 @@ env_from_proc() {
 }
 
 # env_from_file prints a variable from a .env file using the same parsing rules
-# as loadEnvFile in cmd/tmux-coderd/main.go, or nothing if absent. This is the
-# label source a worktree daemon actually uses but never exposes in its
-# environment.
+# as loadEnvFile in cmd/tmux-coderd/main.go, or nothing if absent.
 env_from_file() {
   local file="$1"
   local name="$2"
@@ -89,23 +86,28 @@ env_from_file() {
 }
 
 # tmux_server_for_pid resolves the tmux server label a daemon is using, mirroring
-# the daemon's own precedence: an env var exported before launch wins (it is the
-# only label visible in /proc/<pid>/environ, and loadEnvFile skips already-set
-# keys), otherwise the worktree .env two directories up from <worktree>/bin/
-# tmux-coderd. With neither, a dev build still has its label baked in by
-# scripts/build via -ldflags, so reconstruct it the same way scripts/build does
-# from the worktree path; the scripts/build guard keeps this from ever firing on
-# the installed (prod) daemon, which falls through to the shipped default.
+# the daemon's own precedence: an env var exported before launch wins, followed
+# by ~/.tmux-coder/.env. With neither, a dev build still has its label baked in
+# by scripts/build via -ldflags, so reconstruct it the same way scripts/build
+# does from the worktree path; the scripts/build guard keeps this from ever
+# firing on the installed (prod) daemon, which falls through to the shipped
+# default.
 tmux_server_for_pid() {
   local pid="$1"
   local exe="$2"
-  local value root
+  local value home root
 
   value="$(env_from_proc "$pid" "$tmux_server_env")"
+  if [[ -z "$value" ]]; then
+    home="$(env_from_proc "$pid" "HOME")"
+    home="${home:-${HOME:-}}"
+    if [[ -n "$home" ]]; then
+      value="$(env_from_file "$home/.tmux-coder/.env" "$tmux_server_env")"
+    fi
+  fi
   if [[ -z "$value" && -n "$exe" ]]; then
     root="$(dirname "$(dirname "$exe")")"
-    value="$(env_from_file "$root/.env" "$tmux_server_env")"
-    if [[ -z "$value" && "$exe" == */bin/tmux-coderd && -f "$root/scripts/build" ]]; then
+    if [[ "$exe" == */bin/tmux-coderd && -f "$root/scripts/build" ]]; then
       value="tmux-coder-$(basename "$root")"
     fi
   fi

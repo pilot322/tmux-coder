@@ -152,6 +152,8 @@ tmux-coder install-claude-hooks
 
 It listens on `127.0.0.1:${TMUX_CODERD_PORT:-64357}`, owns runtime state, manages the dedicated tmux server, creates/removes git worktrees, runs worktree hooks, and tracks agent status.
 
+Daemon environment variables can be inherited from the process supervisor or set in `~/.tmux-coder/.env`. Inherited values take precedence. The daemon never reads a Project's `.env`.
+
 Project/session/agent state is currently in memory and rebuilt on daemon start.
 
 ## cli

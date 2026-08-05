@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/pilot322/tmux-coder/internal/adapter/httpapi"
@@ -28,10 +29,10 @@ import (
 )
 
 func main() {
-	// .env loads before the logger is built because the log path is derived from
-	// the tmux server label, which .env can set; any failure is surfaced once the
-	// logger exists.
-	envErr := loadEnvFile(".env")
+	// Daemon env loads before the logger is built because the log path is derived
+	// from the tmux server label, which the file can set; any failure is surfaced
+	// once the logger exists.
+	envErr := loadDaemonEnv()
 
 	logger, err := obs.New(obs.RoleDaemon, os.Getenv)
 	if err != nil {
@@ -40,7 +41,7 @@ func main() {
 	}
 	ctx := context.Background()
 	if envErr != nil && !os.IsNotExist(envErr) {
-		logger.Warn(ctx, "failed to load .env", "err", envErr.Error())
+		logger.Warn(ctx, "failed to load daemon env", "err", envErr.Error())
 	}
 
 	addr := "127.0.0.1:" + daemonaddr.Port(os.Getenv)
@@ -87,6 +88,14 @@ func main() {
 		logger.Error(ctx, "http server stopped", "err", err.Error())
 		os.Exit(1)
 	}
+}
+
+func loadDaemonEnv() error {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return err
+	}
+	return loadEnvFile(filepath.Join(home, ".tmux-coder", ".env"))
 }
 
 func loadEnvFile(path string) error {
