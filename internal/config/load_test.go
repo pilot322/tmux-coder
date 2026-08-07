@@ -1,8 +1,10 @@
 package config_test
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -19,6 +21,33 @@ func TestLoadMissingFileReturnsDefaults(t *testing.T) {
 	}
 	if len(file.Secondaries) != 0 {
 		t.Errorf("secondaries = %d, want 0", len(file.Secondaries))
+	}
+}
+
+func TestLoadErrorsIncludeSourcePath(t *testing.T) {
+	root := t.TempDir()
+	writeConfig(t, root, "unknown = true\n")
+	_, err := config.Load(root)
+	if err == nil || !errors.Is(err, config.ErrValidation) {
+		t.Fatalf("Load error = %v", err)
+	}
+	if path := config.ProjectPath(root); !strings.Contains(err.Error(), path) {
+		t.Fatalf("error %q does not include %q", err, path)
+	}
+}
+
+func TestLoadActionFileMissingAndInvalid(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "actions.toml")
+	actions, err := config.LoadActionFile(path)
+	if err != nil || len(actions) != 0 {
+		t.Fatalf("missing action file = %+v, %v", actions, err)
+	}
+	if err := os.WriteFile(path, []byte("[[menu-actions]]\nname = \"Bad\"\nscript = \"x\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	_, err = config.LoadActionFile(path)
+	if err == nil || !errors.Is(err, config.ErrValidation) || !strings.Contains(err.Error(), path) {
+		t.Fatalf("invalid action file error = %v", err)
 	}
 }
 

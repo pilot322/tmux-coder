@@ -8,13 +8,17 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 
 	"github.com/pilot322/tmux-coder/internal/client/daemon"
 	"github.com/pilot322/tmux-coder/internal/client/httpclient"
+	"github.com/pilot322/tmux-coder/internal/client/menu"
 	"github.com/pilot322/tmux-coder/internal/client/tmuxattach"
 	"github.com/pilot322/tmux-coder/internal/client/tui"
+	"github.com/pilot322/tmux-coder/internal/config"
 	"github.com/pilot322/tmux-coder/internal/daemonaddr"
 )
 
@@ -32,12 +36,12 @@ type openAPI interface {
 	CreateProject(context.Context, string, *bool, ...string) (httpclient.Project, error)
 }
 
-type agentWrapperExitError struct {
+type exitCodeError struct {
 	code int
 }
 
-func (e agentWrapperExitError) Error() string {
-	return fmt.Sprintf("agent wrapper exited with code %d", e.code)
+func (e exitCodeError) Error() string {
+	return fmt.Sprintf("process exited with code %d", e.code)
 }
 
 func runClient(ctx context.Context, args []string, getenv func(string) string, getwd func() (string, error)) error {
@@ -74,10 +78,63 @@ func runClient(ctx context.Context, args []string, getenv func(string) string, g
 	if len(args) >= 1 && (args[0] == "n" || args[0] == "new") {
 		return runNew(ctx, args[1:], getenv, api, addr)
 	}
+	if len(args) >= 1 && (args[0] == "m" || args[0] == "menu") {
+		return runMenu(ctx, args[1:], getenv, api)
+	}
 	if len(args) >= 1 && args[0] == "acquire-port" {
 		return runAcquirePort(ctx, args[1:], getenv, api, os.Stdout)
 	}
-	return fmt.Errorf("usage: tmux-coder [open|o|new|n|acquire-port|install-claude-hooks]")
+	return fmt.Errorf("usage: tmux-coder [open|o|new|n|menu|m|acquire-port|install-claude-hooks]")
+}
+
+func runMenu(ctx context.Context, args []string, getenv func(string) string, api interface {
+	ListSessions(context.Context, httpclient.ListSessionsInput) ([]httpclient.Session, error)
+}) error {
+	if len(args) != 0 {
+		return fmt.Errorf("usage: tmux-coder menu")
+	}
+	current, sessions, err := currentManagedSessionDetails(ctx, getenv, api)
+	if err != nil {
+		return fmt.Errorf("tmux-coder menu must run inside a tmux-coder session: %w", err)
+	}
+	session, err := menu.ResolveSessionContext(current, sessions)
+	if err != nil {
+		return fmt.Errorf("resolve current session: %w", err)
+	}
+	home, err := userHome(getenv)
+	if err != nil {
+		return err
+	}
+	actionPath := filepath.Join(home, ".tmux-coder", "actions.toml")
+	projectPath := config.ProjectPath(current.Project.FullPath)
+	globalActions, err := config.LoadActionFile(actionPath)
+	if err != nil {
+		return err
+	}
+	projectFile, err := config.Load(current.Project.FullPath)
+	if err != nil {
+		return err
+	}
+	actions, err := menu.Merge(globalActions, projectFile.MenuActions, actionPath, projectPath)
+	if err != nil {
+		return err
+	}
+	if len(actions) == 0 {
+		fmt.Fprintf(os.Stdout, "No Menu Actions configured. Add them to %s or %s.\n", actionPath, projectPath)
+		return nil
+	}
+	selection, ok, err := menu.Run(ctx, actions)
+	if err != nil || !ok {
+		return err
+	}
+	if err := menu.Execute(ctx, selection, session, os.Environ(), os.Stdin, os.Stdout, os.Stderr); err != nil {
+		var processExit *exec.ExitError
+		if errors.As(err, &processExit) {
+			return exitCodeError{code: processExit.ExitCode()}
+		}
+		return err
+	}
+	return nil
 }
 
 func runOpen(ctx context.Context, args []string, getwd func() (string, error), api openAPI, in io.Reader, out io.Writer, interactive bool) (httpclient.Project, error) {
@@ -354,7 +411,7 @@ func runNew(ctx context.Context, args []string, getenv func(string) string, api 
 		}
 		code := runAgentWrapper([]string{strconv.Itoa(agent.ID), kind}, daemonAddr, extraEnv...)
 		if code != 0 {
-			return agentWrapperExitError{code: code}
+			return exitCodeError{code: code}
 		}
 		return nil
 	}
@@ -366,18 +423,28 @@ func runNew(ctx context.Context, args []string, getenv func(string) string, api 
 func currentManagedSession(ctx context.Context, getenv func(string) string, api interface {
 	ListSessions(context.Context, httpclient.ListSessionsInput) ([]httpclient.Session, error)
 }) (int, int, error) {
+	session, _, err := currentManagedSessionDetails(ctx, getenv, api)
+	if err != nil {
+		return 0, 0, err
+	}
+	return session.ID, session.ProjectID, nil
+}
+
+func currentManagedSessionDetails(ctx context.Context, getenv func(string) string, api interface {
+	ListSessions(context.Context, httpclient.ListSessionsInput) ([]httpclient.Session, error)
+}) (httpclient.Session, []httpclient.Session, error) {
 	currentSession := tmuxattach.CurrentSession(ctx, getenv)
 	if currentSession == "" {
-		return 0, 0, fmt.Errorf("not inside a tmux-coder session")
+		return httpclient.Session{}, nil, fmt.Errorf("not inside a tmux-coder session")
 	}
 	sessions, err := api.ListSessions(ctx, httpclient.ListSessionsInput{})
 	if err != nil {
-		return 0, 0, fmt.Errorf("list sessions: %w", err)
+		return httpclient.Session{}, nil, fmt.Errorf("list sessions: %w", err)
 	}
 	for _, session := range sessions {
-		if session.TmuxName == currentSession || session.SessionName == currentSession {
-			return session.ID, session.ProjectID, nil
+		if session.TmuxName == currentSession {
+			return session, sessions, nil
 		}
 	}
-	return 0, 0, fmt.Errorf("current tmux session %q is not managed by tmux-coder", currentSession)
+	return httpclient.Session{}, nil, fmt.Errorf("current tmux session %q is not managed by tmux-coder", currentSession)
 }

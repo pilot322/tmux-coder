@@ -37,9 +37,9 @@ func main() {
 	}
 
 	if err := runClient(context.Background(), os.Args[1:], os.Getenv, os.Getwd); err != nil {
-		var wrapperExit agentWrapperExitError
-		if errors.As(err, &wrapperExit) {
-			os.Exit(wrapperExit.code)
+		var processExit exitCodeError
+		if errors.As(err, &processExit) {
+			os.Exit(processExit.code)
 		}
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

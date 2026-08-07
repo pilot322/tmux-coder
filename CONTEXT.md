@@ -105,8 +105,16 @@ A **Resource Lease** for a TCP port value used by a **Project**'s runnable local
 _Avoid_: Port setting, env var
 
 **Config File** (`.tmux-coder/.tmux-coder.toml`):
-A TOML file inside a **Project** at `.tmux-coder/.tmux-coder.toml` that declares **Secondary Sessions**, environment variables, and hooks. Checked into version control. Most runtime state (**Sessions**, **Agent Registry**) lives only in the **Daemon**'s memory and is rebuilt on start; durable persistence (eventually SQLite) is limited to **Projects**.
+A TOML file inside a **Project** at `.tmux-coder/.tmux-coder.toml` that declares **Secondary Sessions**, **Menu Actions**, environment variables, and hooks. Checked into version control. Most runtime state (**Sessions**, **Agent Registry**) lives only in the **Daemon**'s memory and is rebuilt on start; durable persistence (eventually SQLite) is limited to **Projects**.
 _Avoid_: Settings, project file, manifest
+
+**Menu Action**:
+A user-selectable workflow made available by tmux-coder for the current **Session**. It has a unique searchable name, may have a human-facing description, and may accept a user-supplied argument or have a direct selection key for immediate execution. A Project declaration overrides a global Menu Action with the same name.
+_Avoid_: Menu item, quick action, command
+
+**Action File** (`~/.tmux-coder/actions.toml`):
+A user-owned file that declares global **Menu Actions** available across **Projects**. A Project's **Config File** can supplement or override these actions for its Sessions.
+_Avoid_: Daemon Config, global config, script file
 
 ## Example dialogue
 
@@ -121,3 +129,11 @@ _Avoid_: Settings, project file, manifest
 > **Dev**: How is the Daemon involved?
 >
 > **Domain expert**: The **Client** sent a "create worktree" command to the **Daemon**. The Daemon created the git worktree, spun up the **Worktree Session** on the tmux server, and recorded the Session as runtime state.
+>
+> **Dev**: If I choose a Menu Action from this Worktree Session, does it run against the whole Project?
+>
+> **Domain expert**: No. A **Menu Action** always targets the current Session, so this one targets the worktree checkout.
+>
+> **Dev**: Why does this Project's review action differ from the one I use elsewhere?
+>
+> **Domain expert**: Its **Config File** declares a **Menu Action** with the same name as the global one in your **Action File**, so the Project declaration overrides it.

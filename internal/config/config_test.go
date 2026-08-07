@@ -49,6 +49,51 @@ on-delete = "inherit"
 	}
 }
 
+func TestParseDecodesMenuActions(t *testing.T) {
+	file, err := config.Parse([]byte(`
+[[menu-actions]]
+name = "commit"
+description = "Commit changes"
+key = "c"
+script = ".tmux-coder/actions/commit"
+
+[[menu-actions]]
+name = "fix-issues"
+script = ".tmux-coder/actions/fix-issues"
+argument = "required"
+`))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(file.MenuActions) != 2 {
+		t.Fatalf("len(MenuActions) = %d, want 2", len(file.MenuActions))
+	}
+	if got := file.MenuActions[0]; got.Name != "commit" || got.Key != "c" || got.Argument != config.ArgumentNone {
+		t.Fatalf("first action = %+v", got)
+	}
+	if got := file.MenuActions[1]; got.Argument != config.ArgumentRequired {
+		t.Fatalf("second action = %+v", got)
+	}
+}
+
+func TestParseActionFileUsesStrictActionOnlySchema(t *testing.T) {
+	actions, err := config.ParseActionFile([]byte(`
+[[menu-actions]]
+name = "review"
+script = "actions/review"
+argument = "optional"
+`))
+	if err != nil {
+		t.Fatalf("ParseActionFile: %v", err)
+	}
+	if len(actions) != 1 || actions[0].Name != "review" || actions[0].Argument != config.ArgumentOptional {
+		t.Fatalf("actions = %+v", actions)
+	}
+
+	_, err = config.ParseActionFile([]byte("[worktree]\non-create-script = \"setup\"\n"))
+	errValidation(t, err)
+}
+
 func TestParseRejectsStaticErrors(t *testing.T) {
 	tests := []struct {
 		name string
@@ -85,6 +130,30 @@ func TestParseRejectsStaticErrors(t *testing.T) {
 		{
 			name: "invalid timeout",
 			toml: "[worktree]\non-create-timeout = \"soon\"\n",
+		},
+		{
+			name: "unknown action key",
+			toml: "[[menu-actions]]\nname = \"review\"\nscript = \"review\"\nbogus = true\n",
+		},
+		{
+			name: "invalid action name",
+			toml: "[[menu-actions]]\nname = \"Review_Code\"\nscript = \"review\"\n",
+		},
+		{
+			name: "missing action script",
+			toml: "[[menu-actions]]\nname = \"review\"\n",
+		},
+		{
+			name: "invalid action argument",
+			toml: "[[menu-actions]]\nname = \"review\"\nscript = \"review\"\nargument = \"many\"\n",
+		},
+		{
+			name: "multi-rune action key",
+			toml: "[[menu-actions]]\nname = \"review\"\nscript = \"review\"\nkey = \"rr\"\n",
+		},
+		{
+			name: "duplicate action name",
+			toml: "[[menu-actions]]\nname = \"review\"\nscript = \"one\"\n[[menu-actions]]\nname = \"review\"\nscript = \"two\"\n",
 		},
 	}
 

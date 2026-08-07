@@ -134,6 +134,86 @@ Kinds.
 new owned window unless `--pane %ID` explicitly identifies a pane in that
 Session.
 
+## Menu Actions
+
+Open the action menu from inside a tmux-coder-managed Session:
+
+```sh
+tmux-coder menu
+tmux-coder m
+```
+
+Global Menu Actions live in `~/.tmux-coder/actions.toml`. Project actions live
+in the Project's `.tmux-coder/.tmux-coder.toml` Config File. Both use the same
+declaration shape:
+
+```toml
+[[menu-actions]]
+name = "commit"
+description = "Commit the current changes"
+key = "c"
+script = "actions/commit"
+argument = "none"
+
+[[menu-actions]]
+name = "fix-issues"
+description = "Fix the described issues"
+script = ".tmux-coder/actions/fix-issues"
+argument = "required"
+```
+
+`name` must be a unique lowercase kebab-case token and `script` is required.
+`key` is an optional single printable character. `argument` is `none`,
+`optional`, or `required`, and defaults to `none`. Unknown fields and invalid or
+duplicate declarations prevent the menu from opening.
+
+Press a displayed direct key to select that action. Any other printable
+character starts fuzzy search across actions without keys. In fuzzy search,
+the first space separates the query from one argument value:
+
+```text
+fx- repair the failing API tests
+```
+
+Use up/down or `j`/`k` to select a fuzzy result and Enter to run it. Escape or
+Ctrl-C cancels. A direct-key action that accepts an argument opens a separate
+prompt.
+
+Project declarations replace global declarations with the same name while
+retaining the global action's list position; Project-only actions append in
+declaration order. Overrides replace the complete declaration without
+field-level inheritance. Direct keys must be unique after this merge.
+
+Relative global scripts resolve from `~/.tmux-coder`. Relative Project scripts
+resolve from the current checkout root: the Project base directory for a Main
+Session, or the owning worktree root for a Worktree Session and its Secondary
+Sessions. The executable itself runs in the exact managed Session directory, so
+a Secondary can resolve a checkout-level script while running in a nested
+directory. Absolute script paths are also accepted. Scripts must be executable
+regular files and are launched directly through their shebang.
+
+The script inherits the menu process environment. tmux-coder overwrites these
+context variables with authoritative values:
+
+- `TMUX_CODER_ACTION_NAME`
+- `TMUX_CODER_ACTION_ARGUMENT`
+- `TMUX_CODER_PROJECT_ID`
+- `TMUX_CODER_PROJECT_ROOT`
+- `TMUX_CODER_PROJECT_TITLE`
+- `TMUX_CODER_SESSION_ID`
+- `TMUX_CODER_SESSION_NAME`
+- `TMUX_CODER_SESSION_TYPE`
+- `TMUX_CODER_TMUX_SESSION_NAME`
+- `TMUX_CODER_SESSION_ROOT`
+- `TMUX_CODER_WORKTREE_ROOT`
+- `TMUX_CODER_WORKING_DIRECTORY`
+- `TMUX_CODER_BRANCH`
+
+The action argument is available only through `TMUX_CODER_ACTION_ARGUMENT`; it
+is not interpolated into a shell command or passed as shell source. The script
+runs interactively in the current terminal, and its exit status becomes the
+exit status of `tmux-coder menu`.
+
 You can use any executable really, but it needs to have an extension or hooks set up so that it passes the agent's state to the daemon. Currently only opencode and claude code have been set up (opencode works much better). More coming soon.
 
 OpenCode agents share one headless server owned by the daemon. Each agent pane

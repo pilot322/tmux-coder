@@ -11,7 +11,9 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"time"
+	"unicode"
 
 	toml "github.com/pelletier/go-toml/v2"
 )
@@ -19,6 +21,12 @@ import (
 // DefaultWorktreeHookTimeout bounds the on-create worktree hook when the Config
 // File does not specify one.
 const DefaultWorktreeHookTimeout = 2 * time.Minute
+
+const (
+	ArgumentNone     = "none"
+	ArgumentOptional = "optional"
+	ArgumentRequired = "required"
+)
 
 // maxSessionDepth is the maximum total ancestry depth of a Session, counting a
 // Main or Worktree root as depth one (ADR-0006).
@@ -32,6 +40,7 @@ var ErrValidation = errors.New("invalid config file")
 type File struct {
 	Worktree    Worktree
 	Secondaries []Secondary // topologically ordered: a parent precedes its children
+	MenuActions []MenuAction
 }
 
 // Worktree holds the [worktree] section: the on-create hook and its timeout.
@@ -50,10 +59,24 @@ type Secondary struct {
 	Parent   string
 }
 
+// MenuAction is one validated declaration from a Config File or Action File.
+type MenuAction struct {
+	Name        string
+	Description string
+	Key         string
+	Script      string
+	Argument    string
+}
+
 // rawFile mirrors the on-disk TOML shape with kebab-case keys.
 type rawFile struct {
-	Worktree    rawWorktree    `toml:"worktree"`
-	Secondaries []rawSecondary `toml:"secondary-sessions"`
+	Worktree    rawWorktree     `toml:"worktree"`
+	Secondaries []rawSecondary  `toml:"secondary-sessions"`
+	MenuActions []rawMenuAction `toml:"menu-actions"`
+}
+
+type rawActionFile struct {
+	MenuActions []rawMenuAction `toml:"menu-actions"`
 }
 
 type rawWorktree struct {
@@ -69,12 +92,27 @@ type rawSecondary struct {
 	Parent   string `toml:"parent"`
 }
 
+type rawMenuAction struct {
+	Name        string `toml:"name"`
+	Description string `toml:"description"`
+	Key         string `toml:"key"`
+	Script      string `toml:"script"`
+	Argument    string `toml:"argument"`
+}
+
+var menuActionName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+
+// ProjectPath returns the Config File path owned by projectRoot.
+func ProjectPath(projectRoot string) string {
+	return filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml")
+}
+
 // Load reads, decodes and validates the Config File under projectRoot. A
 // missing file is not an error: it yields a zero File with the default hook
 // timeout and no Secondary Sessions. A read failure (other than not-exist) is
 // returned verbatim so the caller can distinguish I/O from validation.
 func Load(projectRoot string) (File, error) {
-	path := filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml")
+	path := ProjectPath(projectRoot)
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
@@ -82,7 +120,28 @@ func Load(projectRoot string) (File, error) {
 		}
 		return File{}, fmt.Errorf("read config file: %w", err)
 	}
-	return Parse(data)
+	file, err := Parse(data)
+	if err != nil {
+		return File{}, fmt.Errorf("%s: %w", path, err)
+	}
+	return file, nil
+}
+
+// LoadActionFile reads and strictly validates a global Action File. A missing
+// file yields no actions.
+func LoadActionFile(path string) ([]MenuAction, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read action file %s: %w", path, err)
+	}
+	actions, err := ParseActionFile(data)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return actions, nil
 }
 
 // Parse strictly decodes and validates Config File bytes. Unknown keys are a
@@ -123,6 +182,10 @@ func Parse(data []byte) (File, error) {
 	if err != nil {
 		return File{}, err
 	}
+	actions, err := validateMenuActions(raw.MenuActions)
+	if err != nil {
+		return File{}, err
+	}
 
 	return File{
 		Worktree: Worktree{
@@ -130,7 +193,57 @@ func Parse(data []byte) (File, error) {
 			OnCreateTimeout: timeout,
 		},
 		Secondaries: ordered,
+		MenuActions: actions,
 	}, nil
+}
+
+// ParseActionFile strictly decodes and validates Action File bytes.
+func ParseActionFile(data []byte) ([]MenuAction, error) {
+	var raw rawActionFile
+	dec := toml.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&raw); err != nil {
+		return nil, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	return validateMenuActions(raw.MenuActions)
+}
+
+func validateMenuActions(raw []rawMenuAction) ([]MenuAction, error) {
+	actions := make([]MenuAction, len(raw))
+	seen := make(map[string]bool, len(raw))
+	for i, action := range raw {
+		if !menuActionName.MatchString(action.Name) {
+			return nil, fmt.Errorf("%w: menu-action %d has invalid name %q", ErrValidation, i, action.Name)
+		}
+		if seen[action.Name] {
+			return nil, fmt.Errorf("%w: duplicate menu-action name %q", ErrValidation, action.Name)
+		}
+		seen[action.Name] = true
+		if action.Script == "" {
+			return nil, fmt.Errorf("%w: menu-action %q needs a script", ErrValidation, action.Name)
+		}
+		argument := action.Argument
+		if argument == "" {
+			argument = ArgumentNone
+		}
+		if argument != ArgumentNone && argument != ArgumentOptional && argument != ArgumentRequired {
+			return nil, fmt.Errorf("%w: menu-action %q has invalid argument %q", ErrValidation, action.Name, action.Argument)
+		}
+		if action.Key != "" {
+			runes := []rune(action.Key)
+			if len(runes) != 1 || !unicode.IsPrint(runes[0]) {
+				return nil, fmt.Errorf("%w: menu-action %q key must be one printable rune", ErrValidation, action.Name)
+			}
+		}
+		actions[i] = MenuAction{
+			Name:        action.Name,
+			Description: action.Description,
+			Key:         action.Key,
+			Script:      action.Script,
+			Argument:    argument,
+		}
+	}
+	return actions, nil
 }
 
 // validateSecondaries enforces every static rule from ADR-0007 and returns the
