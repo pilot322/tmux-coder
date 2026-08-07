@@ -114,9 +114,21 @@ Start an agent from inside a tmux-coder-managed session:
 
 ```sh
 tmux-coder new opencode --name frontend
+tmux-coder new --model anthropic/claude-haiku --prompt "Review the current changes"
 ```
 
 If no executable is given, `opencode` is used.
+
+OpenCode creation accepts a canonical `provider/model` through `--model` and a
+non-empty initial `--prompt`. Either option can be used alone. Model selection
+is verified before an initial prompt is submitted; startup failure stops the new
+agent rather than falling back to another model or dropping the prompt. These
+options are per creation and are not supported by other Agent Kinds.
+
+`--session-id ID` targets any managed Session and derives its Project. Supplying
+`--project-id` as well validates that it matches. An explicit Session creates a
+new owned window unless `--pane %ID` explicitly identifies a pane in that
+Session.
 
 You can use any executable really, but it needs to have an extension or hooks set up so that it passes the agent's state to the daemon. Currently only opencode and claude code have been set up (opencode works much better). More coming soon.
 
@@ -126,6 +138,9 @@ duplicating the server process. Set `TMUX_CODER_OPENCODE_SERVER_URL` to use an
 already-running server instead. The managed server listens on `0.0.0.0` at
 `opencode_server_port`, so its embedded web UI is available through localhost,
 LAN, and Tailscale addresses allowed by the host firewall and tailnet policy.
+Model-selected agents use a temporary copy of the user's OpenCode TUI state for
+selection verification. That copy is discarded when the agent exits and is
+never merged back into the user's state.
 
 `./dev install` installs and configures the bundled OpenCode TUI plugin so
 activity remains associated with the attached TUI's agent ID. For a manual

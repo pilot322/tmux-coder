@@ -57,12 +57,16 @@ A human-facing label for a **TC Agent**, used for presentation and tmux window l
 _Avoid_: Agent ID, Agent Kind
 
 **Agent Registry**:
-The in-memory data structure in the **Daemon** that tracks active **TC Agents** — their IDs, associated **Sessions**, **Projects**, pane identity, and current **Agent Status**. It is an active set, not a durable history.
+The in-memory data structure in the **Daemon** that tracks active **TC Agents** — their IDs, associated **Sessions**, **Projects**, pane identity, requested canonical OpenCode model (when present), and current **Agent Status**. It is an active set, not a durable history. Initial prompts are never retained in it.
 _Avoid_: Agent store, agent list
 
 **Agent Status**:
 The single canonical, agent-agnostic state of a **TC Agent** in the **Agent Registry**: `starting`, `running`, `busy`, `idle`, `waiting`, or `exited` (terminal — removes the agent). `starting`/`exited` are the only values implying the process is not confirmed alive; every other value implies a live process. The lifecycle values (`starting`, `running`, `exited`) are owned by the wrapper; the activity values (`busy`, `idle`, `waiting`) are reported by the agent itself. An **Agent Kind** that does not report activity rests at `running`. Each kind's integration translates its native signals into this shared vocabulary; the Daemon never learns kind-specific terms.
 _Avoid_: Agent state, activity, mode
+
+**Agent Startup Setup**:
+A transient, one-shot handshake used while creating an OpenCode **TC Agent** with a requested model and/or initial prompt. The OpenCode TUI plugin validates catalog readiness and opens the model picker; the **Daemon** temporarily disables pane input, drives literal picker/prompt input, and verifies model selection against isolated OpenCode state. Agent Startup Setup has a fixed deadline and is separate from **Agent Status**. Prompt contents are discarded on every completion path.
+_Avoid_: Initial status, launch status, Agent configuration
 
 **Agent Status Changed At**:
 The point in time when a **TC Agent**'s canonical **Agent Status** last changed from one value to another. Repeated **Events** that keep the same Agent Status do not move it.
