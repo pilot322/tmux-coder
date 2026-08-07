@@ -21,6 +21,7 @@ type Agent struct {
 	sessionID                int
 	kind                     string
 	model                    string
+	variant                  string
 	displayName              string
 	tmuxPaneID               string
 	paneOwned                bool
@@ -53,6 +54,7 @@ func (a *Agent) ProjectID() int                 { return a.projectID }
 func (a *Agent) SessionID() int                 { return a.sessionID }
 func (a *Agent) Kind() string                   { return a.kind }
 func (a *Agent) Model() string                  { return a.model }
+func (a *Agent) Variant() string                { return a.variant }
 func (a *Agent) DisplayName() string            { return a.displayName }
 func (a *Agent) TmuxPaneID() string             { return a.tmuxPaneID }
 func (a *Agent) PaneOwned() bool                { return a.paneOwned }
@@ -75,6 +77,7 @@ func (a *Agent) WithStatus(status AgentStatus, statusChangedAt ...time.Time) *Ag
 		sessionID:                a.sessionID,
 		kind:                     a.kind,
 		model:                    a.model,
+		variant:                  a.variant,
 		displayName:              a.displayName,
 		tmuxPaneID:               a.tmuxPaneID,
 		paneOwned:                a.paneOwned,
@@ -92,6 +95,7 @@ func (a *Agent) WithTmuxPaneID(paneID string) *Agent {
 		sessionID:                a.sessionID,
 		kind:                     a.kind,
 		model:                    a.model,
+		variant:                  a.variant,
 		displayName:              a.displayName,
 		tmuxPaneID:               paneID,
 		paneOwned:                a.paneOwned,
@@ -109,6 +113,7 @@ func (a *Agent) WithDisplayName(name string) *Agent {
 		sessionID:                a.sessionID,
 		kind:                     a.kind,
 		model:                    a.model,
+		variant:                  a.variant,
 		displayName:              name,
 		tmuxPaneID:               a.tmuxPaneID,
 		paneOwned:                a.paneOwned,
@@ -125,6 +130,12 @@ func (a *Agent) WithModel(model string) *Agent {
 	return &copy
 }
 
+func (a *Agent) WithVariant(variant string) *Agent {
+	copy := *a
+	copy.variant = variant
+	return &copy
+}
+
 func (a *Agent) WithChildProcessGroupID(pgid int) *Agent {
 	return &Agent{
 		id:                       a.id,
@@ -132,6 +143,7 @@ func (a *Agent) WithChildProcessGroupID(pgid int) *Agent {
 		sessionID:                a.sessionID,
 		kind:                     a.kind,
 		model:                    a.model,
+		variant:                  a.variant,
 		displayName:              a.displayName,
 		tmuxPaneID:               a.tmuxPaneID,
 		paneOwned:                a.paneOwned,
@@ -149,6 +161,7 @@ func (a *Agent) WithDiscordNotificationArmed(armed bool) *Agent {
 		sessionID:                a.sessionID,
 		kind:                     a.kind,
 		model:                    a.model,
+		variant:                  a.variant,
 		displayName:              a.displayName,
 		tmuxPaneID:               a.tmuxPaneID,
 		paneOwned:                a.paneOwned,

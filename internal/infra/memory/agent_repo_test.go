@@ -32,12 +32,15 @@ func TestMemoryAgentRepository_CreateAssignsID(t *testing.T) {
 
 func TestMemoryAgentRepositoryCreateRetainsRequestedModel(t *testing.T) {
 	r := memory.NewMemoryAgentRepository()
-	created, err := r.Create(context.Background(), domain.NewAgent(0, 1, 2, "opencode", "", "%1", true, domain.AgentStarting).WithModel("anthropic/claude-haiku"))
+	created, err := r.Create(context.Background(), domain.NewAgent(0, 1, 2, "opencode", "", "%1", true, domain.AgentStarting).WithModel("anthropic/claude-haiku").WithVariant("high"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if created.Model() != "anthropic/claude-haiku" {
 		t.Fatalf("Model = %q", created.Model())
+	}
+	if created.Variant() != "high" {
+		t.Fatalf("Variant = %q", created.Variant())
 	}
 }
 

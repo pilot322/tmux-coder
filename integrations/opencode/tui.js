@@ -10,6 +10,7 @@ import { appendFileSync } from "node:fs";
 const AGENT_ID = process.env.TMUX_CODER_AGENT_ID;
 const SETUP_REQUESTED = process.env.TMUX_CODER_AGENT_SETUP === "1";
 const REQUESTED_MODEL = process.env.TMUX_CODER_AGENT_MODEL ?? "";
+const REQUESTED_VARIANT = process.env.TMUX_CODER_AGENT_VARIANT ?? "";
 const DEBUG = process.env.TMUX_CODER_PLUGIN_DEBUG;
 const TESTED_OPENCODE_VERSION = "1.18.14";
 
@@ -77,6 +78,10 @@ async function reportSetupReady(api, setupURL) {
       }
 
       const displayName = model.name ?? modelID;
+	  const variants = Object.keys(model.variants ?? {});
+	  if (REQUESTED_VARIANT && !variants.includes(REQUESTED_VARIANT)) {
+		throw new Error(`requested variant ${REQUESTED_VARIANT} is unavailable for model ${REQUESTED_MODEL}`);
+	  }
       let displayMatches = 0;
       for (const candidateProvider of api.state.provider) {
         for (const [candidateID, candidate] of Object.entries(candidateProvider.models ?? {})) {
@@ -91,9 +96,10 @@ async function reportSetupReady(api, setupURL) {
 
       Object.assign(ready, {
         model: REQUESTED_MODEL,
+		...(REQUESTED_VARIANT ? { variant: REQUESTED_VARIANT } : {}),
         displayName,
         statePath: process.env.TMUX_CODER_OPENCODE_STATE_PATH ?? "",
-        hasVariants: Object.keys(model.variants ?? {}).length > 0,
+		hasVariants: variants.length > 0,
       });
     }
     await postSetupReady(setupURL, ready);

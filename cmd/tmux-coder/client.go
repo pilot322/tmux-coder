@@ -189,6 +189,7 @@ func runNew(ctx context.Context, args []string, getenv func(string) string, api 
 	kindSet := false
 	var displayName *string
 	var model *string
+	var variant *string
 	var prompt *string
 	var paneID *string
 	var sessionID *int
@@ -225,6 +226,13 @@ func runNew(ctx context.Context, args []string, getenv func(string) string, api 
 			}
 			v := args[i]
 			prompt = &v
+		case "--variant":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--variant requires a value")
+			}
+			v := args[i]
+			variant = &v
 		case "--session-id":
 			i++
 			if i >= len(args) {
@@ -256,8 +264,14 @@ func runNew(ctx context.Context, args []string, getenv func(string) string, api 
 		i++
 	}
 
-	if (model != nil || prompt != nil) && kind != "opencode" {
-		return fmt.Errorf("--model and --prompt are only supported for opencode")
+	if (model != nil || variant != nil || prompt != nil) && kind != "opencode" {
+		return fmt.Errorf("--model, --variant, and --prompt are only supported for opencode")
+	}
+	if variant != nil && model == nil {
+		return fmt.Errorf("--variant requires --model")
+	}
+	if variant != nil && (*variant == "" || strings.IndexFunc(*variant, func(r rune) bool { return r == ' ' || r == '\t' || r == '\n' || r == '\r' }) >= 0) {
+		return fmt.Errorf("--variant must be a non-empty OpenCode model variant")
 	}
 	if model != nil {
 		provider, modelID, ok := strings.Cut(*model, "/")
@@ -316,6 +330,7 @@ func runNew(ctx context.Context, args []string, getenv func(string) string, api 
 		SessionID:   *sessionID,
 		Kind:        kind,
 		Model:       model,
+		Variant:     variant,
 		Prompt:      prompt,
 		DisplayName: displayName,
 		TmuxPaneID:  paneID,
@@ -328,11 +343,14 @@ func runNew(ctx context.Context, args []string, getenv func(string) string, api 
 	// process becomes the wrapper for that pane's agent.
 	if paneID != nil {
 		extraEnv := []string{}
-		if model != nil || prompt != nil {
+		if model != nil || variant != nil || prompt != nil {
 			extraEnv = append(extraEnv, "TMUX_CODER_AGENT_SETUP=1")
 		}
 		if model != nil {
 			extraEnv = append(extraEnv, "TMUX_CODER_AGENT_MODEL="+*model)
+		}
+		if variant != nil {
+			extraEnv = append(extraEnv, "TMUX_CODER_AGENT_VARIANT="+*variant)
 		}
 		code := runAgentWrapper([]string{strconv.Itoa(agent.ID), kind}, daemonAddr, extraEnv...)
 		if code != 0 {

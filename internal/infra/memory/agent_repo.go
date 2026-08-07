@@ -27,6 +27,7 @@ func (r *MemoryAgentRepository) Create(ctx context.Context, a *domain.Agent) (*d
 	r.nextID++
 	stored := domain.NewAgent(id, a.ProjectID(), a.SessionID(), a.Kind(), a.DisplayName(), a.TmuxPaneID(), a.PaneOwned(), a.Status(), a.StatusChangedAt())
 	stored = stored.WithModel(a.Model())
+	stored = stored.WithVariant(a.Variant())
 	stored = stored.WithDiscordNotificationArmed(a.DiscordNotificationArmed())
 	if stored.DisplayName() == "" {
 		stored = stored.WithDisplayName(domain.DefaultAgentDisplayName(id, a.Kind()))

@@ -42,7 +42,7 @@ type fakeAPI struct {
 }
 
 func TestAgentListingsExposeRequestedModel(t *testing.T) {
-	a := httpclient.Agent{ID: 7, Kind: "opencode", DisplayName: "reviewer", Model: "anthropic/claude-haiku", Status: "idle"}
+	a := httpclient.Agent{ID: 7, Kind: "opencode", DisplayName: "reviewer", Model: "anthropic/claude-haiku", Variant: "high", Status: "idle"}
 	m := Model{}
 	labels := []string{
 		agentLabel(a),
@@ -52,6 +52,9 @@ func TestAgentListingsExposeRequestedModel(t *testing.T) {
 	for _, label := range labels {
 		if !strings.Contains(label, a.Model) {
 			t.Fatalf("listing %q does not contain model %q", label, a.Model)
+		}
+		if !strings.Contains(label, a.Variant) {
+			t.Fatalf("listing %q does not contain variant %q", label, a.Variant)
 		}
 	}
 }

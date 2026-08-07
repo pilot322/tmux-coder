@@ -28,6 +28,7 @@ type OpenCodeSetupTmuxGateway interface {
 
 type OpenCodeSetupReady struct {
 	Model       string
+	Variant     string
 	DisplayName string
 	StatePath   string
 	Version     string
@@ -36,8 +37,9 @@ type OpenCodeSetupReady struct {
 }
 
 type openCodeSetup struct {
-	model  string
-	prompt *string
+	model   string
+	variant string
+	prompt  *string
 
 	pane    chan string
 	state   chan string
@@ -68,14 +70,14 @@ func NewOpenCodeSetupCoordinator(tmux OpenCodeSetupTmuxGateway, log obs.Logger) 
 	}
 }
 
-func (c *OpenCodeSetupCoordinator) Register(agentID int, model string, prompt *string, paneID string) {
+func (c *OpenCodeSetupCoordinator) Register(agentID int, model, variant string, prompt *string, paneID string) {
 	var promptCopy *string
 	if prompt != nil {
 		value := *prompt
 		promptCopy = &value
 	}
 	setup := &openCodeSetup{
-		model: model, prompt: promptCopy,
+		model: model, variant: variant, prompt: promptCopy,
 		pane: make(chan string, 1), state: make(chan string, 1), ready: make(chan OpenCodeSetupReady, 1),
 		proceed: make(chan struct{}), opened: make(chan string, 1), done: make(chan struct{}),
 	}
@@ -231,6 +233,10 @@ func (c *OpenCodeSetupCoordinator) run(ctx context.Context, agentID int, setup *
 			c.finish(setup, fmt.Errorf("plugin reported unexpected isolated state path"))
 			return
 		}
+		if ready.Variant != setup.variant {
+			c.finish(setup, fmt.Errorf("plugin validated variant %q, requested %q", ready.Variant, setup.variant))
+			return
+		}
 	}
 
 	err := c.automate(ctx, paneID, setup, ready)
@@ -269,11 +275,20 @@ func (c *OpenCodeSetupCoordinator) automate(ctx context.Context, paneID string, 
 			return err
 		}
 		if ready.HasVariants {
-			if err := c.tmux.PasteLiteral(ctx, paneID, "Default"); err != nil {
-				return fmt.Errorf("enter default model variant: %w", err)
+			pickerValue := "Default"
+			verifiedVariant := "default"
+			if setup.variant != "" {
+				pickerValue = setup.variant
+				verifiedVariant = setup.variant
+			}
+			if err := c.tmux.PasteLiteral(ctx, paneID, pickerValue); err != nil {
+				return fmt.Errorf("enter model variant: %w", err)
 			}
 			if err := c.tmux.SendEnter(ctx, paneID); err != nil {
-				return fmt.Errorf("confirm default model variant: %w", err)
+				return fmt.Errorf("confirm model variant: %w", err)
+			}
+			if err := verifySelectedVariant(ctx, ready.StatePath, setup.model, verifiedVariant); err != nil {
+				return err
 			}
 		}
 	}
@@ -288,6 +303,26 @@ func (c *OpenCodeSetupCoordinator) automate(ctx context.Context, paneID string, 
 		}
 	}
 	return nil
+}
+
+func verifySelectedVariant(ctx context.Context, statePath, canonical, variant string) error {
+	modelPath := filepath.Join(statePath, "model.json")
+	for {
+		data, err := os.ReadFile(modelPath)
+		if err == nil {
+			var state struct {
+				Variant map[string]string `json:"variant"`
+			}
+			if json.Unmarshal(data, &state) == nil && state.Variant[canonical] == variant {
+				return nil
+			}
+		}
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("verify selected variant %q for model %q: %w", variant, canonical, ctx.Err())
+		case <-time.After(openCodeModelVerifyDelay):
+		}
+	}
 }
 
 func (c *OpenCodeSetupCoordinator) finish(setup *openCodeSetup, err error) {

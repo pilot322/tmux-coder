@@ -6,6 +6,7 @@ async function fixture(name, setup = {}) {
   const originalSetup = process.env.TMUX_CODER_AGENT_SETUP;
   const originalModel = process.env.TMUX_CODER_AGENT_MODEL;
   const originalStatePath = process.env.TMUX_CODER_OPENCODE_STATE_PATH;
+  const originalVariant = process.env.TMUX_CODER_AGENT_VARIANT;
   const originalFetch = globalThis.fetch;
   const reported = [];
   const setupBodies = [];
@@ -18,6 +19,8 @@ async function fixture(name, setup = {}) {
 	else delete process.env.TMUX_CODER_AGENT_SETUP;
 	if (setup.model) process.env.TMUX_CODER_AGENT_MODEL = setup.model;
 	else delete process.env.TMUX_CODER_AGENT_MODEL;
+	if (setup.variant) process.env.TMUX_CODER_AGENT_VARIANT = setup.variant;
+	else delete process.env.TMUX_CODER_AGENT_VARIANT;
 	if (setup.model) process.env.TMUX_CODER_OPENCODE_STATE_PATH = "/tmp/isolated/opencode";
 	else delete process.env.TMUX_CODER_OPENCODE_STATE_PATH;
   globalThis.fetch = async (_url, options) => {
@@ -65,6 +68,8 @@ async function fixture(name, setup = {}) {
 	  else process.env.TMUX_CODER_AGENT_MODEL = originalModel;
 	  if (originalStatePath === undefined) delete process.env.TMUX_CODER_OPENCODE_STATE_PATH;
 	  else process.env.TMUX_CODER_OPENCODE_STATE_PATH = originalStatePath;
+	  if (originalVariant === undefined) delete process.env.TMUX_CODER_AGENT_VARIANT;
+	  else process.env.TMUX_CODER_AGENT_VARIANT = originalVariant;
       globalThis.fetch = originalFetch;
     },
   };
@@ -102,6 +107,36 @@ test("fails closed when a picker display name is ambiguous", async () => {
   try {
 	assert.deepEqual(app.commands, []);
 	assert.match(app.setupBodies[0].error, /non-unique picker display name/);
+  } finally {
+	app.restore();
+  }
+});
+
+test("validates an exact requested model variant", async () => {
+  const app = await fixture("setup-variant", {
+	enabled: true,
+	model: "openai/gpt-5.6-luna",
+	variant: "high",
+	providers: [{ id: "openai", models: { "gpt-5.6-luna": { name: "GPT-5.6 Luna", variants: { low: {}, high: {} } } } }],
+  });
+  try {
+	assert.equal(app.setupBodies[0].variant, "high");
+	assert.equal(app.setupBodies[0].hasVariants, true);
+  } finally {
+	app.restore();
+  }
+});
+
+test("rejects a variant missing from the requested model", async () => {
+  const app = await fixture("setup-missing-variant", {
+	enabled: true,
+	model: "openai/gpt-5.6-luna",
+	variant: "impossible",
+	providers: [{ id: "openai", models: { "gpt-5.6-luna": { variants: { low: {}, high: {} } } } }],
+  });
+  try {
+	assert.match(app.setupBodies[0].error, /variant impossible is unavailable/);
+	assert.deepEqual(app.commands, []);
   } finally {
 	app.restore();
   }

@@ -18,20 +18,21 @@ preferences.
 
 ## Decision
 
-Model- and prompt-enabled OpenCode creation uses a dedicated Agent Startup Setup
-handshake, separate from Agent Status events. The TUI plugin validates an exact
-canonical provider/model catalog entry and a unique picker display name. The
-Daemon disables input before allowing the plugin to open the picker, enters
-literal values through tmux buffers, verifies the selected model, submits an
-optional prompt once, and restores input on every completion path.
+Model-, variant-, and prompt-enabled OpenCode creation uses a dedicated Agent
+Startup Setup handshake, separate from Agent Status events. The TUI plugin
+validates an exact canonical provider/model catalog entry, optional model
+variant, and a unique picker display name. The Daemon disables input before
+allowing the plugin to open the picker, enters literal values through tmux
+buffers, verifies the selected model and variant, submits an optional prompt
+once, and restores input on every completion path.
 
 The wrapper continues to launch `opencode attach` against the Daemon-owned
 shared server. For model selection only, it copies the user's OpenCode state to
 a private temporary `XDG_STATE_HOME`, removes the requested model from recents
 and its saved variant, and registers that exact local state path with the
 Daemon. The Daemon verifies selection from that path and explicitly chooses the
-Default variant when variants are available. The wrapper removes the state copy
-when the TC Agent exits; no changes are merged back.
+requested variant when present, or the Default variant otherwise. The wrapper
+removes the state copy when the TC Agent exits; no changes are merged back.
 
 Initial prompts exist only in the creation request and transient setup
 coordinator. They are never put in process arguments, shell commands, logs, the

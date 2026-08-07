@@ -110,10 +110,10 @@ func TestRunNewRejectsBadIntegerArgs(t *testing.T) {
 	}
 }
 
-func TestRunNewParsesOpenCodeModelAndPromptInBothForms(t *testing.T) {
+func TestRunNewParsesOpenCodeModelVariantAndPromptInBothForms(t *testing.T) {
 	for _, args := range [][]string{
-		{"--model", "anthropic/claude-haiku", "--prompt", "review this\ncarefully", "--session-id", "4"},
-		{"opencode", "--prompt", "review this\ncarefully", "--model", "anthropic/claude-haiku", "--session-id", "4"},
+		{"--model", "anthropic/claude-haiku", "--variant", "high", "--prompt", "review this\ncarefully", "--session-id", "4"},
+		{"opencode", "--prompt", "review this\ncarefully", "--variant", "high", "--model", "anthropic/claude-haiku", "--session-id", "4"},
 	} {
 		api := &fakeAgentAPI{sessions: []httpclient.Session{{ID: 4, ProjectID: 3}}}
 		if err := runNew(context.Background(), args, func(string) string { return "" }, api, "http://daemon"); err != nil {
@@ -121,6 +121,9 @@ func TestRunNewParsesOpenCodeModelAndPromptInBothForms(t *testing.T) {
 		}
 		if api.created.Model == nil || *api.created.Model != "anthropic/claude-haiku" {
 			t.Fatalf("model = %#v", api.created.Model)
+		}
+		if api.created.Variant == nil || *api.created.Variant != "high" {
+			t.Fatalf("variant = %#v", api.created.Variant)
 		}
 		if api.created.Prompt == nil || *api.created.Prompt != "review this\ncarefully" {
 			t.Fatalf("prompt = %#v", api.created.Prompt)
@@ -138,7 +141,10 @@ func TestRunNewRejectsInvalidOpenCodeSetupFlags(t *testing.T) {
 	}{
 		{[]string{"claude", "--model", "anthropic/claude-haiku"}, "only supported for opencode"},
 		{[]string{"claude", "--prompt", "hello"}, "only supported for opencode"},
+		{[]string{"claude", "--variant", "high", "--model", "anthropic/claude-haiku"}, "only supported for opencode"},
 		{[]string{"--model", "missing-slash"}, "provider/model"},
+		{[]string{"--variant", "high"}, "requires --model"},
+		{[]string{"--model", "anthropic/claude-haiku", "--variant", ""}, "non-empty"},
 		{[]string{"--prompt", ""}, "must not be empty"},
 	}
 	for _, tt := range tests {

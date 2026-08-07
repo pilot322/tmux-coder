@@ -21,6 +21,7 @@ type CreateAgentInput struct {
 	SessionID   int
 	Kind        string
 	Model       *string
+	Variant     *string
 	Prompt      *string
 	DisplayName *string
 	TmuxPaneID  *string
@@ -73,10 +74,10 @@ func (uc *CreateAgent) Execute(ctx context.Context, in CreateAgentInput) (Create
 	if !validAgentKind(in.Kind) {
 		return CreateAgentResult{}, fmt.Errorf("%w: kind must be an executable name", ErrValidation)
 	}
-	if err := validateOpenCodeSetup(in.Kind, in.Model, in.Prompt); err != nil {
+	if err := validateOpenCodeSetup(in.Kind, in.Model, in.Variant, in.Prompt); err != nil {
 		return CreateAgentResult{}, err
 	}
-	setupRequested := in.Model != nil || in.Prompt != nil
+	setupRequested := in.Model != nil || in.Variant != nil || in.Prompt != nil
 	if setupRequested && uc.setup == nil {
 		return CreateAgentResult{}, fmt.Errorf("%w: OpenCode startup setup is unavailable", ErrGateway)
 	}
@@ -149,6 +150,9 @@ func (uc *CreateAgent) Execute(ctx context.Context, in CreateAgentInput) (Create
 		if in.Model != nil {
 			candidate = candidate.WithModel(*in.Model)
 		}
+		if in.Variant != nil {
+			candidate = candidate.WithVariant(*in.Variant)
+		}
 		a, err := uc.agents.Create(ctx, candidate)
 		if err != nil {
 			return err
@@ -159,7 +163,7 @@ func (uc *CreateAgent) Execute(ctx context.Context, in CreateAgentInput) (Create
 		return CreateAgentResult{}, err
 	}
 	if setupRequested {
-		uc.setup.Register(agent.ID(), agent.Model(), in.Prompt, paneID)
+		uc.setup.Register(agent.ID(), agent.Model(), agent.Variant(), in.Prompt, paneID)
 	}
 
 	if paneOwned {
@@ -286,15 +290,24 @@ func agentEnvVars(agent *domain.Agent, daemonAddr string, setup bool) []string {
 	if agent.Model() != "" {
 		env = append(env, "TMUX_CODER_AGENT_MODEL="+agent.Model())
 	}
+	if agent.Variant() != "" {
+		env = append(env, "TMUX_CODER_AGENT_VARIANT="+agent.Variant())
+	}
 	return env
 }
 
-func validateOpenCodeSetup(kind string, model, prompt *string) error {
-	if (model != nil || prompt != nil) && kind != "opencode" {
-		return fmt.Errorf("%w: model and prompt are only supported for the opencode Agent Kind", ErrValidation)
+func validateOpenCodeSetup(kind string, model, variant, prompt *string) error {
+	if (model != nil || variant != nil || prompt != nil) && kind != "opencode" {
+		return fmt.Errorf("%w: model, variant, and prompt are only supported for the opencode Agent Kind", ErrValidation)
 	}
 	if model != nil && !validCanonicalModel(*model) {
 		return fmt.Errorf("%w: model must use canonical provider/model format", ErrValidation)
+	}
+	if variant != nil && model == nil {
+		return fmt.Errorf("%w: variant requires model", ErrValidation)
+	}
+	if variant != nil && (*variant == "" || strings.IndexFunc(*variant, unicode.IsSpace) != -1) {
+		return fmt.Errorf("%w: variant must be a non-empty OpenCode model variant", ErrValidation)
 	}
 	if prompt != nil && *prompt == "" {
 		return fmt.Errorf("%w: prompt must not be empty", ErrValidation)

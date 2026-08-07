@@ -115,15 +115,19 @@ Start an agent from inside a tmux-coder-managed session:
 ```sh
 tmux-coder new opencode --name frontend
 tmux-coder new --model anthropic/claude-haiku --prompt "Review the current changes"
+tmux-coder new --model openai/gpt-5.6-luna --variant high
 ```
 
 If no executable is given, `opencode` is used.
 
-OpenCode creation accepts a canonical `provider/model` through `--model` and a
-non-empty initial `--prompt`. Either option can be used alone. Model selection
-is verified before an initial prompt is submitted; startup failure stops the new
-agent rather than falling back to another model or dropping the prompt. These
-options are per creation and are not supported by other Agent Kinds.
+OpenCode creation accepts a canonical `provider/model` through `--model`, an
+OpenCode model variant through `--variant`, and a non-empty initial `--prompt`.
+`--variant` requires `--model`; model and prompt can otherwise be used alone.
+Model and variant selection are verified before an initial prompt is submitted.
+Omitting `--variant` selects OpenCode's Default variant. Startup failure stops
+the new agent rather than falling back to another model or variant or dropping
+the prompt. These options are per creation and are not supported by other Agent
+Kinds.
 
 `--session-id ID` targets any managed Session and derives its Project. Supplying
 `--project-id` as well validates that it matches. An explicit Session creates a

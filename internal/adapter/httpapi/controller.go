@@ -243,6 +243,7 @@ func (ac *AgentController) Create(w http.ResponseWriter, r *http.Request) {
 		SessionID:   req.SessionID,
 		Kind:        req.Kind,
 		Model:       req.Model,
+		Variant:     req.Variant,
 		Prompt:      req.Prompt,
 		DisplayName: req.DisplayName,
 		TmuxPaneID:  req.TmuxPaneID,
@@ -278,7 +279,7 @@ func (ac *AgentController) OpenCodeSetupReady(w http.ResponseWriter, r *http.Req
 		return
 	}
 	err = ac.setup.Ready(r.Context(), id, usecase.OpenCodeSetupReady{
-		Model: req.Model, DisplayName: req.DisplayName, StatePath: req.StatePath,
+		Model: req.Model, Variant: req.Variant, DisplayName: req.DisplayName, StatePath: req.StatePath,
 		Version: req.Version, HasVariants: req.HasVariants, Error: req.Error,
 	})
 	if err != nil {
@@ -612,6 +613,7 @@ func agentToDTO(a *domain.Agent) agentResponse {
 		SessionID:                a.SessionID(),
 		Kind:                     a.Kind(),
 		Model:                    a.Model(),
+		Variant:                  a.Variant(),
 		DisplayName:              a.DisplayName(),
 		TmuxPaneID:               a.TmuxPaneID(),
 		PaneOwned:                a.PaneOwned(),
@@ -629,6 +631,7 @@ func agentViewToDTO(v usecase.AgentView) agentResponse {
 		SessionID:                v.Agent.SessionID(),
 		Kind:                     v.Agent.Kind(),
 		Model:                    v.Agent.Model(),
+		Variant:                  v.Agent.Variant(),
 		DisplayName:              v.Agent.DisplayName(),
 		TmuxPaneID:               v.Agent.TmuxPaneID(),
 		PaneOwned:                v.Agent.PaneOwned(),
