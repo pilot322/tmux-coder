@@ -5,12 +5,18 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"strconv"
 	"strings"
+	"sync/atomic"
+	"time"
 
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
 var _ usecase.AgentTmuxGateway = (*TmuxGateway)(nil)
+var _ usecase.OpenCodeSetupTmuxGateway = (*TmuxGateway)(nil)
+
+var setupBufferID atomic.Uint64
 
 func (g *TmuxGateway) NewWindow(ctx context.Context, sessionName, windowName, workingDir, command string, env []string) (string, error) {
 	args := []string{"new-window", "-P", "-F", "#{pane_id}", "-t", sessionName, "-n", windowName, "-c", workingDir}
@@ -78,6 +84,52 @@ func (g *TmuxGateway) ListPanes(ctx context.Context, sessionName string) ([]stri
 		}
 	}
 	return result, nil
+}
+
+func (g *TmuxGateway) SetPaneInput(ctx context.Context, paneID string, enabled bool) error {
+	flag := "-d"
+	if enabled {
+		flag = "-e"
+	}
+	if _, err := g.run(ctx, "select-pane", flag, "-t", paneID); err != nil {
+		return fmt.Errorf("select-pane %s: %w", flag, err)
+	}
+	return nil
+}
+
+// PasteLiteral loads text over stdin so prompt contents never enter argv,
+// shell syntax, tmux key parsing, or structured command logs.
+func (g *TmuxGateway) PasteLiteral(ctx context.Context, paneID, text string) error {
+	buffer := "tmux-coder-setup-" + strconv.FormatUint(setupBufferID.Add(1), 10)
+	cmd := g.cmd(ctx, "load-buffer", "-b", buffer, "-")
+	cmd.Stdin = strings.NewReader(text)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("load-buffer: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	_, err := g.run(ctx,
+		"select-pane", "-e", "-t", paneID, ";",
+		"paste-buffer", "-p", "-d", "-b", buffer, "-t", paneID, ";",
+		"select-pane", "-d", "-t", paneID,
+	)
+	if err != nil {
+		cleanupCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		_, _ = g.run(cleanupCtx, "delete-buffer", "-b", buffer)
+		cancel()
+		return fmt.Errorf("paste-buffer: %w", err)
+	}
+	return nil
+}
+
+func (g *TmuxGateway) SendEnter(ctx context.Context, paneID string) error {
+	_, err := g.run(ctx,
+		"select-pane", "-e", "-t", paneID, ";",
+		"send-keys", "-t", paneID, "Enter", ";",
+		"select-pane", "-d", "-t", paneID,
+	)
+	if err != nil {
+		return fmt.Errorf("send Enter: %w", err)
+	}
+	return nil
 }
 
 func (g *TmuxGateway) cmd(ctx context.Context, args ...string) *exec.Cmd {

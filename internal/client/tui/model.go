@@ -968,6 +968,9 @@ func (m Model) agentRowLabel(a httpclient.Agent) string {
 	name = agentNameWithDiscordNotification(name, a)
 	icon := agentStatusStyle(a.Status).Render(agentStatusIcon(a.Status))
 	meta := m.agentSession(a)
+	if a.Model != "" {
+		meta += " · " + a.Model
+	}
 	if age := agentUpdatedAge(time.Now(), a.StatusChangedAt); age != "" {
 		meta += " · " + age
 	}
@@ -1703,6 +1706,9 @@ func (m Model) rowFilterSegments(r viewRow) []filterSeg {
 		ctx := ""
 		if r.agent.Status != "" {
 			ctx += "  " + r.agent.Status
+		}
+		if r.agent.Model != "" {
+			ctx += "  " + r.agent.Model
 		}
 		ctx += "  " + m.agentSession(r.agent)
 		if r.project.Title != "" {
@@ -2519,6 +2525,9 @@ func agentLabel(a httpclient.Agent) string {
 		name = fmt.Sprintf("agent-%d-%s", a.ID, a.Kind)
 	}
 	name = agentNameWithDiscordNotification(name, a)
+	if a.Model != "" {
+		name += " · " + a.Model
+	}
 	if a.Status == "" {
 		return name
 	}

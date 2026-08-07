@@ -70,7 +70,7 @@ func (a *fakeAgentAPI) AcquirePort(ctx context.Context, in httpclient.AcquirePor
 }
 
 func TestRunNewParsesExplicitIDsAndKind(t *testing.T) {
-	api := &fakeAgentAPI{}
+	api := &fakeAgentAPI{sessions: []httpclient.Session{{ID: 4, ProjectID: 3}}}
 	name := "reviewer"
 	err := runNew(context.Background(), []string{"claude", "--name", name, "--project-id", "3", "--session-id", "4"}, func(string) string { return "" }, api, "http://daemon")
 	if err != nil {
@@ -107,6 +107,65 @@ func TestRunNewRejectsBadIntegerArgs(t *testing.T) {
 	err := runNew(context.Background(), []string{"--project-id", "nope"}, func(string) string { return "" }, &fakeAgentAPI{}, "http://daemon")
 	if err == nil {
 		t.Fatal("expected error")
+	}
+}
+
+func TestRunNewParsesOpenCodeModelAndPromptInBothForms(t *testing.T) {
+	for _, args := range [][]string{
+		{"--model", "anthropic/claude-haiku", "--prompt", "review this\ncarefully", "--session-id", "4"},
+		{"opencode", "--prompt", "review this\ncarefully", "--model", "anthropic/claude-haiku", "--session-id", "4"},
+	} {
+		api := &fakeAgentAPI{sessions: []httpclient.Session{{ID: 4, ProjectID: 3}}}
+		if err := runNew(context.Background(), args, func(string) string { return "" }, api, "http://daemon"); err != nil {
+			t.Fatalf("runNew(%v): %v", args, err)
+		}
+		if api.created.Model == nil || *api.created.Model != "anthropic/claude-haiku" {
+			t.Fatalf("model = %#v", api.created.Model)
+		}
+		if api.created.Prompt == nil || *api.created.Prompt != "review this\ncarefully" {
+			t.Fatalf("prompt = %#v", api.created.Prompt)
+		}
+		if api.created.TmuxPaneID != nil {
+			t.Fatalf("explicit Session borrowed pane %#v", api.created.TmuxPaneID)
+		}
+	}
+}
+
+func TestRunNewRejectsInvalidOpenCodeSetupFlags(t *testing.T) {
+	tests := []struct {
+		args []string
+		want string
+	}{
+		{[]string{"claude", "--model", "anthropic/claude-haiku"}, "only supported for opencode"},
+		{[]string{"claude", "--prompt", "hello"}, "only supported for opencode"},
+		{[]string{"--model", "missing-slash"}, "provider/model"},
+		{[]string{"--prompt", ""}, "must not be empty"},
+	}
+	for _, tt := range tests {
+		err := runNew(context.Background(), tt.args, func(string) string { return "" }, &fakeAgentAPI{}, "http://daemon")
+		if err == nil || !strings.Contains(err.Error(), tt.want) {
+			t.Fatalf("runNew(%v) error = %v, want %q", tt.args, err, tt.want)
+		}
+	}
+}
+
+func TestRunNewExplicitSessionDerivesAndValidatesProject(t *testing.T) {
+	api := &fakeAgentAPI{sessions: []httpclient.Session{{ID: 8, ProjectID: 9}}}
+	if err := runNew(context.Background(), []string{"--session-id", "8"}, func(key string) string {
+		if key == "TMUX" {
+			return "/tmp/tmux"
+		}
+		return ""
+	}, api, "http://daemon"); err != nil {
+		t.Fatal(err)
+	}
+	if api.created.ProjectID != 9 || api.created.SessionID != 8 || api.created.TmuxPaneID != nil {
+		t.Fatalf("created = %#v", api.created)
+	}
+
+	err := runNew(context.Background(), []string{"--session-id", "8", "--project-id", "7"}, func(string) string { return "" }, api, "http://daemon")
+	if err == nil || !strings.Contains(err.Error(), "does not match") {
+		t.Fatalf("mismatch error = %v", err)
 	}
 }
 

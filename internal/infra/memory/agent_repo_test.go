@@ -30,6 +30,17 @@ func TestMemoryAgentRepository_CreateAssignsID(t *testing.T) {
 	}
 }
 
+func TestMemoryAgentRepositoryCreateRetainsRequestedModel(t *testing.T) {
+	r := memory.NewMemoryAgentRepository()
+	created, err := r.Create(context.Background(), domain.NewAgent(0, 1, 2, "opencode", "", "%1", true, domain.AgentStarting).WithModel("anthropic/claude-haiku"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if created.Model() != "anthropic/claude-haiku" {
+		t.Fatalf("Model = %q", created.Model())
+	}
+}
+
 func TestMemoryAgentRepository_CreatePreservesDiscordNotificationArmed(t *testing.T) {
 	ctx := context.Background()
 	r := memory.NewMemoryAgentRepository()

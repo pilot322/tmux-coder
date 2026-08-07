@@ -251,7 +251,7 @@ func TestClientListAgentsDecodesNotificationStateAndStatusChangedAt(t *testing.T
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"agents":[{"id":1,"projectId":2,"sessionId":3,"kind":"opencode","status":"waiting","statusChangedAt":"2026-06-17T10:00:00Z","discordNotificationArmed":true}]}`))
+		_, _ = w.Write([]byte(`{"agents":[{"id":1,"projectId":2,"sessionId":3,"kind":"opencode","model":"anthropic/claude-haiku","status":"waiting","statusChangedAt":"2026-06-17T10:00:00Z","discordNotificationArmed":true}]}`))
 	}))
 	defer server.Close()
 
@@ -261,8 +261,34 @@ func TestClientListAgentsDecodesNotificationStateAndStatusChangedAt(t *testing.T
 		t.Fatalf("ListAgents: %v", err)
 	}
 	want := time.Date(2026, 6, 17, 10, 0, 0, 0, time.UTC)
-	if len(agents) != 1 || !agents[0].StatusChangedAt.Equal(want) || !agents[0].DiscordNotificationArmed {
+	if len(agents) != 1 || agents[0].Model != "anthropic/claude-haiku" || !agents[0].StatusChangedAt.Equal(want) || !agents[0].DiscordNotificationArmed {
 		t.Fatalf("agents = %+v, want statusChangedAt %v and armed notification", agents, want)
+	}
+}
+
+func TestClientCreateAgentCarriesTransientPromptButOnlyDecodesModel(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if body["model"] != "anthropic/claude-haiku" || body["prompt"] != "literal '$HOME'\nsecond" {
+			t.Fatalf("request body = %#v", body)
+		}
+		w.WriteHeader(http.StatusCreated)
+		_, _ = w.Write([]byte(`{"id":7,"kind":"opencode","model":"anthropic/claude-haiku"}`))
+	}))
+	defer server.Close()
+	model := "anthropic/claude-haiku"
+	prompt := "literal '$HOME'\nsecond"
+	agent, err := httpclient.New(server.URL, server.Client()).CreateAgent(context.Background(), httpclient.CreateAgentInput{
+		ProjectID: 1, SessionID: 2, Kind: "opencode", Model: &model, Prompt: &prompt,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if agent.Model != model {
+		t.Fatalf("agent model = %q", agent.Model)
 	}
 }
 

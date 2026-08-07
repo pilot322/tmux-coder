@@ -35,6 +35,14 @@ func TestNewAgent_SetsFields(t *testing.T) {
 	}
 }
 
+func TestAgentModelSurvivesImmutableUpdates(t *testing.T) {
+	a := domain.NewAgent(1, 10, 20, "opencode", "agent", "%1", true, domain.AgentStarting).WithModel("anthropic/claude-haiku")
+	updated := a.WithStatus(domain.AgentIdle).WithTmuxPaneID("%2").WithDisplayName("renamed").WithChildProcessGroupID(42).WithDiscordNotificationArmed(true)
+	if updated.Model() != "anthropic/claude-haiku" {
+		t.Fatalf("Model = %q", updated.Model())
+	}
+}
+
 func TestWithStatus_ReturnsNewAgent(t *testing.T) {
 	a := domain.NewAgent(1, 10, 20, "opencode", "test", "%5", true, domain.AgentStarting)
 	b := a.WithStatus(domain.AgentRunning)

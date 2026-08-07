@@ -17,6 +17,10 @@ func NewRouter(pc *ProjectController, sc *SessionController, ac *AgentController
 	mux.HandleFunc("PATCH /agents/{id}", ac.Update)
 	mux.HandleFunc("PUT /agents/{id}/discord-notification", ac.SetDiscordNotification)
 	mux.HandleFunc("POST /agents/{id}/event", ac.Event)
+	mux.HandleFunc("POST /agents/{id}/opencode-setup/ready", ac.OpenCodeSetupReady)
+	mux.HandleFunc("POST /agents/{id}/opencode-setup/state", ac.SetOpenCodeSetupState)
+	mux.HandleFunc("POST /agents/{id}/opencode-setup/opened", ac.OpenCodeSetupOpened)
+	mux.HandleFunc("GET /agents/{id}/opencode-setup", ac.WaitOpenCodeSetup)
 	mux.HandleFunc("DELETE /agents/{id}", ac.Delete)
 	if len(resources) > 0 && resources[0] != nil {
 		mux.HandleFunc("POST /resources/ports/acquire", resources[0].AcquirePort)

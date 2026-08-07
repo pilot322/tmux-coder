@@ -41,6 +41,21 @@ type fakeAPI struct {
 	listAgentsCalls     int
 }
 
+func TestAgentListingsExposeRequestedModel(t *testing.T) {
+	a := httpclient.Agent{ID: 7, Kind: "opencode", DisplayName: "reviewer", Model: "anthropic/claude-haiku", Status: "idle"}
+	m := Model{}
+	labels := []string{
+		agentLabel(a),
+		m.agentRowLabel(a),
+		m.rowFilterText(viewRow{kind: rowAgent, agent: a}),
+	}
+	for _, label := range labels {
+		if !strings.Contains(label, a.Model) {
+			t.Fatalf("listing %q does not contain model %q", label, a.Model)
+		}
+	}
+}
+
 func (a *fakeAPI) ListProjects(context.Context) ([]httpclient.Project, error) {
 	a.listProjectsCalls++
 	return a.projects, a.listErr

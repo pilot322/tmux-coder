@@ -3,6 +3,8 @@ package agentwrapper_test
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"os"
 	"os/exec"
@@ -38,6 +40,12 @@ func (c *fakeClient) EnsureOpenCodeServer(ctx context.Context) (string, error) {
 	c.ensureCalls++
 	return c.serverURL, c.serverErr
 }
+
+func (c *fakeClient) WaitAgentSetup(context.Context, int) error { return nil }
+
+func (c *fakeClient) SendAgentSetupFailed(context.Context, int, string) error { return nil }
+
+func (c *fakeClient) SendAgentSetupState(context.Context, int, string) error { return nil }
 
 func TestRunOpencodeAttachesSharedServer(t *testing.T) {
 	script := writeExecutable(t, "opencode", "#!/bin/sh\nexit 0\n")
@@ -95,6 +103,64 @@ func TestRunOpencodeUsesConfiguredServerURL(t *testing.T) {
 	}
 	if client.ensureCalls != 0 {
 		t.Fatalf("EnsureOpenCodeServer calls = %d, want 0", client.ensureCalls)
+	}
+}
+
+func TestRunOpencodeUsesSeededDisposableModelState(t *testing.T) {
+	dir := t.TempDir()
+	sourceRoot := filepath.Join(dir, "state")
+	if err := os.MkdirAll(filepath.Join(sourceRoot, "opencode"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	initial := `{"recent":[{"providerID":"anthropic","modelID":"claude-haiku"},{"providerID":"other","modelID":"keep"}],"favorite":[{"providerID":"anthropic","modelID":"claude-haiku"}],"variant":{"other/keep":"high"}}`
+	if err := os.WriteFile(filepath.Join(sourceRoot, "opencode", "model.json"), []byte(initial), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(dir, "captured")
+	script := writeExecutable(t, "opencode", "#!/bin/sh\nprintf '%s\\n' \"$XDG_STATE_HOME\" > \"$MARKER\"\ncat \"$XDG_STATE_HOME/opencode/model.json\" >> \"$MARKER\"\n")
+	client := &fakeClient{started: make(chan int, 1)}
+	env := []string{
+		"XDG_STATE_HOME=" + sourceRoot,
+		"MARKER=" + marker,
+		"TMUX_CODER_OPENCODE_SERVER_URL=http://127.0.0.1:9876",
+		"TMUX_CODER_AGENT_SETUP=1",
+		"TMUX_CODER_AGENT_SETUP_OWNER=daemon",
+		"TMUX_CODER_AGENT_MODEL=anthropic/claude-haiku",
+	}
+	code := agentwrapper.Run(agentwrapper.RunConfig{
+		Args: []string{"7", "opencode"}, Env: env,
+		Stdout: &bytes.Buffer{}, Stderr: &bytes.Buffer{}, CommandContext: func(context.Context, string, ...string) *exec.Cmd {
+			return exec.Command(script)
+		},
+		NewClient: func(string, *http.Client) agentwrapper.AgentEventClient { return client },
+	})
+	if code != 0 {
+		t.Fatalf("exit code = %d", code)
+	}
+	captured, err := os.ReadFile(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, stateJSON, ok := strings.Cut(string(captured), "\n")
+	if !ok {
+		t.Fatalf("captured = %q", captured)
+	}
+	if _, err := os.Stat(root); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("isolated state root still exists: %v", err)
+	}
+	var state struct {
+		Recent   []map[string]string `json:"recent"`
+		Favorite []map[string]string `json:"favorite"`
+		Variant  map[string]string   `json:"variant"`
+	}
+	if err := json.Unmarshal([]byte(stateJSON), &state); err != nil {
+		t.Fatal(err)
+	}
+	if len(state.Recent) != 1 || state.Recent[0]["modelID"] != "keep" {
+		t.Fatalf("recent = %#v", state.Recent)
+	}
+	if len(state.Favorite) != 1 || state.Variant["other/keep"] != "high" || state.Variant["anthropic/claude-haiku"] != "" {
+		t.Fatalf("seeded state = %#v", state)
 	}
 }
 

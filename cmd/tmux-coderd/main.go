@@ -59,6 +59,7 @@ func main() {
 	processGw := processinfra.NewProcessGateway(logger)
 	notifier := desktopnotify.NewNotifier(desktopnotify.SoundEnabled(os.Getenv))
 	openCodeServer := opencodeserver.NewManager(logger, config.OpenCodeServerPort)
+	openCodeSetup := usecase.NewOpenCodeSetupCoordinator(gateway, logger)
 	discordNotifier := discordnotify.NewNotifier(config.DiscordWebhookNotify)
 
 	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gateway, git, state, state.Config(), logger)
@@ -67,7 +68,7 @@ func main() {
 	listSessions := usecase.NewGetSessions(state.Projects(), state.Sessions(), git, state, logger)
 	deleteSession := usecase.NewDeleteSessionWithLeases(state.Sessions(), state.Agents(), gateway, git, state, state.Leases(), logger)
 	createSession := usecase.NewCreateSessionWithSetupLifecycle(state.Projects(), state.Sessions(), gateway, git, state, hooks, state.Leases(), deleteSession, notifier, logger)
-	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), gateway, state, logger)
+	createAgent := usecase.NewCreateAgentWithOpenCodeSetup(state.Agents(), state.Projects(), state.Sessions(), gateway, processGw, state, logger, openCodeSetup)
 	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), gateway, state, logger)
 	renameAgent := usecase.NewRenameAgent(state.Agents(), state.Projects(), state.Sessions(), gateway, state, logger)
 	setAgentDiscordNotification := usecase.NewSetAgentDiscordNotification(state.Agents(), state.Projects(), state.Sessions(), config, state)
@@ -78,7 +79,7 @@ func main() {
 
 	controller := httpapi.NewProjectController(create, list, del)
 	sessionController := httpapi.NewSessionController(createSession, listSessions, deleteSession)
-	agentController := httpapi.NewAgentController(createAgent, listAgents, renameAgent, setAgentDiscordNotification, agentEvent, deleteAgent)
+	agentController := httpapi.NewAgentController(createAgent, listAgents, renameAgent, setAgentDiscordNotification, agentEvent, deleteAgent, openCodeSetup)
 	resourceController := httpapi.NewResourceController(acquirePort, ensureOpenCodeServer)
 	router := httpapi.NewRouter(controller, sessionController, agentController, resourceController)
 

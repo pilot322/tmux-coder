@@ -47,6 +47,7 @@ type Agent struct {
 	ProjectID                int       `json:"projectId"`
 	SessionID                int       `json:"sessionId"`
 	Kind                     string    `json:"kind"`
+	Model                    string    `json:"model,omitempty"`
 	DisplayName              string    `json:"displayName"`
 	TmuxPaneID               string    `json:"tmuxPaneId"`
 	PaneOwned                bool      `json:"paneOwned"`
@@ -62,6 +63,8 @@ type CreateAgentInput struct {
 	ProjectID   int     `json:"projectId"`
 	SessionID   int     `json:"sessionId"`
 	Kind        string  `json:"kind"`
+	Model       *string `json:"model,omitempty"`
+	Prompt      *string `json:"prompt,omitempty"`
 	DisplayName *string `json:"displayName,omitempty"`
 	TmuxPaneID  *string `json:"tmuxPaneId,omitempty"`
 }
@@ -359,6 +362,44 @@ func (c *Client) SendAgentEvent(ctx context.Context, id int, event string) error
 
 func (c *Client) SendAgentStarted(ctx context.Context, id int, childProcessGroupID int) error {
 	return c.sendAgentEvent(ctx, id, "started", &childProcessGroupID)
+}
+
+func (c *Client) WaitAgentSetup(ctx context.Context, id int) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, fmt.Sprintf("%s/agents/%d/opencode-setup", c.baseURL, id), nil)
+	if err != nil {
+		return err
+	}
+	return c.doJSON(req, http.StatusNoContent, nil)
+}
+
+func (c *Client) SendAgentSetupFailed(ctx context.Context, id int, message string) error {
+	body, err := json.Marshal(struct {
+		Error string `json:"error"`
+	}{Error: message})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/agents/%d/opencode-setup/ready", c.baseURL, id), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return c.doJSON(req, http.StatusNoContent, nil)
+}
+
+func (c *Client) SendAgentSetupState(ctx context.Context, id int, statePath string) error {
+	body, err := json.Marshal(struct {
+		StatePath string `json:"statePath"`
+	}{StatePath: statePath})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/agents/%d/opencode-setup/state", c.baseURL, id), bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	return c.doJSON(req, http.StatusNoContent, nil)
 }
 
 func (c *Client) sendAgentEvent(ctx context.Context, id int, event string, childProcessGroupID *int) error {

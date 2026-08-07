@@ -188,6 +188,8 @@ func runNew(ctx context.Context, args []string, getenv func(string) string, api 
 	kind := "opencode"
 	kindSet := false
 	var displayName *string
+	var model *string
+	var prompt *string
 	var paneID *string
 	var sessionID *int
 	var projectID *int
@@ -209,6 +211,20 @@ func runNew(ctx context.Context, args []string, getenv func(string) string, api 
 			}
 			v := args[i]
 			paneID = &v
+		case "--model":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--model requires a value")
+			}
+			v := args[i]
+			model = &v
+		case "--prompt":
+			i++
+			if i >= len(args) {
+				return fmt.Errorf("--prompt requires a value")
+			}
+			v := args[i]
+			prompt = &v
 		case "--session-id":
 			i++
 			if i >= len(args) {
@@ -240,26 +256,67 @@ func runNew(ctx context.Context, args []string, getenv func(string) string, api 
 		i++
 	}
 
-	if paneID == nil && getenv("TMUX") != "" {
+	if (model != nil || prompt != nil) && kind != "opencode" {
+		return fmt.Errorf("--model and --prompt are only supported for opencode")
+	}
+	if model != nil {
+		provider, modelID, ok := strings.Cut(*model, "/")
+		if !ok || provider == "" || modelID == "" || strings.IndexFunc(*model, func(r rune) bool { return r == ' ' || r == '\t' || r == '\n' || r == '\r' }) >= 0 {
+			return fmt.Errorf("--model must use canonical provider/model format")
+		}
+	}
+	if prompt != nil && *prompt == "" {
+		return fmt.Errorf("--prompt must not be empty")
+	}
+
+	explicitSession := sessionID != nil
+	if explicitSession {
+		sessions, err := api.ListSessions(ctx, httpclient.ListSessionsInput{})
+		if err != nil {
+			return fmt.Errorf("list sessions: %w", err)
+		}
+		var target *httpclient.Session
+		for i := range sessions {
+			if sessions[i].ID == *sessionID {
+				target = &sessions[i]
+				break
+			}
+		}
+		if target == nil {
+			return fmt.Errorf("session %d not found", *sessionID)
+		}
+		if projectID != nil && *projectID != target.ProjectID {
+			return fmt.Errorf("--project-id %d does not match session %d project %d", *projectID, *sessionID, target.ProjectID)
+		}
+		pid := target.ProjectID
+		projectID = &pid
+	} else {
+		sid, pid, err := currentManagedSession(ctx, getenv, api)
+		if err != nil {
+			return fmt.Errorf("tmux-coder new must run inside a tmux-coder session unless --session-id is provided: %w", err)
+		}
+		if projectID != nil && *projectID != pid {
+			return fmt.Errorf("--project-id %d does not match current session project %d", *projectID, pid)
+		}
+		sessionID = &sid
+		projectID = &pid
+	}
+
+	// An explicit Session always gets an owned window unless the caller also
+	// explicitly identifies a pane in that Session.
+	if !explicitSession && paneID == nil && getenv("TMUX") != "" {
 		pid := tmuxattach.CurrentPaneID(ctx, getenv)
 		if pid != "" {
 			paneID = &pid
 		}
 	}
 
-	if sessionID == nil || projectID == nil {
-		sid, pid, err := currentManagedSession(ctx, getenv, api)
-		if err != nil {
-			return fmt.Errorf("tmux-coder new must run inside a tmux-coder session unless --session-id and --project-id are provided: %w", err)
-		}
-		sessionID = &sid
-		projectID = &pid
-	}
-
 	agent, err := api.CreateAgent(ctx, httpclient.CreateAgentInput{
 		ProjectID:   *projectID,
 		SessionID:   *sessionID,
 		Kind:        kind,
+		Model:       model,
+		Prompt:      prompt,
 		DisplayName: displayName,
 		TmuxPaneID:  paneID,
 	})
@@ -270,7 +327,14 @@ func runNew(ctx context.Context, args []string, getenv func(string) string, api 
 	// When the user runs `tmux-coder new` inside an existing pane, this
 	// process becomes the wrapper for that pane's agent.
 	if paneID != nil {
-		code := runAgentWrapper([]string{strconv.Itoa(agent.ID), kind}, daemonAddr)
+		extraEnv := []string{}
+		if model != nil || prompt != nil {
+			extraEnv = append(extraEnv, "TMUX_CODER_AGENT_SETUP=1")
+		}
+		if model != nil {
+			extraEnv = append(extraEnv, "TMUX_CODER_AGENT_MODEL="+*model)
+		}
+		code := runAgentWrapper([]string{strconv.Itoa(agent.ID), kind}, daemonAddr, extraEnv...)
 		if code != 0 {
 			return agentWrapperExitError{code: code}
 		}

@@ -14,11 +14,12 @@ import (
 // supplied when the client itself is taking over the current pane; in the
 // hidden-subcommand path the daemon address is already present in the
 // environment set by tmux or the caller.
-func runAgentWrapper(args []string, daemonAddr string) int {
+func runAgentWrapper(args []string, daemonAddr string, extraEnv ...string) int {
 	env := os.Environ()
 	if daemonAddr != "" {
 		env = agentwrapper.WithEnv(env, fmt.Sprintf("TMUX_CODERD_ADDR=%s", daemonAddr))
 	}
+	env = agentwrapper.WithEnv(env, extraEnv...)
 
 	return agentwrapper.Run(agentwrapper.RunConfig{
 		Args:           args,

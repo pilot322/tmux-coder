@@ -20,6 +20,7 @@ type Agent struct {
 	projectID                int
 	sessionID                int
 	kind                     string
+	model                    string
 	displayName              string
 	tmuxPaneID               string
 	paneOwned                bool
@@ -51,6 +52,7 @@ func (a *Agent) ID() int                        { return a.id }
 func (a *Agent) ProjectID() int                 { return a.projectID }
 func (a *Agent) SessionID() int                 { return a.sessionID }
 func (a *Agent) Kind() string                   { return a.kind }
+func (a *Agent) Model() string                  { return a.model }
 func (a *Agent) DisplayName() string            { return a.displayName }
 func (a *Agent) TmuxPaneID() string             { return a.tmuxPaneID }
 func (a *Agent) PaneOwned() bool                { return a.paneOwned }
@@ -72,6 +74,7 @@ func (a *Agent) WithStatus(status AgentStatus, statusChangedAt ...time.Time) *Ag
 		projectID:                a.projectID,
 		sessionID:                a.sessionID,
 		kind:                     a.kind,
+		model:                    a.model,
 		displayName:              a.displayName,
 		tmuxPaneID:               a.tmuxPaneID,
 		paneOwned:                a.paneOwned,
@@ -88,6 +91,7 @@ func (a *Agent) WithTmuxPaneID(paneID string) *Agent {
 		projectID:                a.projectID,
 		sessionID:                a.sessionID,
 		kind:                     a.kind,
+		model:                    a.model,
 		displayName:              a.displayName,
 		tmuxPaneID:               paneID,
 		paneOwned:                a.paneOwned,
@@ -104,6 +108,7 @@ func (a *Agent) WithDisplayName(name string) *Agent {
 		projectID:                a.projectID,
 		sessionID:                a.sessionID,
 		kind:                     a.kind,
+		model:                    a.model,
 		displayName:              name,
 		tmuxPaneID:               a.tmuxPaneID,
 		paneOwned:                a.paneOwned,
@@ -114,12 +119,19 @@ func (a *Agent) WithDisplayName(name string) *Agent {
 	}
 }
 
+func (a *Agent) WithModel(model string) *Agent {
+	copy := *a
+	copy.model = model
+	return &copy
+}
+
 func (a *Agent) WithChildProcessGroupID(pgid int) *Agent {
 	return &Agent{
 		id:                       a.id,
 		projectID:                a.projectID,
 		sessionID:                a.sessionID,
 		kind:                     a.kind,
+		model:                    a.model,
 		displayName:              a.displayName,
 		tmuxPaneID:               a.tmuxPaneID,
 		paneOwned:                a.paneOwned,
@@ -136,6 +148,7 @@ func (a *Agent) WithDiscordNotificationArmed(armed bool) *Agent {
 		projectID:                a.projectID,
 		sessionID:                a.sessionID,
 		kind:                     a.kind,
+		model:                    a.model,
 		displayName:              a.displayName,
 		tmuxPaneID:               a.tmuxPaneID,
 		paneOwned:                a.paneOwned,

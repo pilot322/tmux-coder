@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -105,6 +106,7 @@ type AgentController struct {
 	setDiscordNotification *usecase.SetAgentDiscordNotification
 	event                  *usecase.AgentEvent
 	delete                 *usecase.DeleteAgent
+	setup                  *usecase.OpenCodeSetupCoordinator
 }
 
 type ResourceController struct {
@@ -112,8 +114,12 @@ type ResourceController struct {
 	ensureOpenCodeServer *usecase.EnsureOpenCodeServer
 }
 
-func NewAgentController(c *usecase.CreateAgent, l *usecase.GetAgents, u *usecase.RenameAgent, n *usecase.SetAgentDiscordNotification, e *usecase.AgentEvent, d *usecase.DeleteAgent) *AgentController {
-	return &AgentController{create: c, list: l, update: u, setDiscordNotification: n, event: e, delete: d}
+func NewAgentController(c *usecase.CreateAgent, l *usecase.GetAgents, u *usecase.RenameAgent, n *usecase.SetAgentDiscordNotification, e *usecase.AgentEvent, d *usecase.DeleteAgent, setup ...*usecase.OpenCodeSetupCoordinator) *AgentController {
+	controller := &AgentController{create: c, list: l, update: u, setDiscordNotification: n, event: e, delete: d}
+	if len(setup) > 0 {
+		controller.setup = setup[0]
+	}
+	return controller
 }
 
 func NewResourceController(acquirePort *usecase.AcquirePort, ensureOpenCodeServer *usecase.EnsureOpenCodeServer) *ResourceController {
@@ -236,6 +242,8 @@ func (ac *AgentController) Create(w http.ResponseWriter, r *http.Request) {
 		ProjectID:   req.ProjectID,
 		SessionID:   req.SessionID,
 		Kind:        req.Kind,
+		Model:       req.Model,
+		Prompt:      req.Prompt,
 		DisplayName: req.DisplayName,
 		TmuxPaneID:  req.TmuxPaneID,
 		DaemonAddr:  daemonAddr,
@@ -252,6 +260,113 @@ func (ac *AgentController) Create(w http.ResponseWriter, r *http.Request) {
 		MainSessionName:     result.MainSessionName,
 		MainTmuxSessionName: result.MainTmuxSessionName,
 	}))
+}
+
+func (ac *AgentController) OpenCodeSetupReady(w http.ResponseWriter, r *http.Request) {
+	if ac.setup == nil {
+		writeError(w, http.StatusNotFound, "agent startup setup is unavailable")
+		return
+	}
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "id must be an integer")
+		return
+	}
+	var req openCodeSetupReadyRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	err = ac.setup.Ready(r.Context(), id, usecase.OpenCodeSetupReady{
+		Model: req.Model, DisplayName: req.DisplayName, StatePath: req.StatePath,
+		Version: req.Version, HasVariants: req.HasVariants, Error: req.Error,
+	})
+	if err != nil {
+		if errors.Is(err, usecase.ErrAgentSetupNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+		} else {
+			writeError(w, http.StatusConflict, err.Error())
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (ac *AgentController) SetOpenCodeSetupState(w http.ResponseWriter, r *http.Request) {
+	if ac.setup == nil {
+		writeError(w, http.StatusNotFound, "agent startup setup is unavailable")
+		return
+	}
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "id must be an integer")
+		return
+	}
+	var req openCodeSetupStateRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.StatePath == "" {
+		writeError(w, http.StatusBadRequest, "statePath is required")
+		return
+	}
+	if err := ac.setup.SetStatePath(id, req.StatePath); err != nil {
+		if errors.Is(err, usecase.ErrAgentSetupNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+		} else {
+			writeError(w, http.StatusConflict, err.Error())
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (ac *AgentController) OpenCodeSetupOpened(w http.ResponseWriter, r *http.Request) {
+	if ac.setup == nil {
+		writeError(w, http.StatusNotFound, "agent startup setup is unavailable")
+		return
+	}
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "id must be an integer")
+		return
+	}
+	var req openCodeSetupOpenedRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if err := ac.setup.Opened(id, req.Error); err != nil {
+		if errors.Is(err, usecase.ErrAgentSetupNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+		} else {
+			writeError(w, http.StatusConflict, err.Error())
+		}
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (ac *AgentController) WaitOpenCodeSetup(w http.ResponseWriter, r *http.Request) {
+	if ac.setup == nil {
+		writeError(w, http.StatusNotFound, "agent startup setup is unavailable")
+		return
+	}
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "id must be an integer")
+		return
+	}
+	if err := ac.setup.Wait(r.Context(), id); err != nil {
+		if r.Context().Err() == nil {
+			ac.setup.Forget(id)
+		}
+		if errors.Is(err, usecase.ErrAgentSetupNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+		} else {
+			writeError(w, http.StatusInternalServerError, err.Error())
+		}
+		return
+	}
+	ac.setup.Forget(id)
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (rc *ResourceController) AcquirePort(w http.ResponseWriter, r *http.Request) {
@@ -386,6 +501,10 @@ func (ac *AgentController) Event(w http.ResponseWriter, r *http.Request) {
 		writeUsecaseError(w, err)
 		return
 	}
+	if req.Event == "exited" && ac.setup != nil {
+		ac.setup.Cancel(id)
+		ac.setup.Forget(id)
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -394,6 +513,10 @@ func (ac *AgentController) Delete(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		writeError(w, http.StatusBadRequest, "id must be an integer")
 		return
+	}
+	if ac.setup != nil {
+		ac.setup.Cancel(id)
+		ac.setup.Forget(id)
 	}
 	if err := ac.delete.Execute(r.Context(), id); err != nil {
 		writeUsecaseError(w, err)
@@ -488,6 +611,7 @@ func agentToDTO(a *domain.Agent) agentResponse {
 		ProjectID:                a.ProjectID(),
 		SessionID:                a.SessionID(),
 		Kind:                     a.Kind(),
+		Model:                    a.Model(),
 		DisplayName:              a.DisplayName(),
 		TmuxPaneID:               a.TmuxPaneID(),
 		PaneOwned:                a.PaneOwned(),
@@ -504,6 +628,7 @@ func agentViewToDTO(v usecase.AgentView) agentResponse {
 		ProjectID:                v.Agent.ProjectID(),
 		SessionID:                v.Agent.SessionID(),
 		Kind:                     v.Agent.Kind(),
+		Model:                    v.Agent.Model(),
 		DisplayName:              v.Agent.DisplayName(),
 		TmuxPaneID:               v.Agent.TmuxPaneID(),
 		PaneOwned:                v.Agent.PaneOwned(),

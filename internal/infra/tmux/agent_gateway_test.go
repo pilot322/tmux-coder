@@ -87,6 +87,43 @@ func TestNewWindowAppliesServerLabelOnce(t *testing.T) {
 	}
 }
 
+func TestPasteLiteralUsesStdinWithoutPuttingPromptInArguments(t *testing.T) {
+	dir := t.TempDir()
+	argsPath := filepath.Join(dir, "args")
+	contentPath := filepath.Join(dir, "content")
+	binary := filepath.Join(dir, "tmux")
+	script := `#!/bin/sh
+printf '%s\n' "$@" >> "$TMUX_CODER_FAKE_TMUX_ARGS"
+if [ "$3" = "load-buffer" ]; then
+  cat > "$TMUX_CODER_FAKE_TMUX_CONTENT"
+fi
+`
+	if err := os.WriteFile(binary, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("TMUX_CODER_FAKE_TMUX_ARGS", argsPath)
+	t.Setenv("TMUX_CODER_FAKE_TMUX_CONTENT", contentPath)
+	g := &TmuxGateway{binary: binary, serverLabel: "test", log: obs.Nop()}
+	prompt := "quotes '$HOME' ; λ\nsecond line"
+	if err := g.PasteLiteral(context.Background(), "%4", prompt); err != nil {
+		t.Fatal(err)
+	}
+	args, err := os.ReadFile(argsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(args), prompt) || strings.Contains(string(args), "$HOME") {
+		t.Fatalf("prompt leaked into tmux arguments: %q", args)
+	}
+	content, err := os.ReadFile(contentPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(content) != prompt {
+		t.Fatalf("content = %q, want %q", content, prompt)
+	}
+}
+
 func fakeTmuxGateway(t *testing.T) *TmuxGateway {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "tmux")

@@ -88,6 +88,8 @@ type createAgentRequest struct {
 	ProjectID   int     `json:"projectId"`
 	SessionID   int     `json:"sessionId"`
 	Kind        string  `json:"kind"`
+	Model       *string `json:"model"`
+	Prompt      *string `json:"prompt"`
 	DisplayName *string `json:"displayName"`
 	TmuxPaneID  *string `json:"tmuxPaneId"`
 }
@@ -105,6 +107,7 @@ type agentResponse struct {
 	ProjectID                int             `json:"projectId"`
 	SessionID                int             `json:"sessionId"`
 	Kind                     string          `json:"kind"`
+	Model                    string          `json:"model,omitempty"`
 	DisplayName              string          `json:"displayName"`
 	TmuxPaneID               string          `json:"tmuxPaneId"`
 	PaneOwned                bool            `json:"paneOwned"`
@@ -123,4 +126,21 @@ type agentsResponse struct {
 type agentEventRequest struct {
 	Event               string `json:"event"`
 	ChildProcessGroupID *int   `json:"childProcessGroupId,omitempty"`
+}
+
+type openCodeSetupReadyRequest struct {
+	Model       string `json:"model"`
+	DisplayName string `json:"displayName"`
+	StatePath   string `json:"statePath"`
+	Version     string `json:"version"`
+	HasVariants bool   `json:"hasVariants"`
+	Error       string `json:"error"`
+}
+
+type openCodeSetupStateRequest struct {
+	StatePath string `json:"statePath"`
+}
+
+type openCodeSetupOpenedRequest struct {
+	Error string `json:"error"`
 }
