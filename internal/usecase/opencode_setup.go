@@ -23,6 +23,7 @@ var ErrAgentSetupNotFound = errors.New("agent startup setup not found")
 type OpenCodeSetupTmuxGateway interface {
 	SetPaneInput(ctx context.Context, paneID string, enabled bool) error
 	PasteLiteral(ctx context.Context, paneID, text string) error
+	ConfirmPickerSelection(ctx context.Context, paneID string) error
 	SendEnter(ctx context.Context, paneID string) error
 }
 
@@ -268,7 +269,7 @@ func (c *OpenCodeSetupCoordinator) automate(ctx context.Context, paneID string, 
 		if err := c.tmux.PasteLiteral(ctx, paneID, ready.DisplayName); err != nil {
 			return fmt.Errorf("enter model picker value: %w", err)
 		}
-		if err := c.tmux.SendEnter(ctx, paneID); err != nil {
+		if err := c.tmux.ConfirmPickerSelection(ctx, paneID); err != nil {
 			return fmt.Errorf("confirm model picker value: %w", err)
 		}
 		if err := verifySelectedModel(ctx, ready.StatePath, setup.model); err != nil {
@@ -284,7 +285,7 @@ func (c *OpenCodeSetupCoordinator) automate(ctx context.Context, paneID string, 
 			if err := c.tmux.PasteLiteral(ctx, paneID, pickerValue); err != nil {
 				return fmt.Errorf("enter model variant: %w", err)
 			}
-			if err := c.tmux.SendEnter(ctx, paneID); err != nil {
+			if err := c.tmux.ConfirmPickerSelection(ctx, paneID); err != nil {
 				return fmt.Errorf("confirm model variant: %w", err)
 			}
 			if err := verifySelectedVariant(ctx, ready.StatePath, setup.model, verifiedVariant); err != nil {

@@ -14,12 +14,13 @@ import (
 )
 
 type setupTmuxFake struct {
-	calls      []string
-	statePath  string
-	model      string
-	variant    string
-	enterCount int
-	pasteErr   error
+	calls                   []string
+	statePath               string
+	model                   string
+	variant                 string
+	enterCount              int
+	pasteErr                error
+	requiresPickerSelection bool
 }
 
 func (f *setupTmuxFake) SetPaneInput(_ context.Context, _ string, enabled bool) error {
@@ -33,8 +34,20 @@ func (f *setupTmuxFake) PasteLiteral(_ context.Context, _ string, text string) e
 }
 
 func (f *setupTmuxFake) SendEnter(_ context.Context, _ string) error {
-	f.enterCount++
 	f.calls = append(f.calls, "enter")
+	if f.requiresPickerSelection {
+		return nil
+	}
+	return f.confirmPickerSelection()
+}
+
+func (f *setupTmuxFake) ConfirmPickerSelection(_ context.Context, _ string) error {
+	f.calls = append(f.calls, "confirm-picker")
+	return f.confirmPickerSelection()
+}
+
+func (f *setupTmuxFake) confirmPickerSelection() error {
+	f.enterCount++
 	if f.enterCount == 1 && f.model != "" {
 		provider, model, _ := strings.Cut(f.model, "/")
 		data := []byte(`{"recent":[{"providerID":"` + provider + `","modelID":"` + model + `"}]}`)
@@ -77,8 +90,42 @@ func TestOpenCodeSetupOrdersModelVerificationBeforeLiteralPrompt(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []string{
-		"input:off", "paste:Claude Haiku", "enter", "paste:Default", "enter", "paste:" + prompt, "enter", "input:on",
+		"input:off", "paste:Claude Haiku", "confirm-picker", "paste:Default", "confirm-picker", "paste:" + prompt, "enter", "input:on",
 	}
+	if !reflect.DeepEqual(fake.calls, want) {
+		t.Fatalf("calls = %#v, want %#v", fake.calls, want)
+	}
+}
+
+func TestOpenCodeSetupExplicitlySelectsFilteredModel(t *testing.T) {
+	statePath := t.TempDir()
+	fake := &setupTmuxFake{
+		statePath:               statePath,
+		model:                   "openai/gpt-5.6-luna-fast",
+		requiresPickerSelection: true,
+	}
+	coordinator := NewOpenCodeSetupCoordinator(fake, obs.Nop())
+	coordinator.timeout = 100 * time.Millisecond
+	coordinator.Register(12, fake.model, "", nil, "%9")
+	if err := coordinator.SetStatePath(12, statePath); err != nil {
+		t.Fatal(err)
+	}
+	readyDone := make(chan error, 1)
+	go func() {
+		readyDone <- coordinator.Ready(context.Background(), 12, OpenCodeSetupReady{
+			Model: fake.model, DisplayName: "GPT-5.6 Luna Fast", StatePath: statePath, Version: "1.18.15",
+		})
+	}()
+	if err := <-readyDone; err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Opened(12, ""); err != nil {
+		t.Fatal(err)
+	}
+	if err := coordinator.Wait(context.Background(), 12); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"input:off", "paste:GPT-5.6 Luna Fast", "confirm-picker", "input:on"}
 	if !reflect.DeepEqual(fake.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", fake.calls, want)
 	}
@@ -188,7 +235,7 @@ func TestOpenCodeSetupSelectsAndVerifiesRequestedVariant(t *testing.T) {
 	if err := coordinator.Wait(context.Background(), 11); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"input:off", "paste:GPT-5.6 Luna", "enter", "paste:high", "enter", "input:on"}
+	want := []string{"input:off", "paste:GPT-5.6 Luna", "confirm-picker", "paste:high", "confirm-picker", "input:on"}
 	if !reflect.DeepEqual(fake.calls, want) {
 		t.Fatalf("calls = %#v, want %#v", fake.calls, want)
 	}
