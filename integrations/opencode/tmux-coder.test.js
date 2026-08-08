@@ -12,6 +12,7 @@ async function fixture(name, setup = {}) {
   const reported = [];
   const setupBodies = [];
   const commands = [];
+  const permissionReplies = [];
   const handlers = new Map();
   const route = { name: "session", params: { sessionID: "primary" } };
 
@@ -49,6 +50,14 @@ async function fixture(name, setup = {}) {
 	  provider: setup.providers ?? [],
 	},
 	keymap: { dispatchCommand(command) { commands.push(command); } },
+	client: {
+	  permission: {
+		reply(input) {
+		  permissionReplies.push(input);
+		  return Promise.resolve({ data: true });
+		},
+	  },
+	},
 	ui: { toast() {} },
   };
   await module.TmuxCoderStatus(api);
@@ -58,6 +67,7 @@ async function fixture(name, setup = {}) {
     reported,
 	setupBodies,
 	commands,
+	permissionReplies,
     route,
     emit(type, properties) {
       handlers.get(type)?.({ type, properties });
@@ -80,10 +90,33 @@ async function fixture(name, setup = {}) {
   };
 }
 
-test("enables OpenCode auto-approve mode for a yolo agent", async () => {
+test("auto-approves permissions only for a yolo agent's session", async () => {
   const app = await fixture("yolo", { yolo: true });
   try {
-	assert.deepEqual(app.commands, ["permission.mode"]);
+	app.emit("permission.asked", { id: "root-permission", sessionID: "primary" });
+	assert.deepEqual(app.commands, []);
+	assert.deepEqual(app.permissionReplies, [{ requestID: "root-permission", reply: "once" }]);
+  } finally {
+	app.restore();
+  }
+});
+
+test("does not auto-approve an unrelated agent's permission", async () => {
+  const app = await fixture("yolo-unrelated", { yolo: true });
+  try {
+	app.emit("permission.asked", { id: "other-permission", sessionID: "other" });
+	assert.deepEqual(app.permissionReplies, []);
+  } finally {
+	app.restore();
+  }
+});
+
+test("auto-approves permissions for a yolo agent's descendants", async () => {
+  const app = await fixture("yolo-descendant", { yolo: true });
+  try {
+	app.emit("session.created", { info: { id: "child", parentID: "primary" } });
+	app.emit("permission.asked", { id: "child-permission", sessionID: "child" });
+	assert.deepEqual(app.permissionReplies, [{ requestID: "child-permission", reply: "once" }]);
   } finally {
 	app.restore();
   }

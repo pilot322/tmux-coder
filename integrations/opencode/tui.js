@@ -196,17 +196,18 @@ export async function TmuxCoderStatus(api) {
   }
 
   await reportSetupReady(api, setupURL);
-  if (YOLO) {
-    await waitForState(api);
-    if (api.keymap?.dispatchCommand) api.keymap.dispatchCommand("permission.mode");
-    else if (api.command?.trigger) api.command.trigger("permission.mode");
-    else throw new Error("OpenCode TUI permission mode API is unavailable");
-  }
   report("idle");
 
   onSessionTopology("session.created");
   onSessionTopology("session.updated");
   onSessionTopology("session.deleted");
+
+  if (YOLO) {
+	api.event.on("permission.asked", (event) => {
+	  if (!isRelated(eventSessionID(event))) return;
+	  void api.client.permission.reply({ requestID: event.properties.id, reply: "once" });
+	});
+  }
 
   on("session.status", (event) => {
     const sessionID = event.properties.sessionID;
