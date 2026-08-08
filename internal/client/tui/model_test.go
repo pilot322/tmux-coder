@@ -636,6 +636,20 @@ func TestModelAgentsViewRendersAgentRows(t *testing.T) {
 	}
 }
 
+func TestModelAgentsViewColorsOwningSessionByType(t *testing.T) {
+	m := loaded(t, listMsg{
+		projects: []httpclient.Project{{ID: 1, Title: "API", MainSessionName: "api-main"}},
+		sessions: []httpclient.Session{{ID: 10, ProjectID: 1, SessionName: "api-main", Type: "main"}},
+		agents:   []httpclient.Agent{{ID: 20, ProjectID: 1, SessionID: 10, DisplayName: "reviewer", Status: "running"}},
+	})
+
+	label := m.agentRowLabel(m.agents[0])
+	want := mutedStyle.Render(" · ") + mainStyle.Render("api-main")
+	if !strings.Contains(label, want) {
+		t.Fatalf("agent row should render its owning session in the main-session color: %q", label)
+	}
+}
+
 func TestModelAgentsViewRendersUpdatedAge(t *testing.T) {
 	m := loaded(t, listMsg{
 		projects: []httpclient.Project{{ID: 1, Title: "API", MainSessionName: "api-main"}},

@@ -1003,14 +1003,16 @@ func (m Model) agentRowLabel(a httpclient.Agent) string {
 	}
 	name = agentNameWithDiscordNotification(name, a)
 	icon := agentStatusStyle(a.Status).Render(agentStatusIcon(a.Status))
-	meta := m.agentSession(a)
+	session := m.agentSession(a)
+	meta := ""
 	if a.Model != "" {
-		meta += " · " + agentModelLabel(a)
+		meta += mutedStyle.Render(" · " + agentModelLabel(a))
 	}
 	if age := agentUpdatedAge(time.Now(), a.StatusChangedAt); age != "" {
-		meta += " · " + age
+		meta += mutedStyle.Render(" · " + age)
 	}
-	return icon + " " + name + mutedStyle.Render(" · "+meta)
+	return icon + " " + name + mutedStyle.Render(" · ") +
+		sessionStyle(session, m.sessionDepth(session)).Render(sessionName(session)) + meta
 }
 
 func agentUpdatedAge(now, updatedAt time.Time) string {
@@ -1030,11 +1032,11 @@ func agentUpdatedAge(now, updatedAt time.Time) string {
 	return fmt.Sprintf("%dd", int(elapsed/(24*time.Hour)))
 }
 
-func (m Model) agentSession(a httpclient.Agent) string {
+func (m Model) agentSession(a httpclient.Agent) httpclient.Session {
 	if s, ok := m.sessionByID(a.SessionID); ok {
-		return sessionName(s)
+		return s
 	}
-	return sessionName(a.Session)
+	return a.Session
 }
 
 func pluralize(n int, word string) string {
@@ -1780,22 +1782,25 @@ func (m Model) rowFilterSegments(r viewRow) []filterSeg {
 			name = fmt.Sprintf("agent-%d", r.agent.ID)
 		}
 		name = agentNameWithDiscordNotification(name, r.agent)
-		ctx := ""
-		if r.agent.Status != "" {
-			ctx += "  " + r.agent.Status
-		}
-		if r.agent.Model != "" {
-			ctx += "  " + agentModelLabel(r.agent)
-		}
-		ctx += "  " + m.agentSession(r.agent)
-		if r.project.Title != "" {
-			ctx += "  " + r.project.Title
-		}
-		return []filterSeg{
+		segs := []filterSeg{
 			{agentStatusIcon(r.agent.Status) + " ", agentStatusStyle(r.agent.Status)},
 			{name, defaultStyle},
-			{ctx, mutedStyle},
 		}
+		if r.agent.Status != "" {
+			segs = append(segs, filterSeg{"  " + r.agent.Status, mutedStyle})
+		}
+		if r.agent.Model != "" {
+			segs = append(segs, filterSeg{"  " + agentModelLabel(r.agent), mutedStyle})
+		}
+		session := m.agentSession(r.agent)
+		segs = append(segs,
+			filterSeg{"  ", mutedStyle},
+			filterSeg{sessionName(session), sessionStyle(session, m.sessionDepth(session))},
+		)
+		if r.project.Title != "" {
+			segs = append(segs, filterSeg{"  " + r.project.Title, mutedStyle})
+		}
+		return segs
 	}
 	return nil
 }
