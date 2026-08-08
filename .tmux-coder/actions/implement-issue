@@ -1,0 +1,4 @@
+#!/bin/sh
+exec tmux-coder new \
+  --session-id "$TMUX_CODER_SESSION_ID" \
+  --prompt "Implement this gh issue: $TMUX_CODER_ACTION_ARGUMENT ."

@@ -1,3 +1,9 @@
 [worktree]
 on-create-script = ".tmux-coder/tmux-coder-worktree-setup"
 on-create-timeout = "5m"
+
+[[menu-actions]]
+name = "implement-issue"
+description = "Review the current changes"
+script = ".tmux-coder/actions/implement-issue"
+argument="required"

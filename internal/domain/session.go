@@ -75,7 +75,11 @@ func NewSecondarySessionWithTmuxName(id, parent, projectID int, name, tmuxName, 
 }
 
 func DeriveTmuxSessionName(name string) string {
-	return strings.ReplaceAll(name, ".", "_")
+	tmuxName := strings.ReplaceAll(name, ".", "_")
+	if strings.HasPrefix(tmuxName, "-") {
+		return "_" + tmuxName[1:]
+	}
+	return tmuxName
 }
 
 func (s *Session) ID() int           { return s.id }

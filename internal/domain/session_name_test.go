@@ -115,3 +115,11 @@ func TestDeriveTmuxSessionNameReplacesDotSeparators(t *testing.T) {
 		t.Fatalf("DeriveTmuxSessionName() = %q, want %q", got, "api_feature-login")
 	}
 }
+
+func TestDotPrefixedProjectDerivesSafeTmuxSessionName(t *testing.T) {
+	sessionName := domain.DeriveMainSessionName("/work/.dotfiles", taken())
+	got := domain.DeriveTmuxSessionName(sessionName)
+	if got != "_dotfiles_main" {
+		t.Fatalf("DeriveTmuxSessionName(%q) = %q, want %q", sessionName, got, "_dotfiles_main")
+	}
+}
