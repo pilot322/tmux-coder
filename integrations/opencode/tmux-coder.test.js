@@ -89,6 +89,25 @@ test("enables OpenCode auto-approve mode for a yolo agent", async () => {
   }
 });
 
+test("a yolo agent waits for questions but not tool permissions", async () => {
+  const app = await fixture("yolo-waiting", { yolo: true });
+  try {
+    app.emit("session.status", {
+      sessionID: "primary",
+      status: { type: "busy" },
+    });
+    app.emit("permission.asked", { sessionID: "primary" });
+    app.emit("permission.replied", { sessionID: "primary" });
+    assert.deepEqual(app.reported, ["idle", "busy"]);
+
+    app.emit("question.asked", { sessionID: "primary" });
+    app.emit("question.replied", { sessionID: "primary" });
+    assert.deepEqual(app.reported, ["idle", "busy", "waiting", "busy"]);
+  } finally {
+    app.restore();
+  }
+});
+
 test("validates the exact model and opens the picker before readiness", async () => {
   const app = await fixture("setup-model", {
 	enabled: true,

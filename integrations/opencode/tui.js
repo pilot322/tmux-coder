@@ -223,17 +223,17 @@ export async function TmuxCoderStatus(api) {
     reportAggregateStatus();
   });
 
-  for (const type of ["permission.asked", "question.asked"]) {
+  const waitingTypes = YOLO ? ["question.asked"] : ["permission.asked", "question.asked"];
+  for (const type of waitingTypes) {
     on(type, (event) => {
       statusBySession.set(event.properties.sessionID, "waiting");
       reportAggregateStatus();
     });
   }
-  for (const type of [
-    "permission.replied",
-    "question.replied",
-    "question.rejected",
-  ]) {
+  const repliedTypes = YOLO
+    ? ["question.replied", "question.rejected"]
+    : ["permission.replied", "question.replied", "question.rejected"];
+  for (const type of repliedTypes) {
     on(type, (event) => {
       statusBySession.set(event.properties.sessionID, "busy");
       reportAggregateStatus();
