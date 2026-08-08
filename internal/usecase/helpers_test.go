@@ -142,7 +142,7 @@ func (g *fakeGateway) SwitchClients(ctx context.Context, from, to string) error 
 // gateway reports no worktrees, so worktree detection (ADR-0013) is inert;
 // detection tests use createFixtureWithGit to program the repo's worktrees.
 func createFixture() (*usecase.CreateProject, *memory.MemoryProjectRepository, *memory.MemorySessionRepository, *fakeGateway, *spyLock) {
-	uc, projects, sessions, gw, lock, _ := createFixtureWithGit(&fakeWorktreeGit{paths: make(map[string]bool)})
+	uc, projects, sessions, gw, lock, _ := createFixtureWithGitLogAndPathValidation(&fakeWorktreeGit{paths: make(map[string]bool)}, obs.Nop(), nil)
 	return uc, projects, sessions, gw, lock
 }
 
@@ -150,21 +150,28 @@ func createFixture() (*usecase.CreateProject, *memory.MemoryProjectRepository, *
 // worktree-detection and bulk-adoption tests can stage the on-disk worktrees an
 // open is validated against. It also returns the Git fake for assertions.
 func createFixtureWithGit(git *fakeWorktreeGit) (*usecase.CreateProject, *memory.MemoryProjectRepository, *memory.MemorySessionRepository, *fakeGateway, *spyLock, *fakeWorktreeGit) {
-	return createFixtureWithGitAndLog(git, obs.Nop())
+	return createFixtureWithGitLogAndPathValidation(git, obs.Nop(), acceptLogicalProjectPath)
 }
 
 // createFixtureWithLog is createFixture with an explicit logger, so a test can
 // pass obs.Recording() and assert on the milestone lines the usecase emits.
 func createFixtureWithLog(log obs.Logger) (*usecase.CreateProject, *memory.MemoryProjectRepository, *memory.MemorySessionRepository, *fakeGateway, *spyLock) {
-	uc, projects, sessions, gw, lock, _ := createFixtureWithGitAndLog(&fakeWorktreeGit{paths: make(map[string]bool)}, log)
+	uc, projects, sessions, gw, lock, _ := createFixtureWithGitLogAndPathValidation(&fakeWorktreeGit{paths: make(map[string]bool)}, log, nil)
 	return uc, projects, sessions, gw, lock
 }
 
-func createFixtureWithGitAndLog(git *fakeWorktreeGit, log obs.Logger) (*usecase.CreateProject, *memory.MemoryProjectRepository, *memory.MemorySessionRepository, *fakeGateway, *spyLock, *fakeWorktreeGit) {
+func acceptLogicalProjectPath(string) error { return nil }
+
+func createFixtureWithGitLogAndPathValidation(git *fakeWorktreeGit, log obs.Logger, validatePath func(string) error) (*usecase.CreateProject, *memory.MemoryProjectRepository, *memory.MemorySessionRepository, *fakeGateway, *spyLock, *fakeWorktreeGit) {
 	projects := memory.NewMemoryProjectRepository()
 	sessions := memory.NewMemorySessionRepository()
 	lock := &spyLock{}
 	gw := newFakeGateway(lock)
-	uc := usecase.NewCreateProject(projects, sessions, gw, git, lock, domain.DefaultDaemonConfig(), log)
+	var uc *usecase.CreateProject
+	if validatePath == nil {
+		uc = usecase.NewCreateProject(projects, sessions, gw, git, lock, domain.DefaultDaemonConfig(), log)
+	} else {
+		uc = usecase.NewCreateProjectWithPathValidation(projects, sessions, gw, git, lock, domain.DefaultDaemonConfig(), validatePath, log)
+	}
 	return uc, projects, sessions, gw, lock, git
 }

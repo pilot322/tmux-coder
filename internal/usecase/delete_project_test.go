@@ -20,7 +20,7 @@ func deleteFixture(ctx context.Context) (*usecase.DeleteProject, *memory.MemoryP
 	lock := &spyLock{}
 	gw := newFakeGateway(lock)
 
-	create := usecase.NewCreateProject(projects, sessions, gw, &fakeWorktreeGit{paths: make(map[string]bool)}, lock, domain.DefaultDaemonConfig(), obs.Nop())
+	create := usecase.NewCreateProjectWithPathValidation(projects, sessions, gw, &fakeWorktreeGit{paths: make(map[string]bool)}, lock, domain.DefaultDaemonConfig(), acceptLogicalProjectPath, obs.Nop())
 	res, _ := create.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api"})
 
 	del := usecase.NewDeleteProject(projects, sessions, agents, gw, lock, obs.Nop())
