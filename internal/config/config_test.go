@@ -61,7 +61,7 @@ script = ".tmux-coder/actions/commit"
 name = "fix-issues"
 script = ".tmux-coder/actions/fix-issues"
 argument = "required"
-detach = false
+detach = true
 `))
 	if err != nil {
 		t.Fatalf("Parse: %v", err)
@@ -69,10 +69,10 @@ detach = false
 	if len(file.MenuActions) != 2 {
 		t.Fatalf("len(MenuActions) = %d, want 2", len(file.MenuActions))
 	}
-	if got := file.MenuActions[0]; got.Name != "commit" || got.Key != "c" || got.Argument != config.ArgumentNone || !got.Detach {
+	if got := file.MenuActions[0]; got.Name != "commit" || got.Key != "c" || got.Argument != config.ArgumentNone || got.Detach {
 		t.Fatalf("first action = %+v", got)
 	}
-	if got := file.MenuActions[1]; got.Argument != config.ArgumentRequired || got.Detach {
+	if got := file.MenuActions[1]; got.Argument != config.ArgumentRequired || !got.Detach {
 		t.Fatalf("second action = %+v", got)
 	}
 }
@@ -87,7 +87,7 @@ argument = "optional"
 	if err != nil {
 		t.Fatalf("ParseActionFile: %v", err)
 	}
-	if len(actions) != 1 || actions[0].Name != "review" || actions[0].Argument != config.ArgumentOptional || !actions[0].Detach {
+	if len(actions) != 1 || actions[0].Name != "review" || actions[0].Argument != config.ArgumentOptional || actions[0].Detach {
 		t.Fatalf("actions = %+v", actions)
 	}
 

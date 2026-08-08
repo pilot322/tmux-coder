@@ -109,7 +109,7 @@ A TOML file inside a **Project** at `.tmux-coder/.tmux-coder.toml` that declares
 _Avoid_: Settings, project file, manifest
 
 **Menu Action**:
-A user-selectable workflow made available by tmux-coder for the current **Session**. It has a unique searchable name, may have a human-facing description, may accept a user-supplied argument or have a direct selection key for immediate execution, and starts detached by default so the Client can exit while it runs. A Project declaration overrides a global Menu Action with the same name.
+A user-selectable workflow made available by tmux-coder for the current **Session**. It has a unique searchable name, may have a human-facing description, may accept a user-supplied argument or have a direct selection key for immediate execution, and runs attached by default so failures reach the user. A Menu Action may explicitly detach when its script can safely continue after the Client exits. A Project declaration overrides a global Menu Action with the same name.
 _Avoid_: Menu item, quick action, command
 
 **Action File** (`~/.tmux-coder/actions.toml`):

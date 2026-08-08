@@ -237,7 +237,7 @@ func validateMenuActions(raw []rawMenuAction) ([]MenuAction, error) {
 				return nil, fmt.Errorf("%w: menu-action %q key must be one printable rune", ErrValidation, action.Name)
 			}
 		}
-		detach := true
+		detach := false
 		if action.Detach != nil {
 			detach = *action.Detach
 		}
