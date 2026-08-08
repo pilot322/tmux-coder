@@ -91,6 +91,7 @@ type createAgentRequest struct {
 	Model       *string `json:"model"`
 	Variant     *string `json:"variant"`
 	Prompt      *string `json:"prompt"`
+	Yolo        bool    `json:"yolo"`
 	DisplayName *string `json:"displayName"`
 	TmuxPaneID  *string `json:"tmuxPaneId"`
 }

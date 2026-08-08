@@ -245,6 +245,7 @@ func (ac *AgentController) Create(w http.ResponseWriter, r *http.Request) {
 		Model:       req.Model,
 		Variant:     req.Variant,
 		Prompt:      req.Prompt,
+		Yolo:        req.Yolo,
 		DisplayName: req.DisplayName,
 		TmuxPaneID:  req.TmuxPaneID,
 		DaemonAddr:  daemonAddr,

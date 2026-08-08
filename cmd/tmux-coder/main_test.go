@@ -134,6 +134,16 @@ func TestRunNewParsesOpenCodeModelVariantAndPromptInBothForms(t *testing.T) {
 	}
 }
 
+func TestRunNewParsesOpenCodeYolo(t *testing.T) {
+	api := &fakeAgentAPI{sessions: []httpclient.Session{{ID: 4, ProjectID: 3}}}
+	if err := runNew(context.Background(), []string{"--yolo", "--session-id", "4"}, func(string) string { return "" }, api, "http://daemon"); err != nil {
+		t.Fatalf("runNew: %v", err)
+	}
+	if !api.created.Yolo {
+		t.Fatalf("created = %#v, want yolo enabled", api.created)
+	}
+}
+
 func TestRunNewRejectsInvalidOpenCodeSetupFlags(t *testing.T) {
 	tests := []struct {
 		args []string
@@ -142,6 +152,7 @@ func TestRunNewRejectsInvalidOpenCodeSetupFlags(t *testing.T) {
 		{[]string{"claude", "--model", "anthropic/claude-haiku"}, "only supported for opencode"},
 		{[]string{"claude", "--prompt", "hello"}, "only supported for opencode"},
 		{[]string{"claude", "--variant", "high", "--model", "anthropic/claude-haiku"}, "only supported for opencode"},
+		{[]string{"claude", "--yolo"}, "only supported for opencode"},
 		{[]string{"--model", "missing-slash"}, "provider/model"},
 		{[]string{"--variant", "high"}, "requires --model"},
 		{[]string{"--model", "anthropic/claude-haiku", "--variant", ""}, "non-empty"},

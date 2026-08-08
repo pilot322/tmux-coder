@@ -98,7 +98,8 @@ Useful TUI keys:
 - `0-3`: switch tabs
 - `j/k`: move
 - `enter`: attach
-- `a`: create agent
+- `a`: immediately create a default OpenCode agent, then optionally rename it
+- `A`: create an agent with executable and OpenCode yolo options
 - `n`: arm or disable a one-shot Discord notification for the selected agent
 - `w`: create worktree from selected session
 - `W`: create worktree from a base ref
@@ -116,18 +117,23 @@ Start an agent from inside a tmux-coder-managed session:
 tmux-coder new opencode --name frontend
 tmux-coder new --model anthropic/claude-haiku --prompt "Review the current changes"
 tmux-coder new --model openai/gpt-5.6-luna --variant high
+tmux-coder new --yolo
 ```
 
 If no executable is given, `opencode` is used.
 
 OpenCode creation accepts a canonical `provider/model` through `--model`, an
-OpenCode model variant through `--variant`, and a non-empty initial `--prompt`.
+OpenCode model variant through `--variant`, a non-empty initial `--prompt`, and
+`--yolo` to auto-approve permissions that are not explicitly denied.
 `--variant` requires `--model`; model and prompt can otherwise be used alone.
 Model and variant selection are verified before an initial prompt is submitted.
 Omitting `--variant` selects OpenCode's Default variant. Startup failure stops
 the new agent rather than falling back to another model or variant or dropping
 the prompt. These options are per creation and are not supported by other Agent
 Kinds.
+
+The TUI asks the same explicit yolo question when creating an OpenCode agent.
+Yolo mode is per creation and is never stored as a default.
 
 `--session-id ID` targets any managed Session and derives its Project. Supplying
 `--project-id` as well validates that it matches. An explicit Session creates a

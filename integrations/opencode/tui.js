@@ -9,6 +9,7 @@ import { appendFileSync } from "node:fs";
 
 const AGENT_ID = process.env.TMUX_CODER_AGENT_ID;
 const SETUP_REQUESTED = process.env.TMUX_CODER_AGENT_SETUP === "1";
+const YOLO = process.env.TMUX_CODER_AGENT_YOLO === "1";
 const REQUESTED_MODEL = process.env.TMUX_CODER_AGENT_MODEL ?? "";
 const REQUESTED_VARIANT = process.env.TMUX_CODER_AGENT_VARIANT ?? "";
 const DEBUG = process.env.TMUX_CODER_PLUGIN_DEBUG;
@@ -195,6 +196,12 @@ export async function TmuxCoderStatus(api) {
   }
 
   await reportSetupReady(api, setupURL);
+  if (YOLO) {
+    await waitForState(api);
+    if (api.keymap?.dispatchCommand) api.keymap.dispatchCommand("permission.mode");
+    else if (api.command?.trigger) api.command.trigger("permission.mode");
+    else throw new Error("OpenCode TUI permission mode API is unavailable");
+  }
   report("idle");
 
   onSessionTopology("session.created");
