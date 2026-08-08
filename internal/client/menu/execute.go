@@ -53,8 +53,9 @@ func ResolveScript(action Action, session SessionContext) (string, error) {
 	return path, nil
 }
 
-// Execute runs the selected script directly through its shebang with attached
-// terminal streams. The argument is environment data, never shell source.
+// Execute starts the selected script directly through its shebang. Attached
+// actions wait for completion; detached actions return after a successful start.
+// The argument is environment data, never shell source.
 func Execute(ctx context.Context, selection Selection, session SessionContext, env []string, stdin io.Reader, stdout, stderr io.Writer) error {
 	path, err := ResolveScript(selection.Action, session)
 	if err != nil {
@@ -76,13 +77,27 @@ func Execute(ctx context.Context, selection Selection, session SessionContext, e
 		"TMUX_CODER_BRANCH":            session.Branch,
 	}
 
-	cmd := exec.CommandContext(ctx, path)
+	var cmd *exec.Cmd
+	if selection.Action.Detach {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		cmd = exec.Command(path)
+	} else {
+		cmd = exec.CommandContext(ctx, path)
+	}
 	cmd.Dir = session.WorkingDirectory
 	cmd.Env = authoritativeEnvironment(env, values)
 	cmd.Stdin = stdin
 	cmd.Stdout = stdout
 	cmd.Stderr = stderr
-	return cmd.Run()
+	if !selection.Action.Detach {
+		return cmd.Run()
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	return cmd.Process.Release()
 }
 
 func authoritativeEnvironment(env []string, values map[string]string) []string {

@@ -160,18 +160,21 @@ description = "Commit the current changes"
 key = "c"
 script = "actions/commit"
 argument = "none"
+detach = true
 
 [[menu-actions]]
 name = "fix-issues"
 description = "Fix the described issues"
 script = ".tmux-coder/actions/fix-issues"
 argument = "required"
+detach = false
 ```
 
 `name` must be a unique lowercase kebab-case token and `script` is required.
 `key` is an optional single printable character. `argument` is `none`,
-`optional`, or `required`, and defaults to `none`. Unknown fields and invalid or
-duplicate declarations prevent the menu from opening.
+`optional`, or `required`, and defaults to `none`. `detach` defaults to `true`;
+set it to `false` when the menu must wait for an interactive action. Unknown
+fields and invalid or duplicate declarations prevent the menu from opening.
 
 Press a displayed direct key to select that action. Any other printable
 character starts fuzzy search across actions without keys. In fuzzy search,
@@ -216,9 +219,11 @@ context variables with authoritative values:
 - `TMUX_CODER_BRANCH`
 
 The action argument is available only through `TMUX_CODER_ACTION_ARGUMENT`; it
-is not interpolated into a shell command or passed as shell source. The script
-runs interactively in the current terminal, and its exit status becomes the
-exit status of `tmux-coder menu`.
+is not interpolated into a shell command or passed as shell source. By default,
+the script starts with the current terminal streams and `tmux-coder menu` exits
+without waiting for it. With `detach = false`, the script runs interactively in
+the current terminal and its exit status becomes the exit status of
+`tmux-coder menu`.
 
 You can use any executable really, but it needs to have an extension or hooks set up so that it passes the agent's state to the daemon. Currently only opencode and claude code have been set up (opencode works much better). More coming soon.
 

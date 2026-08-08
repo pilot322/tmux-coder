@@ -66,6 +66,7 @@ type MenuAction struct {
 	Key         string
 	Script      string
 	Argument    string
+	Detach      bool
 }
 
 // rawFile mirrors the on-disk TOML shape with kebab-case keys.
@@ -98,6 +99,7 @@ type rawMenuAction struct {
 	Key         string `toml:"key"`
 	Script      string `toml:"script"`
 	Argument    string `toml:"argument"`
+	Detach      *bool  `toml:"detach"`
 }
 
 var menuActionName = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
@@ -235,12 +237,17 @@ func validateMenuActions(raw []rawMenuAction) ([]MenuAction, error) {
 				return nil, fmt.Errorf("%w: menu-action %q key must be one printable rune", ErrValidation, action.Name)
 			}
 		}
+		detach := true
+		if action.Detach != nil {
+			detach = *action.Detach
+		}
 		actions[i] = MenuAction{
 			Name:        action.Name,
 			Description: action.Description,
 			Key:         action.Key,
 			Script:      action.Script,
 			Argument:    argument,
+			Detach:      detach,
 		}
 	}
 	return actions, nil

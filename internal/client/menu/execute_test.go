@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/pilot322/tmux-coder/internal/client/httpclient"
 	"github.com/pilot322/tmux-coder/internal/config"
@@ -88,6 +89,53 @@ func TestExecuteReturnsProcessExitError(t *testing.T) {
 	var exitError *exec.ExitError
 	if !errors.As(err, &exitError) || exitError.ExitCode() != 23 {
 		t.Fatalf("error = %v", err)
+	}
+}
+
+func TestExecuteDetachedReturnsWhileActionRuns(t *testing.T) {
+	dir := t.TempDir()
+	started := filepath.Join(dir, "started")
+	release := filepath.Join(dir, "release")
+	completed := filepath.Join(dir, "completed")
+	script := filepath.Join(dir, "detach")
+	writeExecutable(t, script, "#!/bin/sh\n"+
+		"touch \"$STARTED\"\n"+
+		"while [ ! -e \"$RELEASE\" ]; do sleep 0.01; done\n"+
+		"touch \"$COMPLETED\"\n")
+	selection := Selection{Action: Action{MenuAction: config.MenuAction{Name: "detach", Script: script, Detach: true}}}
+	ctx, cancel := context.WithCancel(context.Background())
+	err := Execute(ctx, selection, SessionContext{SessionRoot: dir, WorkingDirectory: dir}, []string{
+		"STARTED=" + started,
+		"RELEASE=" + release,
+		"COMPLETED=" + completed,
+	}, nil, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, started)
+	cancel()
+	if _, err := os.Stat(completed); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("detached action completed before release: %v", err)
+	}
+	if err := os.WriteFile(release, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	waitForFile(t, completed)
+}
+
+func waitForFile(t *testing.T, path string) {
+	t.Helper()
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		if _, err := os.Stat(path); err == nil {
+			return
+		} else if !errors.Is(err, os.ErrNotExist) {
+			t.Fatal(err)
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for %s", path)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 
