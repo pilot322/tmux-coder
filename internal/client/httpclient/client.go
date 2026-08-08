@@ -67,6 +67,7 @@ type CreateAgentInput struct {
 	Model       *string `json:"model,omitempty"`
 	Variant     *string `json:"variant,omitempty"`
 	Prompt      *string `json:"prompt,omitempty"`
+	Yolo        bool    `json:"yolo,omitempty"`
 	DisplayName *string `json:"displayName,omitempty"`
 	TmuxPaneID  *string `json:"tmuxPaneId,omitempty"`
 }

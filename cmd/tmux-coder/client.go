@@ -248,6 +248,7 @@ func runNew(ctx context.Context, args []string, getenv func(string) string, api 
 	var model *string
 	var variant *string
 	var prompt *string
+	yolo := false
 	var paneID *string
 	var sessionID *int
 	var projectID *int
@@ -290,6 +291,8 @@ func runNew(ctx context.Context, args []string, getenv func(string) string, api 
 			}
 			v := args[i]
 			variant = &v
+		case "--yolo":
+			yolo = true
 		case "--session-id":
 			i++
 			if i >= len(args) {
@@ -321,8 +324,8 @@ func runNew(ctx context.Context, args []string, getenv func(string) string, api 
 		i++
 	}
 
-	if (model != nil || variant != nil || prompt != nil) && kind != "opencode" {
-		return fmt.Errorf("--model, --variant, and --prompt are only supported for opencode")
+	if (model != nil || variant != nil || prompt != nil || yolo) && kind != "opencode" {
+		return fmt.Errorf("--model, --variant, --prompt, and --yolo are only supported for opencode")
 	}
 	if variant != nil && model == nil {
 		return fmt.Errorf("--variant requires --model")
@@ -389,6 +392,7 @@ func runNew(ctx context.Context, args []string, getenv func(string) string, api 
 		Model:       model,
 		Variant:     variant,
 		Prompt:      prompt,
+		Yolo:        yolo,
 		DisplayName: displayName,
 		TmuxPaneID:  paneID,
 	})
@@ -408,6 +412,9 @@ func runNew(ctx context.Context, args []string, getenv func(string) string, api 
 		}
 		if variant != nil {
 			extraEnv = append(extraEnv, "TMUX_CODER_AGENT_VARIANT="+*variant)
+		}
+		if yolo {
+			extraEnv = append(extraEnv, "TMUX_CODER_AGENT_YOLO=1")
 		}
 		code := runAgentWrapper([]string{strconv.Itoa(agent.ID), kind}, daemonAddr, extraEnv...)
 		if code != 0 {

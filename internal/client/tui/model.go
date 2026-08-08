@@ -64,6 +64,7 @@ const (
 	agentPromptNone agentPromptStep = iota
 	agentPromptExecutable
 	agentPromptName
+	agentPromptYolo
 )
 
 type rowKind uint8
@@ -165,8 +166,8 @@ type Model struct {
 	secondaryRelwd    string
 	secondaryName     string
 
-	// creatingAgent drives the 'a' flow: a two-step prompt (optional name, then
-	// executable) that spawns an agent in the resolved target session. The
+	// creatingAgent drives the 'a' flow: optional name, executable, and an
+	// OpenCode-only yolo choice that spawns an agent in the target session. The
 	// daemon owns the new pane, so this is wholly client-side.
 	creatingAgent   bool
 	agentStep       agentPromptStep
@@ -174,6 +175,9 @@ type Model struct {
 	agentSessionID  int
 	agentExecutable string
 	agentName       string
+	agentQuick      bool
+	agentQuickID    int
+	agentNameDone   bool
 
 	renamingAgent bool
 	renameAgentID int
@@ -254,31 +258,32 @@ const defaultAgentExecutable = "opencode"
 
 const discordNotificationBell = "🔔"
 
-const helpText = "Keys: j/k or ctrl+n/ctrl+p or arrows move, g/G jump, 0-3 switch tab, enter attach, a agent, n notifications (Overview/Agents), u rename (Agents), X delete, w worktree (off session), W base worktree (off ref), s secondary (Sessions), S fold all, space fold, o group (Agents), f filter, r refresh, ? help, q quit"
+const helpText = "Keys: j/k or ctrl+n/ctrl+p or arrows move, g/G jump, 0-3 switch tab, enter attach, a quick agent, A advanced agent, n notifications (Overview/Agents), u rename (Agents), X delete, w worktree (off session), W base worktree (off ref), s secondary (Sessions), S fold all, space fold, o group (Agents), f filter, r refresh, ? help, q quit"
 
 var keys = struct {
-	up, down, top, bottom, enter, del, refresh, worktree, worktreeBase, secondary, foldAll, fold, agent, notification, rename, group, filter, help, quit, tab key.Binding
+	up, down, top, bottom, enter, del, refresh, worktree, worktreeBase, secondary, foldAll, fold, agent, advancedAgent, notification, rename, group, filter, help, quit, tab key.Binding
 }{
-	up:           key.NewBinding(key.WithKeys("up", "k", "ctrl+p")),
-	down:         key.NewBinding(key.WithKeys("down", "j", "ctrl+n")),
-	top:          key.NewBinding(key.WithKeys("g")),
-	bottom:       key.NewBinding(key.WithKeys("G")),
-	enter:        key.NewBinding(key.WithKeys("enter")),
-	del:          key.NewBinding(key.WithKeys("X")),
-	refresh:      key.NewBinding(key.WithKeys("r")),
-	worktree:     key.NewBinding(key.WithKeys("w")),
-	worktreeBase: key.NewBinding(key.WithKeys("W")),
-	secondary:    key.NewBinding(key.WithKeys("s")),
-	foldAll:      key.NewBinding(key.WithKeys("S")),
-	fold:         key.NewBinding(key.WithKeys(" ")),
-	agent:        key.NewBinding(key.WithKeys("a")),
-	notification: key.NewBinding(key.WithKeys("n")),
-	rename:       key.NewBinding(key.WithKeys("u")),
-	group:        key.NewBinding(key.WithKeys("o")),
-	filter:       key.NewBinding(key.WithKeys("f")),
-	help:         key.NewBinding(key.WithKeys("?")),
-	quit:         key.NewBinding(key.WithKeys("q", "esc", "ctrl+c")),
-	tab:          key.NewBinding(key.WithKeys("0", "1", "2", "3")),
+	up:            key.NewBinding(key.WithKeys("up", "k", "ctrl+p")),
+	down:          key.NewBinding(key.WithKeys("down", "j", "ctrl+n")),
+	top:           key.NewBinding(key.WithKeys("g")),
+	bottom:        key.NewBinding(key.WithKeys("G")),
+	enter:         key.NewBinding(key.WithKeys("enter")),
+	del:           key.NewBinding(key.WithKeys("X")),
+	refresh:       key.NewBinding(key.WithKeys("r")),
+	worktree:      key.NewBinding(key.WithKeys("w")),
+	worktreeBase:  key.NewBinding(key.WithKeys("W")),
+	secondary:     key.NewBinding(key.WithKeys("s")),
+	foldAll:       key.NewBinding(key.WithKeys("S")),
+	fold:          key.NewBinding(key.WithKeys(" ")),
+	agent:         key.NewBinding(key.WithKeys("a")),
+	advancedAgent: key.NewBinding(key.WithKeys("A")),
+	notification:  key.NewBinding(key.WithKeys("n")),
+	rename:        key.NewBinding(key.WithKeys("u")),
+	group:         key.NewBinding(key.WithKeys("o")),
+	filter:        key.NewBinding(key.WithKeys("f")),
+	help:          key.NewBinding(key.WithKeys("?")),
+	quit:          key.NewBinding(key.WithKeys("q", "esc", "ctrl+c")),
+	tab:           key.NewBinding(key.WithKeys("0", "1", "2", "3")),
 }
 
 func Run(ctx context.Context, api API, initialSession ...string) (AttachTarget, bool, error) {
@@ -410,9 +415,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case createAgentMsg:
 		m.loading = false
 		if msg.err != nil {
-			// Keep the prompt open so the user can correct and resubmit.
+			if m.agentQuick {
+				m.resetAgentPrompt()
+			}
 			m.status = msg.err.Error()
 			return m, nil
+		}
+		if m.agentQuick {
+			m.agentQuickID = msg.agent.ID
+			m.agentSel = selection{id: msg.agent.ID}
+			m.tab = tabAgents
+			if m.agentNameDone {
+				name := strings.TrimSpace(m.agentName)
+				m.resetAgentPrompt()
+				m.loading = true
+				if name != "" {
+					return m, m.renameAgentCmd(msg.agent.ID, name)
+				}
+				return m, m.nextListCmd()
+			}
+			m.loading = true
+			return m, m.nextListCmd()
 		}
 		m.resetAgentPrompt()
 		m.agentSel = selection{id: msg.agent.ID}
@@ -522,7 +545,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case key.Matches(msg, keys.fold):
 			m.toggleCursorFold()
 		case key.Matches(msg, keys.agent):
-			m.startAgent()
+			return m.startQuickAgent()
+		case key.Matches(msg, keys.advancedAgent):
+			m.startAdvancedAgent()
 		case key.Matches(msg, keys.notification):
 			m.startDiscordNotification()
 		case key.Matches(msg, keys.rename):
@@ -610,10 +635,17 @@ func (m Model) View() string {
 		}
 	}
 	if m.creatingAgent {
-		if m.agentStep == agentPromptName {
-			footer.WriteString("Agent name (optional): " + m.agentName + "\n")
-		} else {
+		switch m.agentStep {
+		case agentPromptName:
+			if m.agentQuick {
+				footer.WriteString("New OpenCode agent name (optional): " + m.agentName + "\n")
+			} else {
+				footer.WriteString("Agent name (optional): " + m.agentName + "\n")
+			}
+		case agentPromptExecutable:
 			footer.WriteString("Agent executable (default " + defaultAgentExecutable + "): " + m.agentExecutable + "\n")
+		case agentPromptYolo:
+			footer.WriteString("Enable yolo mode? This auto-approves permissions not explicitly denied. y/N\n")
 		}
 	}
 	if m.renamingAgent {
@@ -642,7 +674,11 @@ func (m Model) View() string {
 	} else if m.creatingWorktreeFromBase {
 		footer.WriteString(mutedStyle.Render("enter next/create  esc cancel") + "\n")
 	} else if m.creatingAgent {
-		footer.WriteString(mutedStyle.Render("enter next/create  esc cancel") + "\n")
+		if m.agentQuick {
+			footer.WriteString(mutedStyle.Render("enter rename  esc keep default name") + "\n")
+		} else {
+			footer.WriteString(mutedStyle.Render("enter next/create  esc cancel") + "\n")
+		}
 	} else if m.renamingAgent {
 		footer.WriteString(mutedStyle.Render("enter rename  esc cancel") + "\n")
 	} else if m.configuringDiscordNotification {
@@ -754,7 +790,7 @@ func (m Model) tabStrip() string {
 }
 
 func (m Model) footer() string {
-	parts := []string{"j/k move", "enter attach", "a agent", "S fold", "space toggle"}
+	parts := []string{"j/k move", "enter attach", "a quick agent", "A advanced agent", "S fold", "space toggle"}
 	switch m.tab {
 	case tabOverview:
 		parts = append(parts, "n notifications", "w worktree", "W base worktree", "X delete")
@@ -1056,7 +1092,7 @@ func (m Model) createSecondaryCmd(parentID int, relwd, preferredName string) tea
 // createAgentCmd asks the daemon to spawn an agent in the target session. The
 // daemon owns the new pane (TmuxPaneID left nil), running the executable via the
 // agent-wrapper. An empty name is sent as no display name.
-func (m Model) createAgentCmd(projectID, sessionID int, executable, name string) tea.Cmd {
+func (m Model) createAgentCmd(projectID, sessionID int, executable, name string, yolo bool) tea.Cmd {
 	return func() tea.Msg {
 		var displayName *string
 		if name != "" {
@@ -1066,6 +1102,7 @@ func (m Model) createAgentCmd(projectID, sessionID int, executable, name string)
 			ProjectID:   projectID,
 			SessionID:   sessionID,
 			Kind:        executable,
+			Yolo:        yolo,
 			DisplayName: displayName,
 		})
 		return createAgentMsg{agent: agent, err: err}
@@ -1289,14 +1326,16 @@ func (m Model) updateSecondaryPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// updateAgentPrompt handles key input for the 'a' flow: the first step captures
-// an optional name, the second the executable. Enter advances from name to
-// executable, then fires the create; an empty name means no name is sent.
+// updateAgentPrompt handles key input for agent creation. OpenCode adds an
+// explicit dangerous-mode choice after the executable; Enter keeps it off.
 func (m Model) updateAgentPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.Type {
 	case tea.KeyCtrlC:
 		return m, tea.Quit
 	case tea.KeyEsc:
+		if m.agentQuick {
+			return m.finishQuickAgentName("")
+		}
 		m.resetAgentPrompt()
 		m.status = ""
 		return m, nil
@@ -1312,6 +1351,9 @@ func (m Model) updateAgentPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case tea.KeyEnter:
 		if m.agentStep == agentPromptName {
 			m.agentName = strings.TrimSpace(m.agentName)
+			if m.agentQuick {
+				return m.finishQuickAgentName(m.agentName)
+			}
 			m.agentStep = agentPromptExecutable
 			m.status = ""
 			return m, nil
@@ -1323,19 +1365,54 @@ func (m Model) updateAgentPrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			m.agentExecutable = executable
 			m.status = ""
+			if executable == "opencode" {
+				m.agentStep = agentPromptYolo
+				return m, nil
+			}
 			m.loading = true
-			return m, m.createAgentCmd(m.agentProjectID, m.agentSessionID, m.agentExecutable, m.agentName)
+			return m, m.createAgentCmd(m.agentProjectID, m.agentSessionID, m.agentExecutable, m.agentName, false)
+		}
+		if m.agentStep == agentPromptYolo {
+			m.loading = true
+			return m, m.createAgentCmd(m.agentProjectID, m.agentSessionID, m.agentExecutable, m.agentName, false)
 		}
 		return m, nil
 	case tea.KeyRunes:
 		if m.agentStep == agentPromptName {
 			m.agentName += string(msg.Runes)
-		} else {
+		} else if m.agentStep == agentPromptExecutable {
 			m.agentExecutable += string(msg.Runes)
+		} else if m.agentStep == agentPromptYolo && len(msg.Runes) == 1 {
+			switch msg.Runes[0] {
+			case 'y', 'Y':
+				m.loading = true
+				return m, m.createAgentCmd(m.agentProjectID, m.agentSessionID, m.agentExecutable, m.agentName, true)
+			case 'n', 'N':
+				m.loading = true
+				return m, m.createAgentCmd(m.agentProjectID, m.agentSessionID, m.agentExecutable, m.agentName, false)
+			}
 		}
 		return m, nil
 	}
 	return m, nil
+}
+
+func (m Model) finishQuickAgentName(name string) (tea.Model, tea.Cmd) {
+	m.agentName = strings.TrimSpace(name)
+	m.agentNameDone = true
+	m.creatingAgent = false
+	if m.agentQuickID == 0 {
+		return m, nil
+	}
+	id := m.agentQuickID
+	name = m.agentName
+	m.resetAgentPrompt()
+	if name == "" {
+		m.loading = true
+		return m, m.nextListCmd()
+	}
+	m.loading = true
+	return m, m.renameAgentCmd(id, name)
 }
 
 func (m Model) updateRenamePrompt(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1907,18 +1984,47 @@ func (m *Model) startSecondary() {
 	m.status = ""
 }
 
-// startAgent begins an 'a' creation: spawn an agent in the session the cursor
-// resolves to. It is available wherever a row maps to a session — a selected
-// session, an agent's owning session, or a project's Main Session.
-func (m *Model) startAgent() {
+func (m *Model) agentCreationTarget() (httpclient.Session, bool) {
 	row, ok := m.cursor()
 	if !ok {
 		m.status = "no session selected"
-		return
+		return httpclient.Session{}, false
 	}
 	target, ok := m.agentTargetSession(row)
 	if !ok {
 		m.status = "no session selected"
+		return httpclient.Session{}, false
+	}
+	return target, true
+}
+
+// startQuickAgent immediately creates the default OpenCode agent, then leaves
+// an optional rename prompt open while the creation request completes.
+func (m Model) startQuickAgent() (tea.Model, tea.Cmd) {
+	target, ok := m.agentCreationTarget()
+	if !ok {
+		return m, nil
+	}
+	m.creatingAgent = true
+	m.agentQuick = true
+	m.agentStep = agentPromptName
+	m.agentProjectID = target.ProjectID
+	m.agentSessionID = target.ID
+	m.agentExecutable = defaultAgentExecutable
+	m.agentName = ""
+	m.agentQuickID = 0
+	m.agentNameDone = false
+	m.status = ""
+	m.loading = true
+	return m, m.createAgentCmd(target.ProjectID, target.ID, defaultAgentExecutable, "", false)
+}
+
+// startAdvancedAgent begins an 'A' creation: spawn an agent in the session the cursor
+// resolves to. It is available wherever a row maps to a session — a selected
+// session, an agent's owning session, or a project's Main Session.
+func (m *Model) startAdvancedAgent() {
+	target, ok := m.agentCreationTarget()
+	if !ok {
 		return
 	}
 	m.creatingAgent = true
@@ -1927,6 +2033,9 @@ func (m *Model) startAgent() {
 	m.agentSessionID = target.ID
 	m.agentExecutable = ""
 	m.agentName = ""
+	m.agentQuick = false
+	m.agentQuickID = 0
+	m.agentNameDone = false
 	m.status = ""
 }
 
@@ -2001,6 +2110,9 @@ func (m *Model) resetAgentPrompt() {
 	m.agentSessionID = 0
 	m.agentExecutable = ""
 	m.agentName = ""
+	m.agentQuick = false
+	m.agentQuickID = 0
+	m.agentNameDone = false
 }
 
 func (m *Model) requestDeleteConfirmation() {

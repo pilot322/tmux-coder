@@ -23,6 +23,7 @@ type CreateAgentInput struct {
 	Model       *string
 	Variant     *string
 	Prompt      *string
+	Yolo        bool
 	DisplayName *string
 	TmuxPaneID  *string
 	DaemonAddr  string
@@ -76,6 +77,9 @@ func (uc *CreateAgent) Execute(ctx context.Context, in CreateAgentInput) (Create
 	}
 	if err := validateOpenCodeSetup(in.Kind, in.Model, in.Variant, in.Prompt); err != nil {
 		return CreateAgentResult{}, err
+	}
+	if in.Yolo && in.Kind != "opencode" {
+		return CreateAgentResult{}, fmt.Errorf("%w: yolo mode is only supported for the opencode Agent Kind", ErrValidation)
 	}
 	setupRequested := in.Model != nil || in.Variant != nil || in.Prompt != nil
 	if setupRequested && uc.setup == nil {
@@ -167,7 +171,7 @@ func (uc *CreateAgent) Execute(ctx context.Context, in CreateAgentInput) (Create
 	}
 
 	if paneOwned {
-		env := agentEnvVars(agent, in.DaemonAddr, setupRequested)
+		env := agentEnvVars(agent, in.DaemonAddr, setupRequested, in.Yolo)
 		cmd, err := agentWrapperCommand(agent.ID(), in.Kind)
 		if err != nil {
 			if setupRequested {
@@ -275,7 +279,7 @@ func agentWorkingDir(project *domain.Project, session *domain.Session) string {
 	return project.FullPath()
 }
 
-func agentEnvVars(agent *domain.Agent, daemonAddr string, setup bool) []string {
+func agentEnvVars(agent *domain.Agent, daemonAddr string, setup, yolo bool) []string {
 	env := []string{
 		fmt.Sprintf("TMUX_CODER_AGENT_ID=%d", agent.ID()),
 		fmt.Sprintf("TMUX_CODER_AGENT_KIND=%s", agent.Kind()),
@@ -286,6 +290,9 @@ func agentEnvVars(agent *domain.Agent, daemonAddr string, setup bool) []string {
 	}
 	if setup {
 		env = append(env, "TMUX_CODER_AGENT_SETUP=1", "TMUX_CODER_AGENT_SETUP_OWNER=daemon")
+	}
+	if yolo {
+		env = append(env, "TMUX_CODER_AGENT_YOLO=1")
 	}
 	if agent.Model() != "" {
 		env = append(env, "TMUX_CODER_AGENT_MODEL="+agent.Model())

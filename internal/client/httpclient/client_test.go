@@ -272,7 +272,7 @@ func TestClientCreateAgentCarriesTransientPromptButOnlyDecodesModel(t *testing.T
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Fatal(err)
 		}
-		if body["model"] != "anthropic/claude-haiku" || body["variant"] != "high" || body["prompt"] != "literal '$HOME'\nsecond" {
+		if body["model"] != "anthropic/claude-haiku" || body["variant"] != "high" || body["prompt"] != "literal '$HOME'\nsecond" || body["yolo"] != true {
 			t.Fatalf("request body = %#v", body)
 		}
 		w.WriteHeader(http.StatusCreated)
@@ -283,7 +283,7 @@ func TestClientCreateAgentCarriesTransientPromptButOnlyDecodesModel(t *testing.T
 	variant := "high"
 	prompt := "literal '$HOME'\nsecond"
 	agent, err := httpclient.New(server.URL, server.Client()).CreateAgent(context.Background(), httpclient.CreateAgentInput{
-		ProjectID: 1, SessionID: 2, Kind: "opencode", Model: &model, Variant: &variant, Prompt: &prompt,
+		ProjectID: 1, SessionID: 2, Kind: "opencode", Model: &model, Variant: &variant, Prompt: &prompt, Yolo: true,
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -7,6 +7,7 @@ async function fixture(name, setup = {}) {
   const originalModel = process.env.TMUX_CODER_AGENT_MODEL;
   const originalStatePath = process.env.TMUX_CODER_OPENCODE_STATE_PATH;
   const originalVariant = process.env.TMUX_CODER_AGENT_VARIANT;
+  const originalYolo = process.env.TMUX_CODER_AGENT_YOLO;
   const originalFetch = globalThis.fetch;
   const reported = [];
   const setupBodies = [];
@@ -21,6 +22,8 @@ async function fixture(name, setup = {}) {
 	else delete process.env.TMUX_CODER_AGENT_MODEL;
 	if (setup.variant) process.env.TMUX_CODER_AGENT_VARIANT = setup.variant;
 	else delete process.env.TMUX_CODER_AGENT_VARIANT;
+	if (setup.yolo) process.env.TMUX_CODER_AGENT_YOLO = "1";
+	else delete process.env.TMUX_CODER_AGENT_YOLO;
 	if (setup.model) process.env.TMUX_CODER_OPENCODE_STATE_PATH = "/tmp/isolated/opencode";
 	else delete process.env.TMUX_CODER_OPENCODE_STATE_PATH;
   globalThis.fetch = async (_url, options) => {
@@ -70,10 +73,21 @@ async function fixture(name, setup = {}) {
 	  else process.env.TMUX_CODER_OPENCODE_STATE_PATH = originalStatePath;
 	  if (originalVariant === undefined) delete process.env.TMUX_CODER_AGENT_VARIANT;
 	  else process.env.TMUX_CODER_AGENT_VARIANT = originalVariant;
+	  if (originalYolo === undefined) delete process.env.TMUX_CODER_AGENT_YOLO;
+	  else process.env.TMUX_CODER_AGENT_YOLO = originalYolo;
       globalThis.fetch = originalFetch;
     },
   };
 }
+
+test("enables OpenCode auto-approve mode for a yolo agent", async () => {
+  const app = await fixture("yolo", { yolo: true });
+  try {
+	assert.deepEqual(app.commands, ["permission.mode"]);
+  } finally {
+	app.restore();
+  }
+});
 
 test("validates the exact model and opens the picker before readiness", async () => {
   const app = await fixture("setup-model", {

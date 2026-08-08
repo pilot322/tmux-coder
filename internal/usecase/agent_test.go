@@ -3,6 +3,7 @@ package usecase_test
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -19,6 +20,7 @@ type fakeAgentGateway struct {
 	renamedWindows []renamedWindow
 	workingDirs    []string
 	commands       []string
+	environments   [][]string
 	paneIDCounter  int
 	panes          map[string]bool
 	paneErr        error
@@ -51,6 +53,7 @@ func (g *fakeAgentGateway) NewWindow(ctx context.Context, sessionName, windowNam
 	g.windowNames = append(g.windowNames, windowName)
 	g.workingDirs = append(g.workingDirs, workingDir)
 	g.commands = append(g.commands, command)
+	g.environments = append(g.environments, append([]string(nil), env...))
 	return paneID, nil
 }
 
@@ -151,6 +154,32 @@ func TestCreateAgent_OwnedPane(t *testing.T) {
 	}
 	if len(gw.workingDirs) != 1 || gw.workingDirs[0] != p.FullPath() {
 		t.Fatalf("workingDirs = %v, want project root %q", gw.workingDirs, p.FullPath())
+	}
+}
+
+func TestCreateAgent_OpenCodeYoloSetsTransientLaunchEnvironment(t *testing.T) {
+	uc, _, projects, sessions, gw, _ := agentFixture()
+	p, s := seedProjectAndSession(projects, sessions)
+
+	_, err := uc.Execute(context.Background(), usecase.CreateAgentInput{
+		ProjectID: p.ID(), SessionID: s.ID(), Kind: "opencode", Yolo: true,
+	})
+	if err != nil {
+		t.Fatalf("Execute: %v", err)
+	}
+	if len(gw.environments) != 1 || !slices.Contains(gw.environments[0], "TMUX_CODER_AGENT_YOLO=1") {
+		t.Fatalf("environment = %#v, want yolo marker", gw.environments)
+	}
+}
+
+func TestCreateAgent_YoloRejectsNonOpenCodeKind(t *testing.T) {
+	uc, _, projects, sessions, _, _ := agentFixture()
+	p, s := seedProjectAndSession(projects, sessions)
+
+	if _, err := uc.Execute(context.Background(), usecase.CreateAgentInput{
+		ProjectID: p.ID(), SessionID: s.ID(), Kind: "claude", Yolo: true,
+	}); err == nil {
+		t.Fatal("want non-OpenCode yolo validation error")
 	}
 }
 
