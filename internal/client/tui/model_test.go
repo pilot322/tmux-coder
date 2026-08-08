@@ -1325,7 +1325,76 @@ func TestModelSecondaryIgnoredOutsideSessionsTab(t *testing.T) {
 	}
 }
 
-// --- agent creation ('a') ------------------------------------------------
+// --- agent creation ('a' / 'A') ------------------------------------------
+
+func TestModelQuickAgentCreatesImmediatelyThenAppliesPendingName(t *testing.T) {
+	api := &fakeAPI{
+		createdAgent: httpclient.Agent{ID: 9, ProjectID: 7, SessionID: 1, Kind: defaultAgentExecutable},
+		renamedAgent: httpclient.Agent{ID: 9, ProjectID: 7, SessionID: 1, Kind: defaultAgentExecutable, DisplayName: "reviewer"},
+	}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+	})
+	m = updated.(Model)
+
+	updated, createCmd := m.Update(runes("a"))
+	m = updated.(Model)
+	if createCmd == nil || !m.creatingAgent || !m.agentQuick || m.agentStep != agentPromptName {
+		t.Fatalf("creating=%v quick=%v step=%d cmd nil=%v", m.creatingAgent, m.agentQuick, m.agentStep, createCmd == nil)
+	}
+	if !strings.Contains(m.View(), "New OpenCode agent name (optional)") {
+		t.Fatalf("missing quick rename prompt: %q", m.View())
+	}
+	m = press(m, runes("reviewer"))
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if cmd != nil || m.creatingAgent || !m.agentNameDone {
+		t.Fatalf("before create result: creating=%v nameDone=%v cmd=%v", m.creatingAgent, m.agentNameDone, cmd)
+	}
+
+	created := createCmd().(createAgentMsg)
+	if len(api.createdAgents) != 1 {
+		t.Fatalf("created agent calls = %d", len(api.createdAgents))
+	}
+	in := api.createdAgents[0]
+	if in.Kind != defaultAgentExecutable || in.DisplayName != nil || in.Yolo {
+		t.Fatalf("quick create input = %+v", in)
+	}
+	updated, renameCmd := m.Update(created)
+	m = updated.(Model)
+	if renameCmd == nil {
+		t.Fatal("expected pending rename after creation completed")
+	}
+	_ = renameCmd().(renameAgentMsg)
+	if api.renamedAgentID != 9 || api.renamedAgentName != "reviewer" {
+		t.Fatalf("rename = id %d name %q", api.renamedAgentID, api.renamedAgentName)
+	}
+}
+
+func TestModelQuickAgentEmptyNameKeepsDefault(t *testing.T) {
+	api := &fakeAPI{createdAgent: httpclient.Agent{ID: 9, ProjectID: 7, SessionID: 1, Kind: defaultAgentExecutable}}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+	})
+	m = updated.(Model)
+	updated, createCmd := m.Update(runes("a"))
+	m = updated.(Model)
+	created := createCmd().(createAgentMsg)
+	updated, listCmd := m.Update(created)
+	m = updated.(Model)
+	if listCmd == nil || !m.creatingAgent || m.agentQuickID != 9 {
+		t.Fatalf("after create: creating=%v quickID=%d cmd nil=%v", m.creatingAgent, m.agentQuickID, listCmd == nil)
+	}
+	updated, refreshCmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = updated.(Model)
+	if refreshCmd == nil || m.creatingAgent || api.renamedAgentID != 0 {
+		t.Fatalf("empty rename: creating=%v renameID=%d cmd nil=%v", m.creatingAgent, api.renamedAgentID, refreshCmd == nil)
+	}
+}
 
 func TestModelAgentPromptCreatesAgentInSelectedSession(t *testing.T) {
 	api := &fakeAPI{createdAgent: httpclient.Agent{ID: 9, ProjectID: 7, SessionID: 2, Kind: "claude", DisplayName: "reviewer"}}
@@ -1340,7 +1409,7 @@ func TestModelAgentPromptCreatesAgentInSelectedSession(t *testing.T) {
 	m = updated.(Model)
 	m = press(m, runes("2")) // sessions tab
 	m = press(m, runes("j")) // select the worktree session
-	m = press(m, runes("a"))
+	m = press(m, runes("A"))
 	if !m.creatingAgent || m.agentSessionID != 2 || m.agentProjectID != 7 {
 		t.Fatalf("creatingAgent=%v sessionID=%d projectID=%d", m.creatingAgent, m.agentSessionID, m.agentProjectID)
 	}
@@ -1374,9 +1443,10 @@ func TestModelAgentPromptOmitsEmptyName(t *testing.T) {
 	})
 	m = updated.(Model)
 	m = press(m, runes("2")) // sessions tab
-	m = press(m, runes("a"))
+	m = press(m, runes("A"))
 	m = press(m, tea.KeyMsg{Type: tea.KeyEnter}) // advance to the executable step with an empty name
 	m = press(m, runes("opencode"))
+	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = updated.(Model)
 	if cmd == nil {
@@ -1400,9 +1470,10 @@ func TestModelAgentPromptUsesDefaultExecutable(t *testing.T) {
 	})
 	m = updated.(Model)
 	m = press(m, runes("2")) // sessions tab
-	m = press(m, runes("a"))
-	m = press(m, tea.KeyMsg{Type: tea.KeyEnter}) // advance with an empty name
-	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = press(m, runes("A"))
+	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})             // advance with an empty name
+	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})             // accept the default OpenCode executable
+	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter}) // keep yolo mode off
 	m = updated.(Model)
 	if cmd == nil {
 		t.Fatal("expected create command with the default executable")
@@ -1416,6 +1487,32 @@ func TestModelAgentPromptUsesDefaultExecutable(t *testing.T) {
 	}
 }
 
+func TestModelAgentPromptEnablesOpenCodeYoloModeExplicitly(t *testing.T) {
+	api := &fakeAPI{createdAgent: httpclient.Agent{ID: 9, ProjectID: 7, SessionID: 1, Kind: defaultAgentExecutable}}
+	m := NewModel(context.Background(), api)
+	updated, _ := m.Update(listMsg{
+		projects: []httpclient.Project{{ID: 7, MainSessionName: "api.main"}},
+		sessions: []httpclient.Session{{ID: 1, ProjectID: 7, SessionName: "api.main", Type: "main"}},
+	})
+	m = updated.(Model)
+	m = press(m, runes("2"))
+	m = press(m, runes("A"))
+	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = press(m, tea.KeyMsg{Type: tea.KeyEnter})
+	if m.agentStep != agentPromptYolo || !strings.Contains(m.View(), "auto-approves permissions") {
+		t.Fatalf("agent step = %d, want explicit yolo warning", m.agentStep)
+	}
+	updated, cmd := m.Update(runes("y"))
+	m = updated.(Model)
+	if cmd == nil || !m.loading {
+		t.Fatalf("loading=%v cmd nil=%v", m.loading, cmd == nil)
+	}
+	_ = cmd().(createAgentMsg)
+	if len(api.createdAgents) != 1 || !api.createdAgents[0].Yolo {
+		t.Fatalf("create inputs = %+v, want yolo enabled", api.createdAgents)
+	}
+}
+
 func TestModelAgentPromptEscCancels(t *testing.T) {
 	api := &fakeAPI{}
 	m := NewModel(context.Background(), api)
@@ -1425,7 +1522,7 @@ func TestModelAgentPromptEscCancels(t *testing.T) {
 	})
 	m = updated.(Model)
 	m = press(m, runes("2")) // sessions tab
-	m = press(m, runes("a"))
+	m = press(m, runes("A"))
 	m = press(m, runes("claude"))
 	updated, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEsc})
 	m = updated.(Model)
@@ -1441,7 +1538,7 @@ func TestModelAgentFromAgentsTabUsesOwningSession(t *testing.T) {
 		agents:   []httpclient.Agent{{ID: 3, ProjectID: 7, SessionID: 5, Kind: "claude", Status: "running"}},
 	})
 	m = press(m, runes("3")) // agents tab
-	m = press(m, runes("a"))
+	m = press(m, runes("A"))
 	if !m.creatingAgent || m.agentSessionID != 5 || m.agentProjectID != 7 {
 		t.Fatalf("creatingAgent=%v sessionID=%d projectID=%d, want the selected agent's owning session", m.creatingAgent, m.agentSessionID, m.agentProjectID)
 	}
