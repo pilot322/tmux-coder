@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/obs"
@@ -29,17 +31,44 @@ type CreateProjectResult struct {
 }
 
 type CreateProject struct {
-	projects IProjectRepository
-	sessions ISessionRepository
-	gateway  SessionGateway
-	git      GitWorktreeGateway
-	lock     StateLock
-	config   domain.DaemonConfig
-	log      obs.Logger
+	projects     IProjectRepository
+	sessions     ISessionRepository
+	gateway      SessionGateway
+	git          GitWorktreeGateway
+	lock         StateLock
+	config       domain.DaemonConfig
+	log          obs.Logger
+	validatePath func(string) error
 }
 
 func NewCreateProject(p IProjectRepository, s ISessionRepository, g SessionGateway, git GitWorktreeGateway, l StateLock, c domain.DaemonConfig, log obs.Logger) *CreateProject {
-	return &CreateProject{projects: p, sessions: s, gateway: g, git: git, lock: l, config: c, log: log.With("component", "create-project")}
+	return NewCreateProjectWithPathValidation(p, s, g, git, l, c, validateProjectPath, log)
+}
+
+// NewCreateProjectWithPathValidation allows tests with logical filesystem paths
+// to provide their own validation without changing production validation.
+func NewCreateProjectWithPathValidation(p IProjectRepository, s ISessionRepository, g SessionGateway, git GitWorktreeGateway, l StateLock, c domain.DaemonConfig, validatePath func(string) error, log obs.Logger) *CreateProject {
+	return &CreateProject{projects: p, sessions: s, gateway: g, git: git, lock: l, config: c, log: log.With("component", "create-project"), validatePath: validatePath}
+}
+
+func validateProjectPath(path string) error {
+	if strings.TrimSpace(path) == "" {
+		return fmt.Errorf("%w: fullPath is required", ErrValidation)
+	}
+	if !filepath.IsAbs(path) {
+		return fmt.Errorf("%w: fullPath must be absolute", ErrValidation)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return fmt.Errorf("%w: fullPath does not exist", ErrValidation)
+		}
+		return err
+	}
+	if !info.IsDir() {
+		return fmt.Errorf("%w: fullPath must be a directory", ErrValidation)
+	}
+	return nil
 }
 
 // Execute creates a Project for fullPath, or reconciles an existing one.
@@ -49,6 +78,10 @@ func NewCreateProject(p IProjectRepository, s ISessionRepository, g SessionGatew
 // lock (ADR-0003) and rolls the records back if that fails. Existing project:
 // it reconciles the project's tmux sessions and returns Created=false.
 func (uc *CreateProject) Execute(ctx context.Context, in CreateProjectInput) (CreateProjectResult, error) {
+	if err := uc.validatePath(in.FullPath); err != nil {
+		return CreateProjectResult{}, err
+	}
+
 	// Detection is read-only and runs before any record is written, so a
 	// rejected open has zero side effects (ADR-0013).
 	detected, err := uc.adoptableWorktrees(ctx, in.FullPath)

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
@@ -12,11 +13,102 @@ import (
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
+func projectDir(t *testing.T, name string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), name)
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
+func TestCreateProject_RejectsBlankPathBeforeSideEffects(t *testing.T) {
+	uc, projects, sessions, gw, _ := createFixture()
+	ctx := context.Background()
+
+	_, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: " \t\n"})
+	if !errors.Is(err, usecase.ErrValidation) || !strings.Contains(err.Error(), "fullPath is required") {
+		t.Fatalf("Execute error = %v, want ErrValidation explaining that fullPath is required", err)
+	}
+	if all, _ := projects.GetAll(ctx); len(all) != 0 {
+		t.Errorf("projects created = %d, want 0", len(all))
+	}
+	if all, _ := sessions.GetAll(ctx); len(all) != 0 {
+		t.Errorf("sessions created = %d, want 0", len(all))
+	}
+	if len(gw.created) != 0 {
+		t.Errorf("tmux sessions created = %d, want 0", len(gw.created))
+	}
+}
+
+func TestCreateProject_RejectsRelativePathBeforeSideEffects(t *testing.T) {
+	uc, projects, sessions, gw, _ := createFixture()
+	ctx := context.Background()
+
+	_, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: filepath.Join("work", "api")})
+	if !errors.Is(err, usecase.ErrValidation) || !strings.Contains(err.Error(), "fullPath must be absolute") {
+		t.Fatalf("Execute error = %v, want ErrValidation explaining that fullPath must be absolute", err)
+	}
+	if all, _ := projects.GetAll(ctx); len(all) != 0 {
+		t.Errorf("projects created = %d, want 0", len(all))
+	}
+	if all, _ := sessions.GetAll(ctx); len(all) != 0 {
+		t.Errorf("sessions created = %d, want 0", len(all))
+	}
+	if len(gw.created) != 0 {
+		t.Errorf("tmux sessions created = %d, want 0", len(gw.created))
+	}
+}
+
+func TestCreateProject_RejectsMissingPathBeforeSideEffects(t *testing.T) {
+	uc, projects, sessions, gw, _ := createFixture()
+	ctx := context.Background()
+	missing := filepath.Join(t.TempDir(), "missing")
+
+	_, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: missing})
+	if !errors.Is(err, usecase.ErrValidation) || !strings.Contains(err.Error(), "fullPath does not exist") {
+		t.Fatalf("Execute error = %v, want ErrValidation explaining that fullPath does not exist", err)
+	}
+	if all, _ := projects.GetAll(ctx); len(all) != 0 {
+		t.Errorf("projects created = %d, want 0", len(all))
+	}
+	if all, _ := sessions.GetAll(ctx); len(all) != 0 {
+		t.Errorf("sessions created = %d, want 0", len(all))
+	}
+	if len(gw.created) != 0 {
+		t.Errorf("tmux sessions created = %d, want 0", len(gw.created))
+	}
+}
+
+func TestCreateProject_RejectsNonDirectoryPathBeforeSideEffects(t *testing.T) {
+	uc, projects, sessions, gw, _ := createFixture()
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "project.txt")
+	if err := os.WriteFile(path, []byte("not a directory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: path})
+	if !errors.Is(err, usecase.ErrValidation) || !strings.Contains(err.Error(), "fullPath must be a directory") {
+		t.Fatalf("Execute error = %v, want ErrValidation explaining that fullPath must be a directory", err)
+	}
+	if all, _ := projects.GetAll(ctx); len(all) != 0 {
+		t.Errorf("projects created = %d, want 0", len(all))
+	}
+	if all, _ := sessions.GetAll(ctx); len(all) != 0 {
+		t.Errorf("sessions created = %d, want 0", len(all))
+	}
+	if len(gw.created) != 0 {
+		t.Errorf("tmux sessions created = %d, want 0", len(gw.created))
+	}
+}
+
 func TestCreateProject_LogsCreatedMilestone(t *testing.T) {
 	rec := obs.Recording()
 	uc, _, _, _, _ := createFixtureWithLog(rec)
+	root := projectDir(t, "api")
 
-	if _, err := uc.Execute(context.Background(), usecase.CreateProjectInput{FullPath: "/work/api"}); err != nil {
+	if _, err := uc.Execute(context.Background(), usecase.CreateProjectInput{FullPath: root}); err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
 
@@ -89,11 +181,12 @@ func TestCreateProject_MaterializesDeclaredSecondaries(t *testing.T) {
 	}
 }
 
-func TestCreateProject_NewProject(t *testing.T) {
+func TestCreateProject_AcceptsExistingAbsoluteDirectory(t *testing.T) {
 	uc, projects, _, gw, _ := createFixture()
 	ctx := context.Background()
+	root := projectDir(t, "api")
 
-	res, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api"})
+	res, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: root})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -109,8 +202,8 @@ func TestCreateProject_NewProject(t *testing.T) {
 	if res.MainSessionName != "api.main" {
 		t.Errorf("MainSessionName = %q, want %q", res.MainSessionName, "api.main")
 	}
-	if len(gw.created) != 1 || gw.created[0].name != "api_main" || gw.created[0].dir != "/work/api" {
-		t.Errorf("gateway.Create calls = %+v, want one {api_main /work/api}", gw.created)
+	if len(gw.created) != 1 || gw.created[0].name != "api_main" || gw.created[0].dir != root {
+		t.Errorf("gateway.Create calls = %+v, want one {api_main %s}", gw.created, root)
 	}
 	if gw.ranUnderLock {
 		t.Errorf("ADR-0003 violated: tmux exec ran inside the write lock")
@@ -218,9 +311,10 @@ func TestCreateProject_RejectsMalformedConfig(t *testing.T) {
 func TestCreateProject_CustomTitle(t *testing.T) {
 	uc, _, _, _, _ := createFixture()
 	ctx := context.Background()
+	root := projectDir(t, "api")
 	title := "  Backend API  "
 
-	res, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api", Title: &title})
+	res, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: root, Title: &title})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -232,11 +326,12 @@ func TestCreateProject_CustomTitle(t *testing.T) {
 func TestCreateProject_DuplicateIgnoresTitle(t *testing.T) {
 	uc, _, _, _, _ := createFixture()
 	ctx := context.Background()
+	root := projectDir(t, "api")
 	firstTitle := "Backend API"
 	secondTitle := "Different API"
 
-	first, _ := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api", Title: &firstTitle})
-	second, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api", Title: &secondTitle})
+	first, _ := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: root, Title: &firstTitle})
+	second, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: root, Title: &secondTitle})
 	if err != nil {
 		t.Fatalf("Execute (duplicate): %v", err)
 	}
@@ -245,7 +340,7 @@ func TestCreateProject_DuplicateIgnoresTitle(t *testing.T) {
 	}
 
 	invalidTitle := "Backend  API"
-	third, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api", Title: &invalidTitle})
+	third, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: root, Title: &invalidTitle})
 	if err != nil {
 		t.Fatalf("Execute (duplicate invalid title): %v", err)
 	}
@@ -257,9 +352,10 @@ func TestCreateProject_DuplicateIgnoresTitle(t *testing.T) {
 func TestCreateProject_RejectsInvalidTitle(t *testing.T) {
 	uc, _, _, _, _ := createFixture()
 	ctx := context.Background()
+	root := projectDir(t, "api")
 
 	for _, title := range []string{"   ", "Backend  API", "abcdefghijklmnopqrstuvwxyzabcdefghijklmno"} {
-		_, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api", Title: &title})
+		_, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: root, Title: &title})
 		if !errors.Is(err, domain.ErrInvalidProjectTitle) {
 			t.Fatalf("title %q: want ErrInvalidProjectTitle, got %v", title, err)
 		}
@@ -270,8 +366,9 @@ func TestCreateProject_RollsBackOnGatewayFailure(t *testing.T) {
 	uc, projects, sessions, gw, _ := createFixture()
 	gw.createErr = errors.New("tmux exploded")
 	ctx := context.Background()
+	root := projectDir(t, "api")
 
-	_, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api"})
+	_, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: root})
 	if !errors.Is(err, usecase.ErrGateway) {
 		t.Fatalf("want ErrGateway, got %v", err)
 	}
@@ -286,9 +383,10 @@ func TestCreateProject_RollsBackOnGatewayFailure(t *testing.T) {
 func TestCreateProject_DeduplicatesByFullPath(t *testing.T) {
 	uc, projects, _, gw, _ := createFixture()
 	ctx := context.Background()
+	root := projectDir(t, "api")
 
-	first, _ := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api"})
-	second, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api"})
+	first, _ := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: root})
+	second, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: root})
 	if err != nil {
 		t.Fatalf("Execute (duplicate): %v", err)
 	}
@@ -310,12 +408,13 @@ func TestCreateProject_DeduplicatesByFullPath(t *testing.T) {
 func TestCreateProject_ReconcilesMissingSessionOnDuplicate(t *testing.T) {
 	uc, _, _, gw, _ := createFixture()
 	ctx := context.Background()
+	root := projectDir(t, "api")
 
-	_, _ = uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api"})
+	_, _ = uc.Execute(ctx, usecase.CreateProjectInput{FullPath: root})
 	// Simulate the tmux session having died between requests.
 	gw.exists["api_main"] = false
 
-	if _, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api"}); err != nil {
+	if _, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: root}); err != nil {
 		t.Fatalf("Execute (reconcile): %v", err)
 	}
 	if len(gw.created) != 2 {
@@ -326,8 +425,9 @@ func TestCreateProject_ReconcilesMissingSessionOnDuplicate(t *testing.T) {
 func TestCreateProject_ReconcileSecondaryHealsAtWorktreeRoot(t *testing.T) {
 	uc, _, sessions, gw, _ := createFixture()
 	ctx := context.Background()
+	root := projectDir(t, "api")
 
-	res, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api"})
+	res, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: root})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}
@@ -347,7 +447,7 @@ func TestCreateProject_ReconcileSecondaryHealsAtWorktreeRoot(t *testing.T) {
 	gw.exists["api_main"] = true
 	gw.exists["sec_tmux"] = false
 
-	if _, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api"}); err != nil {
+	if _, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: root}); err != nil {
 		t.Fatalf("Execute (reconcile): %v", err)
 	}
 
@@ -368,9 +468,11 @@ func TestCreateProject_ReconcileSecondaryHealsAtWorktreeRoot(t *testing.T) {
 func TestCreateProject_BumpsNameOnCrossProjectCollision(t *testing.T) {
 	uc, _, _, _, _ := createFixture()
 	ctx := context.Background()
+	workAPI := projectDir(t, "api")
+	personalAPI := projectDir(t, "api")
 
-	_, _ = uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api"})
-	res, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: "/personal/api"})
+	_, _ = uc.Execute(ctx, usecase.CreateProjectInput{FullPath: workAPI})
+	res, err := uc.Execute(ctx, usecase.CreateProjectInput{FullPath: personalAPI})
 	if err != nil {
 		t.Fatalf("Execute: %v", err)
 	}

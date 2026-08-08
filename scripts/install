@@ -72,7 +72,7 @@ fi
 
 gobin="$(go env GOBIN)"
 [[ -z "$gobin" ]] && gobin="$(go env GOPATH)/bin"
-echo "installed prod tmux-coder, tmux-coderd → ${gobin} (defaults: daemon port 64357, OpenCode port 39155, tmux server tmux-coder)"
+echo "installed prod tmux-coder, tmux-coderd → ${gobin} (defaults: daemon port 64357, OpenCode port 39155, dashboard port 39356, tmux server tmux-coder)"
 
 opencode_plugin_dir="${XDG_CONFIG_HOME:-$HOME/.config}/opencode/plugin/tmux-coder"
 mkdir -p "$opencode_plugin_dir"

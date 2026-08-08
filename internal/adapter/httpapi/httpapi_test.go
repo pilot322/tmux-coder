@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/pilot322/tmux-coder/internal/adapter/httpapi"
+	"github.com/pilot322/tmux-coder/internal/adapter/webdashboard"
 	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/infra/desktopnotify"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
@@ -163,10 +164,21 @@ func newServerWithConfig(config domain.DaemonConfig) *http.ServeMux {
 }
 
 func newServerWithGitAndConfig(git *stubGit, config domain.DaemonConfig) *http.ServeMux {
+	return newServerWithPathValidation(git, config, false)
+}
+
+func newProductionServer() *http.ServeMux {
+	return newServerWithPathValidation(&stubGit{paths: make(map[string]bool)}, domain.DefaultDaemonConfig(), true)
+}
+
+func newServerWithPathValidation(git *stubGit, config domain.DaemonConfig, validatePath bool) *http.ServeMux {
 	state := memory.NewDaemonStateWithConfig(config)
 	gw := &stubGateway{exists: make(map[string]bool)}
 	agentGw := &stubAgentGateway{panes: make(map[string]bool)}
-	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gw, git, state, state.Config(), obs.Nop())
+	create := usecase.NewCreateProjectWithPathValidation(state.Projects(), state.Sessions(), gw, git, state, state.Config(), func(string) error { return nil }, obs.Nop())
+	if validatePath {
+		create = usecase.NewCreateProject(state.Projects(), state.Sessions(), gw, git, state, state.Config(), obs.Nop())
+	}
 	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state, obs.Nop())
 	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), state.Agents(), gw, state, obs.Nop())
 	createSession := usecase.NewCreateSession(state.Projects(), state.Sessions(), gw, git, state, obs.Nop())
@@ -191,7 +203,7 @@ func newResourceServer(ports *stubPortAvailability) (*http.ServeMux, *memory.Mem
 	gw := &stubGateway{exists: make(map[string]bool)}
 	git := &stubGit{paths: make(map[string]bool)}
 	agentGw := &stubAgentGateway{panes: make(map[string]bool)}
-	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gw, git, state, state.Config(), obs.Nop())
+	create := usecase.NewCreateProjectWithPathValidation(state.Projects(), state.Sessions(), gw, git, state, state.Config(), func(string) error { return nil }, obs.Nop())
 	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state, obs.Nop())
 	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), state.Agents(), gw, state, obs.Nop())
 	createSession := usecase.NewCreateSession(state.Projects(), state.Sessions(), gw, git, state, obs.Nop())
@@ -214,9 +226,69 @@ func newResourceServer(ports *stubPortAvailability) (*http.ServeMux, *memory.Mem
 	), state.Leases()
 }
 
+type controllerFixture struct {
+	projects     *httpapi.ProjectController
+	sessions     *httpapi.SessionController
+	agents       *httpapi.AgentController
+	agentGateway *stubAgentGateway
+}
+
+func newControllerFixture(publicURL, daemonAddress string) controllerFixture {
+	state := memory.NewDaemonState()
+	gw := &stubGateway{exists: make(map[string]bool)}
+	git := &stubGit{paths: make(map[string]bool)}
+	agentGw := &stubAgentGateway{panes: make(map[string]bool)}
+	create := usecase.NewCreateProjectWithPathValidation(state.Projects(), state.Sessions(), gw, git, state, state.Config(), func(string) error { return nil }, obs.Nop())
+	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state, obs.Nop())
+	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), state.Agents(), gw, state, obs.Nop())
+	createSession := usecase.NewCreateSession(state.Projects(), state.Sessions(), gw, git, state, obs.Nop())
+	listSessions := usecase.NewGetSessions(state.Projects(), state.Sessions(), git, state, obs.Nop())
+	deleteSession := usecase.NewDeleteSession(state.Sessions(), state.Agents(), gw, git, state, obs.Nop())
+	createAgent := usecase.NewCreateAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
+	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
+	renameAgent := usecase.NewRenameAgent(state.Agents(), state.Projects(), state.Sessions(), agentGw, state, obs.Nop())
+	setAgentDiscordNotification := usecase.NewSetAgentDiscordNotification(state.Agents(), state.Projects(), state.Sessions(), state.Config(), state)
+	agentEvent := usecase.NewAgentEvent(state.Agents(), state.Projects(), state.Sessions(), desktopnotify.NoopNotifier{}, state, obs.Nop())
+	deleteAgent := usecase.NewDeleteAgent(state.Agents(), agentGw, nil, state, obs.Nop())
+	reportOpenCodeSession := usecase.NewReportOpenCodeSession(state.Agents(), state)
+
+	return controllerFixture{
+		projects: httpapi.NewProjectController(create, list, del),
+		sessions: httpapi.NewSessionController(createSession, listSessions, deleteSession),
+		agents: httpapi.NewAgentController(
+			createAgent, listAgents, renameAgent, setAgentDiscordNotification, agentEvent, deleteAgent,
+			httpapi.WithReportOpenCodeSession(reportOpenCodeSession),
+			httpapi.WithOpenCodePublicURL(publicURL),
+			httpapi.WithInternalDaemonAddress(daemonAddress),
+		),
+		agentGateway: agentGw,
+	}
+}
+
+func newOpenCodeServer(publicURL, daemonAddress string) (*http.ServeMux, *stubAgentGateway) {
+	fixture := newControllerFixture(publicURL, daemonAddress)
+	return httpapi.NewRouter(fixture.projects, fixture.sessions, fixture.agents), fixture.agentGateway
+}
+
+func newDashboardServer() *http.ServeMux {
+	fixture := newControllerFixture("http://coder.tailnet.ts.net:4096", "127.0.0.1:64357")
+	return httpapi.NewDashboardRouter(fixture.projects, fixture.sessions, fixture.agents, webdashboard.Handler())
+}
+
 func do(t *testing.T, mux *http.ServeMux, method, path, body string) *httptest.ResponseRecorder {
+	return doWithContentType(t, mux, method, path, body, "")
+}
+
+func doJSON(t *testing.T, mux *http.ServeMux, method, path, body string) *httptest.ResponseRecorder {
+	return doWithContentType(t, mux, method, path, body, "application/json")
+}
+
+func doWithContentType(t *testing.T, mux *http.ServeMux, method, path, body, contentType string) *httptest.ResponseRecorder {
 	t.Helper()
 	req := httptest.NewRequest(method, path, strings.NewReader(body))
+	if contentType != "" {
+		req.Header.Set("Content-Type", contentType)
+	}
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 	return rec
@@ -378,6 +450,255 @@ func TestPostProjects_InvalidBody(t *testing.T) {
 	}
 	if rec := do(t, mux, "POST", "/projects", `{"fullPath":"/work/api","title":"Backend  API"}`); rec.Code != http.StatusBadRequest {
 		t.Errorf("adjacent spaces title status = %d, want 400", rec.Code)
+	}
+}
+
+func TestPostProjects_ValidatesHostPath(t *testing.T) {
+	mux := newProductionServer()
+	file := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, fullPath := range []string{"   ", "relative/path", filepath.Join(t.TempDir(), "missing"), file} {
+		body, err := json.Marshal(map[string]string{"fullPath": fullPath})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rec := do(t, mux, http.MethodPost, "/projects", string(body)); rec.Code != http.StatusBadRequest {
+			t.Errorf("POST fullPath %q status = %d, want 400 (body: %s)", fullPath, rec.Code, rec.Body)
+		}
+	}
+
+	directory := t.TempDir()
+	body, err := json.Marshal(map[string]string{"fullPath": directory})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rec := do(t, mux, http.MethodPost, "/projects", string(body)); rec.Code != http.StatusCreated {
+		t.Fatalf("POST existing directory status = %d, want 201 (body: %s)", rec.Code, rec.Body)
+	}
+}
+
+func TestDashboardRouterServesDashboardAndProjectManagementAPI(t *testing.T) {
+	mux := newDashboardServer()
+	for _, request := range []struct {
+		path     string
+		contains string
+	}{
+		{path: "/", contains: "<title>tmux-coder control room</title>"},
+		{path: "/app.js", contains: "API_PREFIX"},
+	} {
+		rec := do(t, mux, http.MethodGet, request.path, "")
+		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), request.contains) {
+			t.Fatalf("GET %s status = %d body does not contain %q", request.path, rec.Code, request.contains)
+		}
+	}
+
+	rec := doJSON(t, mux, http.MethodPost, "/api/projects", `{"fullPath":"/work/api"}`)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /api/projects status = %d, want 201 (body: %s)", rec.Code, rec.Body)
+	}
+	var project struct {
+		ID int `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &project); err != nil {
+		t.Fatal(err)
+	}
+	rec = do(t, mux, http.MethodGet, "/api/sessions?projectId="+strconv.Itoa(project.ID), "")
+	if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), `"projectId":`+strconv.Itoa(project.ID)) {
+		t.Fatalf("GET /api/sessions query was not preserved: status = %d body = %s", rec.Code, rec.Body)
+	}
+	if rec := do(t, mux, http.MethodDelete, "/api/projects/"+strconv.Itoa(project.ID), ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE /api/projects/{id} status = %d, want 204 (body: %s)", rec.Code, rec.Body)
+	}
+}
+
+func TestDashboardRouterServesSessionAndAgentManagementAPI(t *testing.T) {
+	mux := newDashboardServer()
+	rec := doJSON(t, mux, http.MethodPost, "/api/projects", `{"fullPath":"/work/api"}`)
+	var project struct {
+		ID int `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &project); err != nil {
+		t.Fatal(err)
+	}
+	rec = do(t, mux, http.MethodGet, "/api/sessions?projectId="+strconv.Itoa(project.ID), "")
+	var sessions struct {
+		Sessions []struct {
+			ID int `json:"id"`
+		} `json:"sessions"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &sessions); err != nil || len(sessions.Sessions) != 1 {
+		t.Fatalf("decode Main Session: err=%v body=%s", err, rec.Body)
+	}
+	mainSessionID := sessions.Sessions[0].ID
+
+	rec = doJSON(t, mux, http.MethodPost, "/api/sessions", fmt.Sprintf(`{"projectId":%d,"type":"worktree","branch":"feature/dashboard","createWorktree":true,"createBranch":true}`, project.ID))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /api/sessions status = %d, want 201 (body: %s)", rec.Code, rec.Body)
+	}
+	var worktreeSession struct {
+		ID int `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &worktreeSession); err != nil {
+		t.Fatal(err)
+	}
+	if rec := do(t, mux, http.MethodDelete, "/api/sessions/"+strconv.Itoa(worktreeSession.ID), ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE /api/sessions/{id} status = %d, want 204 (body: %s)", rec.Code, rec.Body)
+	}
+
+	rec = doJSON(t, mux, http.MethodPost, "/api/agents", fmt.Sprintf(`{"projectId":%d,"sessionId":%d,"kind":"opencode"}`, project.ID, mainSessionID))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /api/agents status = %d, want 201 (body: %s)", rec.Code, rec.Body)
+	}
+	var agent struct {
+		ID int `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &agent); err != nil {
+		t.Fatal(err)
+	}
+	if rec := do(t, mux, http.MethodGet, "/api/agents?projectId="+strconv.Itoa(project.ID)+"&sessionId="+strconv.Itoa(mainSessionID), ""); rec.Code != http.StatusOK {
+		t.Fatalf("GET /api/agents status = %d, want 200 (body: %s)", rec.Code, rec.Body)
+	}
+	if rec := doJSON(t, mux, http.MethodPatch, "/api/agents/"+strconv.Itoa(agent.ID), `{"displayName":"dashboard-agent"}`); rec.Code != http.StatusOK {
+		t.Fatalf("PATCH /api/agents/{id} status = %d, want 200 (body: %s)", rec.Code, rec.Body)
+	}
+	if rec := doJSON(t, mux, http.MethodPut, "/api/agents/"+strconv.Itoa(agent.ID)+"/discord-notification", `{"enabled":false}`); rec.Code != http.StatusOK {
+		t.Fatalf("PUT Discord notification status = %d, want 200 (body: %s)", rec.Code, rec.Body)
+	}
+	if rec := do(t, mux, http.MethodDelete, "/api/agents/"+strconv.Itoa(agent.ID), ""); rec.Code != http.StatusNoContent {
+		t.Fatalf("DELETE /api/agents/{id} status = %d, want 204 (body: %s)", rec.Code, rec.Body)
+	}
+}
+
+func TestDashboardRouterDeniesInternalAPIRoutes(t *testing.T) {
+	mux := newDashboardServer()
+	rec := doJSON(t, mux, http.MethodPost, "/api/projects", `{"fullPath":"/work/api"}`)
+	var project struct {
+		ID int `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &project)
+	rec = do(t, mux, http.MethodGet, "/api/sessions?projectId="+strconv.Itoa(project.ID), "")
+	var sessions struct {
+		Sessions []struct {
+			ID int `json:"id"`
+		} `json:"sessions"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &sessions)
+	rec = doJSON(t, mux, http.MethodPost, "/api/agents", fmt.Sprintf(`{"projectId":%d,"sessionId":%d,"kind":"opencode"}`, project.ID, sessions.Sessions[0].ID))
+	var agent struct {
+		ID int `json:"id"`
+	}
+	_ = json.Unmarshal(rec.Body.Bytes(), &agent)
+
+	requests := []struct {
+		method string
+		path   string
+		body   string
+	}{
+		{method: http.MethodPost, path: fmt.Sprintf("/api/agents/%d/event", agent.ID), body: `{"event":"started"}`},
+		{method: http.MethodPut, path: fmt.Sprintf("/api/agents/%d/opencode-session", agent.ID), body: `{"sessionId":"ses_current","tmuxPaneId":"%1","reporterEpoch":7,"sequence":1}`},
+		{method: http.MethodGet, path: fmt.Sprintf("/api/agents/%d/opencode-setup", agent.ID)},
+		{method: http.MethodPost, path: fmt.Sprintf("/api/agents/%d/opencode-setup/ready", agent.ID), body: `{}`},
+		{method: http.MethodPost, path: "/api/resources/ports/acquire", body: `{}`},
+		{method: http.MethodPost, path: "/api/resources/opencode-server", body: `{}`},
+	}
+	for _, request := range requests {
+		if rec := do(t, mux, request.method, request.path, request.body); rec.Code != http.StatusNotFound {
+			t.Errorf("%s %s status = %d, want 404 (body: %s)", request.method, request.path, rec.Code, rec.Body)
+		}
+	}
+}
+
+func TestDashboardRouterRejectsNonJSONMutationContentTypes(t *testing.T) {
+	mux := newDashboardServer()
+	requests := []struct {
+		name        string
+		method      string
+		path        string
+		contentType string
+	}{
+		{name: "POST without Content-Type", method: http.MethodPost, path: "/api/projects"},
+		{name: "POST text/plain", method: http.MethodPost, path: "/api/projects", contentType: "text/plain"},
+		{name: "POST form", method: http.MethodPost, path: "/api/projects", contentType: "application/x-www-form-urlencoded"},
+		{name: "PATCH text/plain", method: http.MethodPatch, path: "/api/agents/1", contentType: "text/plain"},
+		{name: "PUT text/plain", method: http.MethodPut, path: "/api/agents/1/discord-notification", contentType: "text/plain"},
+	}
+	for _, request := range requests {
+		t.Run(request.name, func(t *testing.T) {
+			rec := doWithContentType(t, mux, request.method, request.path, `{}`, request.contentType)
+			if rec.Code != http.StatusUnsupportedMediaType {
+				t.Fatalf("status = %d, want 415 (body: %s)", rec.Code, rec.Body)
+			}
+			if got := rec.Header().Get("Content-Type"); got != "application/json" {
+				t.Fatalf("Content-Type = %q, want application/json", got)
+			}
+			var response struct {
+				Error string `json:"error"`
+			}
+			if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || response.Error == "" {
+				t.Fatalf("response is not a JSON error: err=%v body=%s", err, rec.Body)
+			}
+		})
+	}
+}
+
+func TestDashboardRouterAcceptsJSONContentTypeParameters(t *testing.T) {
+	mux := newDashboardServer()
+	rec := doWithContentType(t, mux, http.MethodPost, "/api/projects", `{"fullPath":"/work/api"}`, "application/json; charset=utf-8")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body: %s)", rec.Code, rec.Body)
+	}
+}
+
+func TestDashboardRouterRejectsKnownOversizedMutationBody(t *testing.T) {
+	mux := newDashboardServer()
+	rec := doJSON(t, mux, http.MethodPost, "/api/projects", strings.Repeat("x", (1<<20)+1))
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413 (body: %s)", rec.Code, rec.Body)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+	var response struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || response.Error == "" {
+		t.Fatalf("response is not a JSON error: err=%v body=%s", err, rec.Body)
+	}
+}
+
+func TestDashboardRouterRejectsOversizedChunkedMutationBody(t *testing.T) {
+	mux := newDashboardServer()
+	body := `{"fullPath":"/work/api"}` + strings.Repeat(" ", 1<<20)
+	req := httptest.NewRequest(http.MethodPost, "/api/projects", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.ContentLength = -1
+	req.TransferEncoding = []string{"chunked"}
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusRequestEntityTooLarge {
+		t.Fatalf("status = %d, want 413 (body: %s)", rec.Code, rec.Body)
+	}
+	if got := rec.Header().Get("Content-Type"); got != "application/json" {
+		t.Fatalf("Content-Type = %q, want application/json", got)
+	}
+	var response struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil || response.Error == "" {
+		t.Fatalf("response is not a JSON error: err=%v body=%s", err, rec.Body)
+	}
+}
+
+func TestInternalRouterAcceptsLegacyMutationRequests(t *testing.T) {
+	mux := newServer()
+	body := `{"fullPath":"/work/api"}` + strings.Repeat(" ", 1<<20)
+	rec := doWithContentType(t, mux, http.MethodPost, "/projects", body, "text/plain")
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("status = %d, want 201 (body: %s)", rec.Code, rec.Body)
 	}
 }
 
@@ -759,6 +1080,53 @@ func TestPostAgents_CreatesAgentInSession(t *testing.T) {
 	}
 }
 
+func TestPostAgents_UsesFixedInternalDaemonAddressInsteadOfRequestHost(t *testing.T) {
+	mux, agentGateway := newOpenCodeServer("", "127.0.0.1:64357")
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	body := fmt.Sprintf(`{"projectId":%d,"sessionId":%d,"kind":"opencode"}`, projectID, sessionID)
+	req := httptest.NewRequest(http.MethodPost, "/agents", strings.NewReader(body))
+	req.Host = "public-host.example:443"
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /agents status = %d, want 201 (body: %s)", rec.Code, rec.Body)
+	}
+	if len(agentGateway.created) != 1 {
+		t.Fatalf("created windows = %d, want 1", len(agentGateway.created))
+	}
+	var daemonEnvironment string
+	for _, variable := range agentGateway.created[0].env {
+		if strings.HasPrefix(variable, "TMUX_CODERD_ADDR=") {
+			daemonEnvironment = variable
+		}
+	}
+	if daemonEnvironment != "TMUX_CODERD_ADDR=127.0.0.1:64357" {
+		t.Fatalf("daemon environment = %q, want fixed internal address", daemonEnvironment)
+	}
+	if strings.Contains(strings.Join(agentGateway.created[0].env, "\n"), req.Host) {
+		t.Fatalf("agent environment contains hostile request Host %q: %v", req.Host, agentGateway.created[0].env)
+	}
+}
+
+func TestPostAgents_OmitsOpenCodeFieldsUntilIdentityIsReported(t *testing.T) {
+	mux, _ := newOpenCodeServer("http://coder.tailnet.ts.net:4096", "127.0.0.1:64357")
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	body := fmt.Sprintf(`{"projectId":%d,"sessionId":%d,"kind":"opencode"}`, projectID, sessionID)
+	rec := do(t, mux, http.MethodPost, "/agents", body)
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("POST /agents status = %d, want 201 (body: %s)", rec.Code, rec.Body)
+	}
+	var agent map[string]json.RawMessage
+	if err := json.Unmarshal(rec.Body.Bytes(), &agent); err != nil {
+		t.Fatal(err)
+	}
+	for _, field := range []string{"openCodeSessionId", "openCodeWebUrl"} {
+		if _, exists := agent[field]; exists {
+			t.Errorf("unreported create response contains %s: %s", field, rec.Body)
+		}
+	}
+}
+
 func TestGetAgents_ListsAgents(t *testing.T) {
 	mux := newServer()
 	rec := do(t, mux, "POST", "/projects", `{"fullPath":"/work/api"}`)
@@ -793,6 +1161,222 @@ func TestGetAgents_ListsAgents(t *testing.T) {
 	}
 	if resp.Agents[0].StatusChangedAt.IsZero() {
 		t.Fatal("expected non-zero statusChangedAt")
+	}
+}
+
+func TestPutAgentOpenCodeSessionAssociatesIdentityAndReturnsDeepLink(t *testing.T) {
+	mux, _ := newOpenCodeServer("http://coder.tailnet.ts.net:4096", "127.0.0.1:64357")
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	agentID := createAgent(t, mux, projectID, sessionID)
+
+	rec := do(t, mux, http.MethodPut, "/agents/"+strconv.Itoa(agentID)+"/opencode-session", `{"sessionId":"ses_current","tmuxPaneId":"%1","reporterEpoch":7,"sequence":1}`)
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("PUT OpenCode session status = %d, want 204 (body: %s)", rec.Code, rec.Body)
+	}
+
+	rec = do(t, mux, http.MethodGet, "/agents", "")
+	var response struct {
+		Agents []map[string]json.RawMessage `json:"agents"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Agents) != 1 {
+		t.Fatalf("agents = %d, want 1", len(response.Agents))
+	}
+	var gotSessionID, gotWebURL string
+	if err := json.Unmarshal(response.Agents[0]["openCodeSessionId"], &gotSessionID); err != nil {
+		t.Fatalf("decode openCodeSessionId: %v", err)
+	}
+	if err := json.Unmarshal(response.Agents[0]["openCodeWebUrl"], &gotWebURL); err != nil {
+		t.Fatalf("decode openCodeWebUrl: %v", err)
+	}
+	if gotSessionID != "ses_current" {
+		t.Fatalf("openCodeSessionId = %q, want ses_current", gotSessionID)
+	}
+	wantURL := "http://coder.tailnet.ts.net:4096/server/aHR0cDovL2NvZGVyLnRhaWxuZXQudHMubmV0OjQwOTY/session/ses_current"
+	if gotWebURL != wantURL {
+		t.Fatalf("openCodeWebUrl = %q, want %q", gotWebURL, wantURL)
+	}
+}
+
+func TestPutAgentOpenCodeSessionSwitchIgnoresStaleReorderedReport(t *testing.T) {
+	mux, _ := newOpenCodeServer("http://coder.tailnet.ts.net:4096", "127.0.0.1:64357")
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	agentID := createAgent(t, mux, projectID, sessionID)
+	path := "/agents/" + strconv.Itoa(agentID) + "/opencode-session"
+
+	for _, body := range []string{
+		`{"sessionId":"ses_initial","tmuxPaneId":"%1","reporterEpoch":7,"sequence":1}`,
+		`{"sessionId":"ses_switched","tmuxPaneId":"%1","reporterEpoch":7,"sequence":3}`,
+		`{"sessionId":"ses_stale","tmuxPaneId":"%1","reporterEpoch":7,"sequence":2}`,
+	} {
+		if rec := do(t, mux, http.MethodPut, path, body); rec.Code != http.StatusNoContent {
+			t.Fatalf("PUT status = %d, want 204 (body: %s)", rec.Code, rec.Body)
+		}
+	}
+
+	rec := do(t, mux, http.MethodGet, "/agents", "")
+	var response struct {
+		Agents []struct {
+			OpenCodeSessionID string `json:"openCodeSessionId"`
+			OpenCodeWebURL    string `json:"openCodeWebUrl"`
+		} `json:"agents"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Agents) != 1 || response.Agents[0].OpenCodeSessionID != "ses_switched" || !strings.HasSuffix(response.Agents[0].OpenCodeWebURL, "/session/ses_switched") {
+		t.Fatalf("stale report changed current OpenCode identity: %+v", response.Agents)
+	}
+}
+
+func TestPutAgentOpenCodeSessionClearRemovesIdentityAndURL(t *testing.T) {
+	mux, _ := newOpenCodeServer("http://coder.tailnet.ts.net:4096", "127.0.0.1:64357")
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	agentID := createAgent(t, mux, projectID, sessionID)
+	path := "/agents/" + strconv.Itoa(agentID) + "/opencode-session"
+
+	if rec := do(t, mux, http.MethodPut, path, `{"sessionId":"ses_current","tmuxPaneId":"%1","reporterEpoch":7,"sequence":1}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("associate status = %d, want 204", rec.Code)
+	}
+	if rec := do(t, mux, http.MethodPut, path, `{"sessionId":null,"tmuxPaneId":"%1","reporterEpoch":7,"sequence":2}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("clear status = %d, want 204 (body: %s)", rec.Code, rec.Body)
+	}
+
+	rec := do(t, mux, http.MethodGet, "/agents", "")
+	var response struct {
+		Agents []map[string]json.RawMessage `json:"agents"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Agents) != 1 {
+		t.Fatalf("agents = %d, want 1", len(response.Agents))
+	}
+	for _, field := range []string{"openCodeSessionId", "openCodeWebUrl"} {
+		if _, exists := response.Agents[0][field]; exists {
+			t.Errorf("cleared Agent response still contains %s: %s", field, rec.Body)
+		}
+	}
+}
+
+func TestPutAgentOpenCodeSessionRejectsUnknownAndNonOpenCodeAgents(t *testing.T) {
+	mux, _ := newOpenCodeServer("http://coder.tailnet.ts.net:4096", "127.0.0.1:64357")
+	validReport := `{"sessionId":"ses_current","tmuxPaneId":"%1","reporterEpoch":7,"sequence":1}`
+	if rec := do(t, mux, http.MethodPut, "/agents/999/opencode-session", validReport); rec.Code != http.StatusNotFound {
+		t.Fatalf("unknown Agent status = %d, want 404 (body: %s)", rec.Code, rec.Body)
+	}
+
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	rec := do(t, mux, http.MethodPost, "/agents", fmt.Sprintf(`{"projectId":%d,"sessionId":%d,"kind":"claude"}`, projectID, sessionID))
+	if rec.Code != http.StatusCreated {
+		t.Fatalf("create non-OpenCode Agent status = %d, want 201 (body: %s)", rec.Code, rec.Body)
+	}
+	var agent struct {
+		ID int `json:"id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &agent); err != nil {
+		t.Fatal(err)
+	}
+	if rec := do(t, mux, http.MethodPut, "/agents/"+strconv.Itoa(agent.ID)+"/opencode-session", validReport); rec.Code != http.StatusBadRequest {
+		t.Fatalf("non-OpenCode Agent status = %d, want 400 (body: %s)", rec.Code, rec.Body)
+	}
+}
+
+func TestPutAgentOpenCodeSessionValidation(t *testing.T) {
+	mux, _ := newOpenCodeServer("http://coder.tailnet.ts.net:4096", "127.0.0.1:64357")
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	agentID := createAgent(t, mux, projectID, sessionID)
+	path := "/agents/" + strconv.Itoa(agentID) + "/opencode-session"
+
+	requests := []struct {
+		name string
+		path string
+		body string
+	}{
+		{name: "invalid path ID", path: "/agents/not-an-id/opencode-session", body: `{}`},
+		{name: "invalid JSON", path: path, body: `{`},
+		{name: "invalid pane ID", path: path, body: `{"sessionId":"ses_current","tmuxPaneId":"1","reporterEpoch":7,"sequence":1}`},
+		{name: "missing sequence", path: path, body: `{"sessionId":"ses_current","tmuxPaneId":"%1","reporterEpoch":7}`},
+	}
+	for _, request := range requests {
+		t.Run(request.name, func(t *testing.T) {
+			if rec := do(t, mux, http.MethodPut, request.path, request.body); rec.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d, want 400 (body: %s)", rec.Code, rec.Body)
+			}
+		})
+	}
+}
+
+func TestAgentUpdateAndDiscordResponsesIncludeReportedOpenCodeLink(t *testing.T) {
+	mux, _ := newOpenCodeServer("http://coder.tailnet.ts.net:4096", "127.0.0.1:64357")
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	agentID := createAgent(t, mux, projectID, sessionID)
+	reportPath := "/agents/" + strconv.Itoa(agentID) + "/opencode-session"
+	if rec := do(t, mux, http.MethodPut, reportPath, `{"sessionId":"ses_current","tmuxPaneId":"%1","reporterEpoch":7,"sequence":1}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("report status = %d, want 204 (body: %s)", rec.Code, rec.Body)
+	}
+
+	assertLink := func(rec *httptest.ResponseRecorder) {
+		t.Helper()
+		var response struct {
+			OpenCodeSessionID string `json:"openCodeSessionId"`
+			OpenCodeWebURL    string `json:"openCodeWebUrl"`
+		}
+		if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+			t.Fatal(err)
+		}
+		wantURL := "http://coder.tailnet.ts.net:4096/server/aHR0cDovL2NvZGVyLnRhaWxuZXQudHMubmV0OjQwOTY/session/ses_current"
+		if response.OpenCodeSessionID != "ses_current" || response.OpenCodeWebURL != wantURL {
+			t.Fatalf("OpenCode response fields = %+v, want identity and exact URL", response)
+		}
+	}
+
+	rec := do(t, mux, http.MethodPatch, "/agents/"+strconv.Itoa(agentID), `{"displayName":"reviewer"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("PATCH status = %d, want 200 (body: %s)", rec.Code, rec.Body)
+	}
+	assertLink(rec)
+
+	rec = do(t, mux, http.MethodPut, "/agents/"+strconv.Itoa(agentID)+"/discord-notification", `{"enabled":false}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("Discord PUT status = %d, want 200 (body: %s)", rec.Code, rec.Body)
+	}
+	assertLink(rec)
+}
+
+func TestGetAgents_OpenCodeFieldsRequireKindIdentityAndPublicURL(t *testing.T) {
+	mux, _ := newOpenCodeServer("", "127.0.0.1:64357")
+	projectID, sessionID := createProjectAndGetSession(t, mux)
+	openCodeAgentID := createAgent(t, mux, projectID, sessionID)
+	if rec := do(t, mux, http.MethodPost, "/agents", fmt.Sprintf(`{"projectId":%d,"sessionId":%d,"kind":"claude"}`, projectID, sessionID)); rec.Code != http.StatusCreated {
+		t.Fatalf("create non-OpenCode Agent status = %d, want 201", rec.Code)
+	}
+	if rec := do(t, mux, http.MethodPut, "/agents/"+strconv.Itoa(openCodeAgentID)+"/opencode-session", `{"sessionId":"ses_current","tmuxPaneId":"%1","reporterEpoch":7,"sequence":1}`); rec.Code != http.StatusNoContent {
+		t.Fatalf("report status = %d, want 204 (body: %s)", rec.Code, rec.Body)
+	}
+
+	rec := do(t, mux, http.MethodGet, "/agents", "")
+	var response struct {
+		Agents []map[string]json.RawMessage `json:"agents"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if len(response.Agents) != 2 {
+		t.Fatalf("agents = %d, want 2", len(response.Agents))
+	}
+	if _, exists := response.Agents[0]["openCodeSessionId"]; !exists {
+		t.Fatal("associated OpenCode Agent is missing openCodeSessionId")
+	}
+	if _, exists := response.Agents[0]["openCodeWebUrl"]; exists {
+		t.Fatal("OpenCode Agent has openCodeWebUrl without a configured public URL")
+	}
+	for _, field := range []string{"openCodeSessionId", "openCodeWebUrl"} {
+		if _, exists := response.Agents[1][field]; exists {
+			t.Errorf("non-OpenCode Agent contains %s", field)
+		}
 	}
 }
 

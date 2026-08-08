@@ -17,7 +17,7 @@ func TestGetProjects_ReturnsProjectsWithMainSessionNames(t *testing.T) {
 	gw := newFakeGateway(lock)
 	ctx := context.Background()
 
-	create := usecase.NewCreateProject(projects, sessions, gw, &fakeWorktreeGit{paths: make(map[string]bool)}, lock, domain.DefaultDaemonConfig(), obs.Nop())
+	create := usecase.NewCreateProjectWithPathValidation(projects, sessions, gw, &fakeWorktreeGit{paths: make(map[string]bool)}, lock, domain.DefaultDaemonConfig(), acceptLogicalProjectPath, obs.Nop())
 	_, _ = create.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/api"})
 	_, _ = create.Execute(ctx, usecase.CreateProjectInput{FullPath: "/work/web"})
 

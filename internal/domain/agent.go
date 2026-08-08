@@ -29,6 +29,9 @@ type Agent struct {
 	statusChangedAt          time.Time
 	childPGID                int
 	discordNotificationArmed bool
+	openCodeSessionID        *string
+	openCodeReporterEpoch    uint64
+	openCodeSessionSequence  uint64
 }
 
 func NewAgent(id, projectID, sessionID int, kind, displayName, tmuxPaneID string, paneOwned bool, status AgentStatus, statusChangedAt ...time.Time) *Agent {
@@ -63,6 +66,29 @@ func (a *Agent) StatusChangedAt() time.Time     { return a.statusChangedAt }
 func (a *Agent) ChildProcessGroupID() int       { return a.childPGID }
 func (a *Agent) DiscordNotificationArmed() bool { return a.discordNotificationArmed }
 
+func (a *Agent) OpenCodeSessionID() *string {
+	if a.openCodeSessionID == nil {
+		return nil
+	}
+	sessionID := *a.openCodeSessionID
+	return &sessionID
+}
+
+func (a *Agent) OpenCodeSessionReporterEpoch() uint64 { return a.openCodeReporterEpoch }
+func (a *Agent) OpenCodeSessionSequence() uint64      { return a.openCodeSessionSequence }
+
+func (a *Agent) WithOpenCodeSession(sessionID *string, reporterEpoch, sequence uint64) *Agent {
+	copy := *a
+	copy.openCodeSessionID = nil
+	if sessionID != nil && *sessionID != "" {
+		id := *sessionID
+		copy.openCodeSessionID = &id
+	}
+	copy.openCodeReporterEpoch = reporterEpoch
+	copy.openCodeSessionSequence = sequence
+	return &copy
+}
+
 func (a *Agent) WithStatus(status AgentStatus, statusChangedAt ...time.Time) *Agent {
 	changedAt := a.statusChangedAt
 	if status != a.status {
@@ -71,57 +97,22 @@ func (a *Agent) WithStatus(status AgentStatus, statusChangedAt ...time.Time) *Ag
 			changedAt = statusChangedAt[0]
 		}
 	}
-	return &Agent{
-		id:                       a.id,
-		projectID:                a.projectID,
-		sessionID:                a.sessionID,
-		kind:                     a.kind,
-		model:                    a.model,
-		variant:                  a.variant,
-		displayName:              a.displayName,
-		tmuxPaneID:               a.tmuxPaneID,
-		paneOwned:                a.paneOwned,
-		status:                   status,
-		statusChangedAt:          changedAt,
-		childPGID:                a.childPGID,
-		discordNotificationArmed: a.discordNotificationArmed,
-	}
+	copy := *a
+	copy.status = status
+	copy.statusChangedAt = changedAt
+	return &copy
 }
 
 func (a *Agent) WithTmuxPaneID(paneID string) *Agent {
-	return &Agent{
-		id:                       a.id,
-		projectID:                a.projectID,
-		sessionID:                a.sessionID,
-		kind:                     a.kind,
-		model:                    a.model,
-		variant:                  a.variant,
-		displayName:              a.displayName,
-		tmuxPaneID:               paneID,
-		paneOwned:                a.paneOwned,
-		status:                   a.status,
-		statusChangedAt:          a.statusChangedAt,
-		childPGID:                a.childPGID,
-		discordNotificationArmed: a.discordNotificationArmed,
-	}
+	copy := *a
+	copy.tmuxPaneID = paneID
+	return &copy
 }
 
 func (a *Agent) WithDisplayName(name string) *Agent {
-	return &Agent{
-		id:                       a.id,
-		projectID:                a.projectID,
-		sessionID:                a.sessionID,
-		kind:                     a.kind,
-		model:                    a.model,
-		variant:                  a.variant,
-		displayName:              name,
-		tmuxPaneID:               a.tmuxPaneID,
-		paneOwned:                a.paneOwned,
-		status:                   a.status,
-		statusChangedAt:          a.statusChangedAt,
-		childPGID:                a.childPGID,
-		discordNotificationArmed: a.discordNotificationArmed,
-	}
+	copy := *a
+	copy.displayName = name
+	return &copy
 }
 
 func (a *Agent) WithModel(model string) *Agent {
@@ -137,39 +128,15 @@ func (a *Agent) WithVariant(variant string) *Agent {
 }
 
 func (a *Agent) WithChildProcessGroupID(pgid int) *Agent {
-	return &Agent{
-		id:                       a.id,
-		projectID:                a.projectID,
-		sessionID:                a.sessionID,
-		kind:                     a.kind,
-		model:                    a.model,
-		variant:                  a.variant,
-		displayName:              a.displayName,
-		tmuxPaneID:               a.tmuxPaneID,
-		paneOwned:                a.paneOwned,
-		status:                   a.status,
-		statusChangedAt:          a.statusChangedAt,
-		childPGID:                pgid,
-		discordNotificationArmed: a.discordNotificationArmed,
-	}
+	copy := *a
+	copy.childPGID = pgid
+	return &copy
 }
 
 func (a *Agent) WithDiscordNotificationArmed(armed bool) *Agent {
-	return &Agent{
-		id:                       a.id,
-		projectID:                a.projectID,
-		sessionID:                a.sessionID,
-		kind:                     a.kind,
-		model:                    a.model,
-		variant:                  a.variant,
-		displayName:              a.displayName,
-		tmuxPaneID:               a.tmuxPaneID,
-		paneOwned:                a.paneOwned,
-		status:                   a.status,
-		statusChangedAt:          a.statusChangedAt,
-		childPGID:                a.childPGID,
-		discordNotificationArmed: armed,
-	}
+	copy := *a
+	copy.discordNotificationArmed = armed
+	return &copy
 }
 
 func DefaultAgentDisplayName(id int, kind string) string {

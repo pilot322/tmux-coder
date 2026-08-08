@@ -7,12 +7,15 @@ import (
 	"bufio"
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/pilot322/tmux-coder/internal/adapter/httpapi"
+	"github.com/pilot322/tmux-coder/internal/adapter/webdashboard"
 	"github.com/pilot322/tmux-coder/internal/daemonaddr"
 	"github.com/pilot322/tmux-coder/internal/daemonconfig"
 	"github.com/pilot322/tmux-coder/internal/infra/desktopnotify"
@@ -60,6 +63,7 @@ func main() {
 	notifier := desktopnotify.NewNotifier(desktopnotify.SoundEnabled(os.Getenv))
 	openCodeServer := opencodeserver.NewManager(logger, config.OpenCodeServerPort)
 	openCodeSetup := usecase.NewOpenCodeSetupCoordinator(gateway, logger)
+	reportOpenCodeSession := usecase.NewReportOpenCodeSession(state.Agents(), state)
 	discordNotifier := discordnotify.NewNotifier(config.DiscordWebhookNotify)
 
 	create := usecase.NewCreateProject(state.Projects(), state.Sessions(), gateway, git, state, state.Config(), logger)
@@ -79,15 +83,84 @@ func main() {
 
 	controller := httpapi.NewProjectController(create, list, del)
 	sessionController := httpapi.NewSessionController(createSession, listSessions, deleteSession)
-	agentController := httpapi.NewAgentController(createAgent, listAgents, renameAgent, setAgentDiscordNotification, agentEvent, deleteAgent, openCodeSetup)
+	agentController := httpapi.NewAgentController(
+		createAgent, listAgents, renameAgent, setAgentDiscordNotification, agentEvent, deleteAgent,
+		httpapi.WithOpenCodeSetupCoordinator(openCodeSetup),
+		httpapi.WithReportOpenCodeSession(reportOpenCodeSession),
+		httpapi.WithOpenCodePublicURL(config.OpenCodePublicURL),
+		httpapi.WithInternalDaemonAddress(addr),
+	)
 	resourceController := httpapi.NewResourceController(acquirePort, ensureOpenCodeServer)
-	router := httpapi.NewRouter(controller, sessionController, agentController, resourceController)
+	internalRouter := httpapi.NewRouter(controller, sessionController, agentController, resourceController)
+	dashboardRouter := httpapi.NewDashboardRouter(controller, sessionController, agentController, webdashboard.Handler())
+	internalServer := &http.Server{
+		Addr:    addr,
+		Handler: obs.AccessLog(logger)(internalRouter),
+	}
+	dashboardServer := newDashboardServer(config.DashboardListenAddress, obs.AccessLog(logger)(dashboardRouter))
 
-	logger.Info(ctx, "tmux-coderd listening", "addr", addr)
-	if err := http.ListenAndServe(addr, obs.AccessLog(logger)(router)); err != nil {
+	internalListener, err := net.Listen("tcp", internalServer.Addr)
+	if err != nil {
 		openCodeServer.Close()
-		logger.Error(ctx, "http server stopped", "err", err.Error())
+		logger.Error(ctx, "failed to listen", "server", "internal", "addr", internalServer.Addr, "err", err.Error())
 		os.Exit(1)
+	}
+	dashboardListener, err := net.Listen("tcp", dashboardServer.Addr)
+	if err != nil {
+		_ = internalListener.Close()
+		openCodeServer.Close()
+		logger.Error(ctx, "failed to listen", "server", "dashboard", "addr", dashboardServer.Addr, "err", err.Error())
+		os.Exit(1)
+	}
+
+	listenLog := logger.With("internal_addr", internalServer.Addr, "dashboard_addr", dashboardServer.Addr)
+	if config.DashboardPublicURL != "" {
+		listenLog = listenLog.With("dashboard_public_url", config.DashboardPublicURL)
+	}
+	if config.OpenCodePublicURL != "" {
+		listenLog = listenLog.With("opencode_public_url", config.OpenCodePublicURL)
+	}
+	listenLog.Info(ctx, "tmux-coderd listening")
+
+	type serverExit struct {
+		name string
+		err  error
+	}
+	exits := make(chan serverExit, 2)
+	go func() {
+		exits <- serverExit{name: "internal", err: internalServer.Serve(internalListener)}
+	}()
+	go func() {
+		exits <- serverExit{name: "dashboard", err: dashboardServer.Serve(dashboardListener)}
+	}()
+
+	stopped := <-exits
+	peerName := "internal"
+	peerServer := internalServer
+	peerListener := internalListener
+	if stopped.name == "internal" {
+		peerName = "dashboard"
+		peerServer = dashboardServer
+		peerListener = dashboardListener
+	}
+	if err := peerServer.Close(); err != nil {
+		logger.Warn(ctx, "failed to close peer http server", "server", peerName, "err", err.Error())
+	}
+	_ = peerListener.Close()
+	openCodeServer.Close()
+	logger.Error(ctx, "http server stopped", "server", stopped.name, "err", stopped.err.Error())
+	os.Exit(1)
+}
+
+func newDashboardServer(address string, handler http.Handler) *http.Server {
+	return &http.Server{
+		Addr:              address,
+		Handler:           handler,
+		ReadHeaderTimeout: 5 * time.Second,
+		ReadTimeout:       30 * time.Second,
+		WriteTimeout:      2 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
+		MaxHeaderBytes:    1 << 20,
 	}
 }
 

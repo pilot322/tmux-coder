@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#101820">
+  <title>tmux-coder control room</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to dashboard</a>
+  <div class="app-shell" id="dashboard">
+    <aside class="sidebar" aria-label="Dashboard navigation">
+      <div class="brand-lockup">
+        <span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i></span>
+        <div>
+          <strong>tmux-coder</strong>
+          <span>daemon console</span>
+        </div>
+      </div>
+
+      <nav class="section-nav" aria-label="Sections">
+        <a href="#projects"><span>01</span> Projects</a>
+        <a href="#topology"><span>02</span> Topology</a>
+        <a href="#agents"><span>03</span> TC Agents</a>
+      </nav>
+
+      <div class="daemon-card">
+        <div class="daemon-state"><span class="pulse" aria-hidden="true"></span> daemon feed</div>
+        <p id="connection-state" role="status" aria-live="polite" aria-atomic="true">Connecting to management API...</p>
+        <small>Same-origin API boundary<br><code>/api</code></small>
+      </div>
+
+      <p class="sidebar-note">Management lives here. Agent conversation stays in OpenCode.</p>
+    </aside>
+
+    <main class="main" id="main-content">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">Live operational view</p>
+          <h1>Control room</h1>
+          <p class="lede">Projects, Session Topology, and active TC Agents in one quiet surface.</p>
+        </div>
+        <div class="topbar-actions">
+          <button class="button button-quiet" id="refresh-button" type="button">Refresh now</button>
+          <button class="button button-primary" data-open-dialog="project" type="button">Open Project</button>
+        </div>
+      </header>
+
+      <section class="error-region" id="error-region" aria-label="Dashboard errors" aria-live="polite"></section>
+      <div class="notice" id="notice" role="status" aria-live="polite" hidden></div>
+
+      <section class="metrics" aria-label="Resource totals">
+        <article><span class="metric-index">P</span><strong id="project-count">0</strong><small>Projects</small></article>
+        <article><span class="metric-index">S</span><strong id="session-count">0</strong><small>Sessions</small></article>
+        <article><span class="metric-index">A</span><strong id="agent-count">0</strong><small>TC Agents</small></article>
+        <article class="metric-time"><span class="metric-index">T</span><strong id="refresh-time">--:--:--</strong><small>Last accepted refresh</small></article>
+      </section>
+
+      <section class="operations" id="projects" aria-labelledby="projects-heading">
+        <div class="project-index panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Managed roots</p>
+              <h2 id="projects-heading">Projects</h2>
+            </div>
+            <button class="icon-button" data-open-dialog="project" type="button" aria-label="Open a Project">+</button>
+          </div>
+          <div id="project-list" class="project-list"></div>
+        </div>
+
+        <div class="project-stage panel" id="topology">
+          <div id="project-detail"></div>
+        </div>
+      </section>
+
+      <section class="agent-section panel" id="agents" aria-labelledby="agents-heading">
+        <div class="panel-heading agent-heading">
+          <div>
+            <p class="eyebrow">In-memory registry</p>
+            <h2 id="agents-heading">TC Agents</h2>
+          </div>
+          <div class="agent-create-control">
+            <button class="button button-dark" data-open-dialog="agent" type="button" aria-describedby="agent-create-guidance">Create Agent</button>
+            <p id="agent-create-guidance" hidden>Open a Project to create its Main Session first.</p>
+          </div>
+        </div>
+        <div id="agent-list" class="agent-grid"></div>
+      </section>
+    </main>
+  </div>
+
+  <dialog id="project-dialog" aria-labelledby="project-dialog-title">
+    <form id="project-form">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">Existing directory</p><h2 id="project-dialog-title">Open a Project</h2></div>
+        <button class="dialog-close" type="button" data-close-dialog aria-label="Close dialog">x</button>
+      </div>
+      <p class="dialog-intro">Enter an absolute path that already exists on the Daemon host.</p>
+      <label>Absolute path<input name="fullPath" type="text" placeholder="/home/me/src/project" autocomplete="off" required autofocus></label>
+      <label>Display title <span class="optional">optional</span><input name="title" type="text" autocomplete="off"></label>
+      <div class="decision-panel" id="project-decision" hidden>
+        <strong>Unmanaged worktrees detected</strong>
+        <p>Choose whether to adopt them as Worktree Sessions while opening this Project.</p>
+        <ul id="project-worktrees"></ul>
+        <div class="decision-actions">
+          <button class="button button-quiet" type="button" data-project-decision="false">Skip worktrees</button>
+          <button class="button button-primary" type="button" data-project-decision="true">Adopt worktrees</button>
+        </div>
+      </div>
+      <p class="form-error" data-form-error role="alert"></p>
+      <div class="dialog-actions">
+        <button class="button button-quiet" type="button" data-close-dialog>Cancel</button>
+        <button class="button button-primary" type="submit">Inspect and open</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="worktree-dialog" aria-labelledby="worktree-dialog-title">
+    <form id="worktree-form">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">Git-backed Session</p><h2 id="worktree-dialog-title">Create Worktree</h2></div>
+        <button class="dialog-close" type="button" data-close-dialog aria-label="Close dialog">x</button>
+      </div>
+      <label>Project<select name="projectId" id="worktree-project" required></select></label>
+      <fieldset class="segmented-field">
+        <legend>Start from</legend>
+        <label><input name="origin" value="source" type="radio" checked><span>Source Session</span></label>
+        <label><input name="origin" value="base" type="radio"><span>Base ref</span></label>
+      </fieldset>
+      <label id="worktree-source-field">Source Session<select name="sourceSessionId" id="worktree-source" required></select></label>
+      <label id="worktree-base-field" hidden>Base ref<input name="baseBranch" type="text" placeholder="origin/main" autocomplete="off" required></label>
+      <label>New branch<input name="branch" type="text" placeholder="feature/dashboard" autocomplete="off" required></label>
+      <div class="decision-panel" id="worktree-conflict" hidden>
+        <strong id="worktree-conflict-title">Existing Git state detected</strong>
+        <p id="worktree-conflict-message"></p>
+        <button class="button button-primary" id="worktree-retry" type="button">Retry</button>
+      </div>
+      <p class="form-error" data-form-error role="alert"></p>
+      <div class="dialog-actions">
+        <button class="button button-quiet" type="button" data-close-dialog>Cancel</button>
+        <button class="button button-primary" type="submit">Create Worktree Session</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="secondary-dialog" aria-labelledby="secondary-dialog-title">
+    <form id="secondary-form">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">Child context</p><h2 id="secondary-dialog-title">Create Secondary</h2></div>
+        <button class="dialog-close" type="button" data-close-dialog aria-label="Close dialog">x</button>
+      </div>
+      <label>Parent Session<select name="parentSessionId" id="secondary-parent" required></select></label>
+      <div class="field-pair">
+        <label>Name <span class="optional">optional with path</span><input name="preferredName" type="text" placeholder="frontend" autocomplete="off"></label>
+        <label>Relative path <span class="optional">optional with name</span><input name="relativeWorkingDirectory" type="text" placeholder="packages/web" autocomplete="off"></label>
+      </div>
+      <label>When deleted<select name="onDelete"><option value="cascade">Cascade to descendants</option><option value="inherit">Reparent direct children</option></select></label>
+      <p class="form-hint">The path is resolved from the nearest Main or Worktree Session root.</p>
+      <p class="form-error" data-form-error role="alert"></p>
+      <div class="dialog-actions">
+        <button class="button button-quiet" type="button" data-close-dialog>Cancel</button>
+        <button class="button button-primary" type="submit">Create Secondary Session</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="agent-dialog" aria-labelledby="agent-dialog-title">
+    <form id="agent-form">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">Pane-backed process</p><h2 id="agent-dialog-title">Create TC Agent</h2></div>
+        <button class="dialog-close" type="button" data-close-dialog aria-label="Close dialog">x</button>
+      </div>
+      <div class="field-pair">
+        <label>Project<select name="projectId" id="agent-project" required></select></label>
+        <label>Session<select name="sessionId" id="agent-session" required></select></label>
+      </div>
+      <div class="field-pair">
+        <label>Agent Kind<input name="kind" id="agent-kind" list="agent-kind-options" value="opencode" autocomplete="off" required></label>
+        <datalist id="agent-kind-options"><option value="opencode"><option value="claude"><option value="codex"></datalist>
+        <label>Display name <span class="optional">optional</span><input name="displayName" type="text" autocomplete="off"></label>
+      </div>
+      <fieldset class="opencode-fields" id="opencode-fields">
+        <legend>OpenCode startup</legend>
+        <div class="field-pair">
+          <label>Model <span class="optional">optional</span><input name="model" type="text" placeholder="provider/model" autocomplete="off"></label>
+          <label>Variant <span class="optional">requires model</span><input name="variant" type="text" autocomplete="off"></label>
+        </div>
+        <label>Initial prompt <span class="optional">not retained</span><textarea name="prompt" rows="4"></textarea></label>
+        <label class="check-row"><input name="yolo" type="checkbox"><span><strong>Yolo mode</strong><small>Start OpenCode with permissions pre-approved.</small></span></label>
+      </fieldset>
+      <p class="form-error" data-form-error role="alert"></p>
+      <div class="dialog-actions">
+        <button class="button button-quiet" type="button" data-close-dialog>Cancel</button>
+        <button class="button button-primary" type="submit">Create TC Agent</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="rename-dialog" aria-labelledby="rename-dialog-title">
+    <form id="rename-form">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">Human label</p><h2 id="rename-dialog-title">Rename TC Agent</h2></div>
+        <button class="dialog-close" type="button" data-close-dialog aria-label="Close dialog">x</button>
+      </div>
+      <input name="agentId" type="hidden">
+      <label>Display name<input name="displayName" type="text" required autocomplete="off"></label>
+      <p class="form-error" data-form-error role="alert"></p>
+      <div class="dialog-actions">
+        <button class="button button-quiet" type="button" data-close-dialog>Cancel</button>
+        <button class="button button-primary" type="submit">Rename Agent</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-message">
+    <form id="confirm-form">
+      <div class="dialog-heading">
+        <div><p class="eyebrow">Explicit confirmation</p><h2 id="confirm-title">Confirm action</h2></div>
+        <button class="dialog-close" type="button" data-close-dialog aria-label="Close dialog">x</button>
+      </div>
+      <p class="confirm-message" id="confirm-message"></p>
+      <p class="form-error" data-form-error role="alert"></p>
+      <div class="dialog-actions">
+        <button class="button button-quiet" type="button" data-close-dialog>Cancel</button>
+        <button class="button button-danger" id="confirm-submit" type="submit">Confirm</button>
+      </div>
+    </form>
+  </dialog>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

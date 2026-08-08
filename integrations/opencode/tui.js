@@ -8,12 +8,19 @@
 import { appendFileSync } from "node:fs";
 
 const AGENT_ID = process.env.TMUX_CODER_AGENT_ID;
+const PANE_ID = process.env.TMUX_CODER_PANE_ID;
 const SETUP_REQUESTED = process.env.TMUX_CODER_AGENT_SETUP === "1";
 const YOLO = process.env.TMUX_CODER_AGENT_YOLO === "1";
 const REQUESTED_MODEL = process.env.TMUX_CODER_AGENT_MODEL ?? "";
 const REQUESTED_VARIANT = process.env.TMUX_CODER_AGENT_VARIANT ?? "";
 const DEBUG = process.env.TMUX_CODER_PLUGIN_DEBUG;
 const TESTED_OPENCODE_VERSION = "1.18.14";
+let lastReporterEpoch = 0;
+
+function nextReporterEpoch() {
+  lastReporterEpoch = Math.max(Date.now(), lastReporterEpoch + 1);
+  return lastReporterEpoch;
+}
 
 function debug(line) {
   if (!DEBUG) return;
@@ -124,8 +131,19 @@ export async function TmuxCoderStatus(api) {
   if (!AGENT_ID) return;
 
   const eventURL = `${daemonBaseURL(process.env.TMUX_CODERD_ADDR)}/agents/${AGENT_ID}/event`;
+  const sessionURL = `${daemonBaseURL(process.env.TMUX_CODERD_ADDR)}/agents/${AGENT_ID}/opencode-session`;
   const setupURL = `${daemonBaseURL(process.env.TMUX_CODERD_ADDR)}/agents/${AGENT_ID}/opencode-setup/ready`;
   let lastStatus = "";
+  const reporterEpoch = nextReporterEpoch();
+  let sessionSequence = 0;
+  let lastSessionID;
+  let pendingSessionID;
+  let sessionReportInFlight = false;
+  let sessionReportController;
+  let sessionReportTimeout;
+  let sessionRetryTimer;
+  let sessionRetryDelay = 250;
+  let sessionReporterDisposed = false;
   const parentBySession = new Map();
   const statusBySession = new Map();
 
@@ -133,6 +151,86 @@ export async function TmuxCoderStatus(api) {
     const route = api.route.current;
     return route?.name === "session" ? route.params?.sessionID : undefined;
   }
+
+  function sendPendingSession() {
+    if (
+      sessionReporterDisposed ||
+      sessionReportInFlight ||
+      sessionRetryTimer !== undefined ||
+      pendingSessionID === undefined
+    ) return;
+    const sessionId = pendingSessionID;
+    pendingSessionID = undefined;
+    sessionReportInFlight = true;
+    let failed = false;
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 1000);
+    sessionReportController = controller;
+    sessionReportTimeout = timeout;
+    fetch(sessionURL, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        sessionId,
+        tmuxPaneId: PANE_ID,
+        reporterEpoch,
+        sequence: ++sessionSequence,
+      }),
+      signal: controller.signal,
+    })
+      .then((response) => {
+        if (!response.ok) throw new Error(`tmux-coder identity report failed (${response.status})`);
+      })
+      .catch(() => {
+        failed = true;
+        if (!sessionReporterDisposed && pendingSessionID === undefined) pendingSessionID = sessionId;
+      })
+      .finally(() => {
+        clearTimeout(timeout);
+        sessionReportController = undefined;
+        sessionReportTimeout = undefined;
+        sessionReportInFlight = false;
+        if (sessionReporterDisposed) return;
+        if (failed) {
+          const retryDelay = sessionRetryDelay;
+          sessionRetryDelay = Math.min(sessionRetryDelay * 2, 1000);
+          sessionRetryTimer = setTimeout(() => {
+            sessionRetryTimer = undefined;
+            sendPendingSession();
+          }, retryDelay);
+        } else {
+          sessionRetryDelay = 250;
+          sendPendingSession();
+        }
+      });
+  }
+
+  function observeCurrentSession() {
+    if (sessionReporterDisposed) return;
+    const sessionId = currentSessionID() ?? null;
+    if (sessionId === lastSessionID) return;
+    lastSessionID = sessionId;
+    pendingSessionID = sessionId;
+    sendPendingSession();
+  }
+
+  observeCurrentSession();
+  const sessionPoll = setInterval(observeCurrentSession, 250);
+  api.lifecycle.onDispose(() => {
+    sessionReporterDisposed = true;
+    pendingSessionID = undefined;
+    clearInterval(sessionPoll);
+    if (sessionRetryTimer !== undefined) {
+      clearTimeout(sessionRetryTimer);
+      sessionRetryTimer = undefined;
+    }
+    if (sessionReportTimeout !== undefined) {
+      clearTimeout(sessionReportTimeout);
+      sessionReportTimeout = undefined;
+    }
+    sessionReportController?.abort();
+    sessionReportController = undefined;
+  });
 
   function isRelated(sessionID) {
     const root = currentSessionID();
