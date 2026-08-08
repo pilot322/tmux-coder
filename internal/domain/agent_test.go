@@ -119,6 +119,49 @@ func TestDiscordNotificationArmedIsImmutableAndPreserved(t *testing.T) {
 	}
 }
 
+func TestAgentWithOpenCodeSessionIsImmutable(t *testing.T) {
+	a := domain.NewAgent(1, 10, 20, "opencode", "test", "%5", true, domain.AgentRunning)
+	sessionID := "ses_current"
+
+	updated := a.WithOpenCodeSession(&sessionID, 7, 11)
+
+	if a.OpenCodeSessionID() != nil {
+		t.Fatal("updating OpenCode session mutated the original Agent")
+	}
+	got := updated.OpenCodeSessionID()
+	if got == nil || *got != sessionID {
+		t.Fatalf("OpenCodeSessionID = %v, want %q", got, sessionID)
+	}
+	if updated.OpenCodeSessionReporterEpoch() != 7 || updated.OpenCodeSessionSequence() != 11 {
+		t.Fatalf("OpenCode session order = (%d, %d), want (7, 11)", updated.OpenCodeSessionReporterEpoch(), updated.OpenCodeSessionSequence())
+	}
+}
+
+func TestAgentOpenCodeSessionSurvivesImmutableUpdates(t *testing.T) {
+	sessionID := "ses_current"
+	a := domain.NewAgent(1, 10, 20, "opencode", "test", "%5", true, domain.AgentStarting).
+		WithOpenCodeSession(&sessionID, 7, 11)
+
+	copies := []*domain.Agent{
+		a.WithStatus(domain.AgentRunning),
+		a.WithTmuxPaneID("%6"),
+		a.WithDisplayName("renamed"),
+		a.WithModel("anthropic/claude-haiku"),
+		a.WithVariant("high"),
+		a.WithChildProcessGroupID(123),
+		a.WithDiscordNotificationArmed(true),
+	}
+	for i, copy := range copies {
+		got := copy.OpenCodeSessionID()
+		if got == nil || *got != sessionID {
+			t.Errorf("copy %d OpenCodeSessionID = %v, want %q", i, got, sessionID)
+		}
+		if copy.OpenCodeSessionReporterEpoch() != 7 || copy.OpenCodeSessionSequence() != 11 {
+			t.Errorf("copy %d OpenCode session order = (%d, %d), want (7, 11)", i, copy.OpenCodeSessionReporterEpoch(), copy.OpenCodeSessionSequence())
+		}
+	}
+}
+
 func TestDefaultAgentDisplayName(t *testing.T) {
 	name := domain.DefaultAgentDisplayName(7, "opencode")
 	if name != "agent-7-opencode" {

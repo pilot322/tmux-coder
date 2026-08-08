@@ -29,6 +29,7 @@ func (r *MemoryAgentRepository) Create(ctx context.Context, a *domain.Agent) (*d
 	stored = stored.WithModel(a.Model())
 	stored = stored.WithVariant(a.Variant())
 	stored = stored.WithDiscordNotificationArmed(a.DiscordNotificationArmed())
+	stored = stored.WithOpenCodeSession(a.OpenCodeSessionID(), a.OpenCodeSessionReporterEpoch(), a.OpenCodeSessionSequence())
 	if stored.DisplayName() == "" {
 		stored = stored.WithDisplayName(domain.DefaultAgentDisplayName(id, a.Kind()))
 	}

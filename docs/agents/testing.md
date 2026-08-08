@@ -16,7 +16,7 @@ Unit tests don't cover the daemon ↔ client ↔ tmux wiring. For anything touch
 
 ### Why this is safe to do
 
-Every dev build is isolated. `./dev build` bakes per-worktree daemon and OpenCode ports plus a tmux server label into the binary via `-ldflags`, all derived from the worktree path. So the instance you spin up here **cannot touch the installed (prod) tmux-coder or any other worktree's instance** — it gets its own daemon, OpenCode server, and tmux server. The installed binary keeps the shipped `tmux-coder`, daemon port `64357`, and OpenCode port `39155` defaults; your dev build does not.
+Every dev build is isolated. `./dev build` bakes per-worktree daemon, OpenCode, and dashboard ports plus a tmux server label into the binary via `-ldflags`, all derived from the worktree path. So the instance you spin up here **cannot touch the installed (prod) tmux-coder or any other worktree's instance** — it gets its own daemon, OpenCode server, dashboard, and tmux server. The installed binary keeps the shipped `tmux-coder`, daemon port `64357`, OpenCode port `39155`, and dashboard port `39356` defaults; your dev build does not.
 
 ### 1. Build
 
@@ -28,7 +28,7 @@ Every dev build is isolated. `./dev build` bakes per-worktree daemon and OpenCod
 Build both. `./dev build` prints the ports and tmux server label it baked in, e.g.:
 
 ```
-  bin/ dev build → daemon port 64481, OpenCode port 39279, tmux server tmux-coder-<worktree>
+  bin/ dev build → daemon port 64481, OpenCode port 39279, dashboard port 39480, tmux server tmux-coder-<worktree>
 ```
 
 ### 2. Get the binary paths and the server label
@@ -61,6 +61,20 @@ There are two tmux layers — keep them straight:
 
 - The **outer** session above (`tc-test`) just hosts the client process so you can drive its TUI.
 - The **inner**, isolated server `tmux -L tmux-coder-<worktree>` is the one tmux-coder itself manages — its Sessions, agent panes, etc. Use the `-L <label>` form to list those sessions, capture an agent's pane, or `send-keys` directly into a running agent.
+
+### 4. Drive the Web Dashboard with Chrome DevTools
+
+After the matching Client has auto-started the Daemon, open the dashboard URL from the `./dev build` output in Chrome DevTools, for example `http://127.0.0.1:39480`. Exercise the management flow against this real isolated instance rather than a static copy of the embedded assets.
+
+Emulate a mobile viewport such as `390x844x1,mobile,touch` and verify that Project, Session Topology, TC Agent, dialogs, confirmations, errors, and action controls remain usable without desktop-only hover or horizontal-page assumptions. Repeat the primary flow at a desktop width.
+
+For exact-link testing, start the isolated Daemon with `TMUX_CODER_OPENCODE_PUBLIC_URL` set to its printed OpenCode origin. Create an OpenCode TC Agent and check all of these states in Chrome DevTools:
+
+- Before the pane reports an OpenCode Conversation Identity, the dashboard says `Conversation link unavailable` and does not offer a fallback OpenCode home link.
+- After the report, inspect the link and confirm it uses the configured OpenCode origin and the canonical `/server/<encoded-origin>/session/<session-id>` route for that pane's exact conversation.
+- Open the link and verify that OpenCode displays the same conversation as the TC Agent pane.
+- Switch the pane to another OpenCode conversation and confirm the polled dashboard link changes to that exact conversation rather than retaining the prior route.
+- Check a non-OpenCode Agent Kind and an OpenCode run without `TMUX_CODER_OPENCODE_PUBLIC_URL`; neither should expose an OpenCode link.
 
 ### Test thoroughly — but don't let tests stall
 

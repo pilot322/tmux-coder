@@ -56,6 +56,25 @@ func TestMemoryAgentRepository_CreatePreservesDiscordNotificationArmed(t *testin
 	}
 }
 
+func TestMemoryAgentRepositoryCreatePreservesOpenCodeSession(t *testing.T) {
+	r := memory.NewMemoryAgentRepository()
+	sessionID := "ses_current"
+	candidate := domain.NewAgent(0, 1, 2, "opencode", "", "%1", true, domain.AgentRunning).
+		WithOpenCodeSession(&sessionID, 7, 11)
+
+	created, err := r.Create(context.Background(), candidate)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := created.OpenCodeSessionID()
+	if got == nil || *got != sessionID {
+		t.Fatalf("OpenCodeSessionID = %v, want %q", got, sessionID)
+	}
+	if created.OpenCodeSessionReporterEpoch() != 7 || created.OpenCodeSessionSequence() != 11 {
+		t.Fatalf("OpenCode session order = (%d, %d), want (7, 11)", created.OpenCodeSessionReporterEpoch(), created.OpenCodeSessionSequence())
+	}
+}
+
 func TestMemoryAgentRepository_GetByID(t *testing.T) {
 	ctx := context.Background()
 	r := memory.NewMemoryAgentRepository()

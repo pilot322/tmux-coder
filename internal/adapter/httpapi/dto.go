@@ -104,6 +104,13 @@ type setAgentDiscordNotificationRequest struct {
 	Enabled *bool `json:"enabled"`
 }
 
+type reportOpenCodeSessionRequest struct {
+	SessionID     *string `json:"sessionId"`
+	TmuxPaneID    string  `json:"tmuxPaneId"`
+	ReporterEpoch uint64  `json:"reporterEpoch"`
+	Sequence      uint64  `json:"sequence"`
+}
+
 type agentResponse struct {
 	ID                       int             `json:"id"`
 	ProjectID                int             `json:"projectId"`
@@ -118,6 +125,8 @@ type agentResponse struct {
 	StatusChangedAt          time.Time       `json:"statusChangedAt"`
 	ChildProcessGroupID      int             `json:"childProcessGroupId,omitempty"`
 	DiscordNotificationArmed bool            `json:"discordNotificationArmed"`
+	OpenCodeSessionID        *string         `json:"openCodeSessionId,omitempty"`
+	OpenCodeWebURL           string          `json:"openCodeWebUrl,omitempty"`
 	Project                  projectResponse `json:"project"`
 	Session                  sessionResponse `json:"session"`
 }

@@ -1,12 +1,36 @@
 package main
 
 import (
+	"net/http"
 	"os"
 	"path/filepath"
 	"testing"
 
 	"github.com/pilot322/tmux-coder/internal/daemonaddr"
 )
+
+func TestNewDashboardServerConfiguresPublicHTTPDefenses(t *testing.T) {
+	server := newDashboardServer("127.0.0.1:41000", http.NotFoundHandler())
+
+	if server.Addr != "127.0.0.1:41000" {
+		t.Errorf("Addr = %q, want %q", server.Addr, "127.0.0.1:41000")
+	}
+	if server.ReadHeaderTimeout <= 0 {
+		t.Error("ReadHeaderTimeout must be configured")
+	}
+	if server.ReadTimeout <= 0 {
+		t.Error("ReadTimeout must be configured")
+	}
+	if server.WriteTimeout <= 0 {
+		t.Error("WriteTimeout must be configured")
+	}
+	if server.IdleTimeout <= 0 {
+		t.Error("IdleTimeout must be configured")
+	}
+	if server.MaxHeaderBytes <= 0 {
+		t.Error("MaxHeaderBytes must be configured")
+	}
+}
 
 func TestLoadEnvFileSetsDaemonPort(t *testing.T) {
 	unsetEnv(t, "TMUX_CODERD_PORT")

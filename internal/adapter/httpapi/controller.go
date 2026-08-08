@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
+	"github.com/pilot322/tmux-coder/internal/opencodeurl"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -107,6 +108,27 @@ type AgentController struct {
 	event                  *usecase.AgentEvent
 	delete                 *usecase.DeleteAgent
 	setup                  *usecase.OpenCodeSetupCoordinator
+	reportOpenCodeSession  *usecase.ReportOpenCodeSession
+	openCodePublicURL      string
+	internalDaemonAddress  string
+}
+
+type AgentControllerOption func(*AgentController)
+
+func WithOpenCodeSetupCoordinator(setup *usecase.OpenCodeSetupCoordinator) AgentControllerOption {
+	return func(ac *AgentController) { ac.setup = setup }
+}
+
+func WithReportOpenCodeSession(report *usecase.ReportOpenCodeSession) AgentControllerOption {
+	return func(ac *AgentController) { ac.reportOpenCodeSession = report }
+}
+
+func WithOpenCodePublicURL(publicURL string) AgentControllerOption {
+	return func(ac *AgentController) { ac.openCodePublicURL = publicURL }
+}
+
+func WithInternalDaemonAddress(address string) AgentControllerOption {
+	return func(ac *AgentController) { ac.internalDaemonAddress = address }
 }
 
 type ResourceController struct {
@@ -114,10 +136,10 @@ type ResourceController struct {
 	ensureOpenCodeServer *usecase.EnsureOpenCodeServer
 }
 
-func NewAgentController(c *usecase.CreateAgent, l *usecase.GetAgents, u *usecase.RenameAgent, n *usecase.SetAgentDiscordNotification, e *usecase.AgentEvent, d *usecase.DeleteAgent, setup ...*usecase.OpenCodeSetupCoordinator) *AgentController {
+func NewAgentController(c *usecase.CreateAgent, l *usecase.GetAgents, u *usecase.RenameAgent, n *usecase.SetAgentDiscordNotification, e *usecase.AgentEvent, d *usecase.DeleteAgent, options ...AgentControllerOption) *AgentController {
 	controller := &AgentController{create: c, list: l, update: u, setDiscordNotification: n, event: e, delete: d}
-	if len(setup) > 0 {
-		controller.setup = setup[0]
+	for _, option := range options {
+		option(controller)
 	}
 	return controller
 }
@@ -237,7 +259,10 @@ func (ac *AgentController) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	daemonAddr := r.Host
+	daemonAddr := ac.internalDaemonAddress
+	if daemonAddr == "" {
+		daemonAddr = r.Host
+	}
 	result, err := ac.create.Execute(r.Context(), usecase.CreateAgentInput{
 		ProjectID:   req.ProjectID,
 		SessionID:   req.SessionID,
@@ -261,7 +286,35 @@ func (ac *AgentController) Create(w http.ResponseWriter, r *http.Request) {
 		Session:             result.Session,
 		MainSessionName:     result.MainSessionName,
 		MainTmuxSessionName: result.MainTmuxSessionName,
-	}))
+	}, ac.openCodePublicURL))
+}
+
+func (ac *AgentController) ReportOpenCodeSession(w http.ResponseWriter, r *http.Request) {
+	if ac.reportOpenCodeSession == nil {
+		writeError(w, http.StatusNotFound, "OpenCode session reporting is unavailable")
+		return
+	}
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		writeError(w, http.StatusBadRequest, "id must be an integer")
+		return
+	}
+	var req reportOpenCodeSessionRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid JSON body")
+		return
+	}
+	if err := ac.reportOpenCodeSession.Execute(r.Context(), usecase.ReportOpenCodeSessionInput{
+		AgentID:       id,
+		TmuxPaneID:    req.TmuxPaneID,
+		SessionID:     req.SessionID,
+		ReporterEpoch: req.ReporterEpoch,
+		Sequence:      req.Sequence,
+	}); err != nil {
+		writeUsecaseError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (ac *AgentController) OpenCodeSetupReady(w http.ResponseWriter, r *http.Request) {
@@ -428,7 +481,7 @@ func (ac *AgentController) List(w http.ResponseWriter, r *http.Request) {
 
 	resp := agentsResponse{Agents: make([]agentResponse, 0, len(views))}
 	for _, v := range views {
-		resp.Agents = append(resp.Agents, agentViewToDTO(v))
+		resp.Agents = append(resp.Agents, agentViewToDTO(v, ac.openCodePublicURL))
 	}
 	writeJSON(w, http.StatusOK, resp)
 }
@@ -454,7 +507,7 @@ func (ac *AgentController) Update(w http.ResponseWriter, r *http.Request) {
 		writeUsecaseError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, agentViewToDTO(view))
+	writeJSON(w, http.StatusOK, agentViewToDTO(view, ac.openCodePublicURL))
 }
 
 func (ac *AgentController) SetDiscordNotification(w http.ResponseWriter, r *http.Request) {
@@ -480,7 +533,7 @@ func (ac *AgentController) SetDiscordNotification(w http.ResponseWriter, r *http
 		writeUsecaseError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, agentViewToDTO(view))
+	writeJSON(w, http.StatusOK, agentViewToDTO(view, ac.openCodePublicURL))
 }
 
 func (ac *AgentController) Event(w http.ResponseWriter, r *http.Request) {
@@ -625,8 +678,8 @@ func agentToDTO(a *domain.Agent) agentResponse {
 	}
 }
 
-func agentViewToDTO(v usecase.AgentView) agentResponse {
-	return agentResponse{
+func agentViewToDTO(v usecase.AgentView, openCodePublicURL string) agentResponse {
+	response := agentResponse{
 		ID:                       v.Agent.ID(),
 		ProjectID:                v.Agent.ProjectID(),
 		SessionID:                v.Agent.SessionID(),
@@ -659,4 +712,11 @@ func agentViewToDTO(v usecase.AgentView) agentResponse {
 			Worktree:    v.Session.WorktreePath(),
 		},
 	}
+	if v.Agent.Kind() == "opencode" {
+		response.OpenCodeSessionID = v.Agent.OpenCodeSessionID()
+		if response.OpenCodeSessionID != nil && openCodePublicURL != "" {
+			response.OpenCodeWebURL = opencodeurl.Session(openCodePublicURL, *response.OpenCodeSessionID)
+		}
+	}
+	return response
 }

@@ -41,8 +41,12 @@ Daemon-wide settings that govern tmux-coder behavior across all **Projects**. Di
 _Avoid_: Settings, global config
 
 **Client**:
-The `tmux-coder` CLI invocation that connects to the **Daemon** to issue commands and render the TUI.
+A user-facing interface that connects to the **Daemon** and delegates lifecycle operations to it. The terminal Client is a `tmux-coder` invocation that issues commands and renders the TUI; the **Web Dashboard** is a browser Client.
 _Avoid_: CLI (as a noun for a running instance)
+
+**Web Dashboard**:
+The mobile-first browser **Client** served by the **Daemon** on its dashboard management listener. It polls and presents **Projects**, **Session Topology**, and active **TC Agents**, and exposes their common management operations through an allowlisted API. It does not provide agent conversation, OpenCode features, or terminal-pane access.
+_Avoid_: Web app, OpenCode UI, browser terminal
 
 **TC Agent**:
 A pane-backed coding agent process (Claude Code, Codex, OpenCode, etc.) launched and managed by tmux-coder. Each **TC Agent** has an ID, belongs to exactly one **Session** and **Project**, and may have a non-unique display name used as a human label.
@@ -57,8 +61,12 @@ A human-facing label for a **TC Agent**, used for presentation and tmux window l
 _Avoid_: Agent ID, Agent Kind
 
 **Agent Registry**:
-The in-memory data structure in the **Daemon** that tracks active **TC Agents** — their IDs, associated **Sessions**, **Projects**, pane identity, requested canonical OpenCode model and variant (when present), and current **Agent Status**. It is an active set, not a durable history. Initial prompts are never retained in it.
+The in-memory data structure in the **Daemon** that tracks active **TC Agents** — their IDs, associated **Sessions**, **Projects**, pane identity, requested canonical OpenCode model and variant (when present), current **Agent Status**, and ordered nullable **OpenCode Conversation Identity** (when applicable). It is an active set, not a durable history. Initial prompts are never retained in it.
 _Avoid_: Agent store, agent list
+
+**OpenCode Conversation Identity**:
+The nullable OpenCode session ID for the conversation currently displayed by an OpenCode **TC Agent**. It is stored in the **Agent Registry** with a reporter epoch and sequence that order pane-scoped plugin reports; the **Daemon** accepts a report only for the matching pane and ignores an older epoch or a non-increasing sequence within the current epoch. Null means the pane is not displaying a usable conversation. OpenCode Conversation Identity identifies where the browser should navigate and is separate from **Agent Status**, which describes what the TC Agent is doing.
+_Avoid_: Agent Status, TC Agent ID, tmux-coder Session ID
 
 **Agent Status**:
 The single canonical, agent-agnostic state of a **TC Agent** in the **Agent Registry**: `starting`, `running`, `busy`, `idle`, `waiting`, or `exited` (terminal — removes the agent). `starting`/`exited` are the only values implying the process is not confirmed alive; every other value implies a live process. The lifecycle values (`starting`, `running`, `exited`) are owned by the wrapper; the activity values (`busy`, `idle`, `waiting`) are reported by the agent itself. An **Agent Kind** that does not report activity rests at `running`. Each kind's integration translates its native signals into this shared vocabulary; the Daemon never learns kind-specific terms.

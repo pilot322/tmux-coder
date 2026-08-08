@@ -26,6 +26,22 @@ func TestLoadFromMissingFileReturnsDefaults(t *testing.T) {
 	}
 }
 
+func TestDefaultConfigUsesLoopbackDashboardAndDisabledPublicURLs(t *testing.T) {
+	config, err := Parse(nil)
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if config.DashboardListenAddress != "127.0.0.1:39356" {
+		t.Errorf("DashboardListenAddress = %q, want loopback default", config.DashboardListenAddress)
+	}
+	if config.DashboardPublicURL != "" {
+		t.Errorf("DashboardPublicURL = %q, want disabled", config.DashboardPublicURL)
+	}
+	if config.OpenCodePublicURL != "" {
+		t.Errorf("OpenCodePublicURL = %q, want disabled", config.OpenCodePublicURL)
+	}
+}
+
 func TestLoadUsesHOMEConfigPath(t *testing.T) {
 	home := t.TempDir()
 	dir := filepath.Join(home, ".tmux-coder")
@@ -38,6 +54,9 @@ func TestLoadUsesHOMEConfigPath(t *testing.T) {
 	}
 	t.Setenv("HOME", home)
 	t.Setenv(OpenCodeServerPortEnv, "")
+	t.Setenv(DashboardListenAddressEnv, "")
+	t.Setenv(DashboardPublicURLEnv, "")
+	t.Setenv(OpenCodePublicURLEnv, "")
 
 	config, err := Load()
 	if err != nil {
@@ -58,6 +77,118 @@ func TestParseAcceptsOpenCodeServerPort(t *testing.T) {
 	}
 }
 
+func TestParseAcceptsConcreteDashboardListenAddress(t *testing.T) {
+	for _, address := range []string{"100.64.0.8:41000", "daemon.tailnet.ts.net:41000", "[fd7a:115c:a1e0::1]:41000"} {
+		t.Run(address, func(t *testing.T) {
+			config, err := Parse([]byte("dashboard_listen_address: \"" + address + "\"\n"))
+			if err != nil {
+				t.Fatalf("Parse: %v", err)
+			}
+			if config.DashboardListenAddress != address {
+				t.Fatalf("DashboardListenAddress = %q, want %q", config.DashboardListenAddress, address)
+			}
+		})
+	}
+}
+
+func TestParseRejectsInvalidDashboardListenAddress(t *testing.T) {
+	for name, address := range map[string]string{
+		"blank":              "",
+		"missing host":       ":41000",
+		"missing port":       "100.64.0.8",
+		"zero port":          "100.64.0.8:0",
+		"port above maximum": "100.64.0.8:65536",
+		"non-numeric port":   "100.64.0.8:http",
+		"IPv4 wildcard":      "0.0.0.0:41000",
+		"IPv6 wildcard":      "[::]:41000",
+		"malformed hostname": "bad..host:41000",
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, err := Parse([]byte("dashboard_listen_address: \"" + address + "\"\n"))
+			if !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("Parse error = %v, want ErrInvalidConfig", err)
+			}
+		})
+	}
+}
+
+func TestParseRejectsMalformedNumericDashboardHost(t *testing.T) {
+	_, err := Parse([]byte("dashboard_listen_address: 999.999.999.999:41000\n"))
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("Parse error = %v, want ErrInvalidConfig", err)
+	}
+}
+
+func TestParseRejectsSignedDashboardPort(t *testing.T) {
+	_, err := Parse([]byte("dashboard_listen_address: daemon.tailnet.ts.net:+41000\n"))
+	if !errors.Is(err, ErrInvalidConfig) {
+		t.Fatalf("Parse error = %v, want ErrInvalidConfig", err)
+	}
+}
+
+func TestParseNormalizesDashboardPublicURLOrigin(t *testing.T) {
+	config, err := Parse([]byte("dashboard_public_url: \"  https://dashboard.tailnet.ts.net/  \"\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if config.DashboardPublicURL != "https://dashboard.tailnet.ts.net" {
+		t.Fatalf("DashboardPublicURL = %q, want normalized origin", config.DashboardPublicURL)
+	}
+}
+
+func TestParseNormalizesDefaultHTTPPortToBrowserOrigin(t *testing.T) {
+	config, err := Parse([]byte("dashboard_public_url: \"http://dashboard.tailnet.ts.net:80/\"\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if config.DashboardPublicURL != "http://dashboard.tailnet.ts.net" {
+		t.Fatalf("DashboardPublicURL = %q, want browser origin without default port", config.DashboardPublicURL)
+	}
+}
+
+func TestParseNormalizesDefaultHTTPSPortToBrowserOrigin(t *testing.T) {
+	config, err := Parse([]byte("opencode_public_url: \"https://opencode.tailnet.ts.net:443/\"\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if config.OpenCodePublicURL != "https://opencode.tailnet.ts.net" {
+		t.Fatalf("OpenCodePublicURL = %q, want browser origin without default port", config.OpenCodePublicURL)
+	}
+}
+
+func TestParseRejectsInvalidPublicURLOrigins(t *testing.T) {
+	for name, publicURL := range map[string]string{
+		"relative":           "dashboard.tailnet.ts.net",
+		"unsupported scheme": "ftp://dashboard.tailnet.ts.net",
+		"missing host":       "https:///",
+		"userinfo":           "https://user@dashboard.tailnet.ts.net",
+		"query":              "https://dashboard.tailnet.ts.net?view=all",
+		"fragment":           "https://dashboard.tailnet.ts.net#projects",
+		"non-root path":      "https://dashboard.tailnet.ts.net/app",
+		"invalid port":       "https://dashboard.tailnet.ts.net:65536",
+		"malformed hostname": "https://bad..host",
+	} {
+		for _, key := range []string{"dashboard_public_url", "opencode_public_url"} {
+			t.Run(key+"/"+name, func(t *testing.T) {
+				_, err := Parse([]byte(key + ": \"" + publicURL + "\"\n"))
+				if !errors.Is(err, ErrInvalidConfig) {
+					t.Fatalf("Parse error = %v, want ErrInvalidConfig", err)
+				}
+			})
+		}
+	}
+}
+
+func TestParseNormalizesOpenCodePublicURLOrigin(t *testing.T) {
+	config, err := Parse([]byte("opencode_public_url: \"http://100.64.0.8:39155/\"\n"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if config.OpenCodePublicURL != "http://100.64.0.8:39155" {
+		t.Fatalf("OpenCodePublicURL = %q, want normalized origin", config.OpenCodePublicURL)
+	}
+}
+
 func TestEnvironmentOverridesOpenCodeServerPort(t *testing.T) {
 	config, err := applyEnv(domain.DaemonConfig{OpenCodeServerPort: 41000}, func(key string) string {
 		if key == OpenCodeServerPortEnv {
@@ -70,6 +201,57 @@ func TestEnvironmentOverridesOpenCodeServerPort(t *testing.T) {
 	}
 	if config.OpenCodeServerPort != 42000 {
 		t.Fatalf("OpenCodeServerPort = %d, want environment override 42000", config.OpenCodeServerPort)
+	}
+}
+
+func TestEnvironmentOverridesBrowserConfiguration(t *testing.T) {
+	home := t.TempDir()
+	dir := filepath.Join(home, ".tmux-coder")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("dashboard_listen_address: 127.0.0.1:40000\ndashboard_public_url: https://file-dashboard.example\nopencode_public_url: https://file-opencode.example\n")
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv(OpenCodeServerPortEnv, "")
+	t.Setenv(DashboardListenAddressEnv, "daemon.tailnet.ts.net:41000")
+	t.Setenv(DashboardPublicURLEnv, "https://dashboard.tailnet.ts.net/")
+	t.Setenv(OpenCodePublicURLEnv, "https://opencode.tailnet.ts.net/")
+
+	config, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if config.DashboardListenAddress != "daemon.tailnet.ts.net:41000" {
+		t.Errorf("DashboardListenAddress = %q, want environment override", config.DashboardListenAddress)
+	}
+	if config.DashboardPublicURL != "https://dashboard.tailnet.ts.net" {
+		t.Errorf("DashboardPublicURL = %q, want normalized environment override", config.DashboardPublicURL)
+	}
+	if config.OpenCodePublicURL != "https://opencode.tailnet.ts.net" {
+		t.Errorf("OpenCodePublicURL = %q, want normalized environment override", config.OpenCodePublicURL)
+	}
+}
+
+func TestEnvironmentRejectsInvalidBrowserConfiguration(t *testing.T) {
+	for env, value := range map[string]string{
+		DashboardListenAddressEnv: "0.0.0.0:41000",
+		DashboardPublicURLEnv:     "https://dashboard.example/app",
+		OpenCodePublicURLEnv:      "ssh://opencode.example",
+	} {
+		t.Run(env, func(t *testing.T) {
+			_, err := applyEnv(domain.DefaultDaemonConfig(), func(key string) string {
+				if key == env {
+					return value
+				}
+				return ""
+			})
+			if !errors.Is(err, ErrInvalidConfig) {
+				t.Fatalf("applyEnv error = %v, want ErrInvalidConfig", err)
+			}
+		})
 	}
 }
 

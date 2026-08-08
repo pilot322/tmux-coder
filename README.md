@@ -65,9 +65,25 @@ Daemon-wide settings live in `~/.tmux-coder/config.yaml`:
 ```yaml
 discord_webhook_notify: https://discord.com/api/webhooks/WEBHOOK_ID/WEBHOOK_TOKEN
 opencode_server_port: 39155
+dashboard_listen_address: 127.0.0.1:39356
+dashboard_public_url: http://127.0.0.1:39356
+opencode_public_url: http://127.0.0.1:39155
 ```
 
-Create the webhook under your Discord server's **Server Settings > Integrations > Webhooks**, then replace the example value with its copied URL. Only official HTTPS Discord webhook URLs are accepted. The OpenCode server port defaults to `39155`; `TMUX_CODER_OPENCODE_SERVER_PORT` overrides the file at runtime. The daemon reads this configuration once at startup, so restart it after changing the file or environment. A missing webhook leaves Discord notifications disabled; invalid YAML, unknown keys, webhook URLs, and ports prevent daemon startup.
+Create the webhook under your Discord server's **Server Settings > Integrations > Webhooks**, then replace the example value with its copied URL. Only official HTTPS Discord webhook URLs are accepted. A missing webhook leaves Discord notifications disabled.
+
+The network settings and their non-empty environment overrides are:
+
+| Config key | Default | Environment override | Purpose |
+| --- | --- | --- | --- |
+| `opencode_server_port` | `39155` | `TMUX_CODER_OPENCODE_SERVER_PORT` | Port for the Daemon-owned shared OpenCode server. |
+| `dashboard_listen_address` | `127.0.0.1:39356` | `TMUX_CODER_DASHBOARD_LISTEN_ADDRESS` | Concrete address on which the Web Dashboard listens. |
+| `dashboard_public_url` | unset | `TMUX_CODER_DASHBOARD_PUBLIC_URL` | Browser-facing root origin recorded in Daemon startup logs. It does not change the listen address or browser routing. |
+| `opencode_public_url` | unset | `TMUX_CODER_OPENCODE_PUBLIC_URL` | Browser-facing root origin from which the Daemon generates exact OpenCode conversation links. It does not replace the internal OpenCode attachment URL. |
+
+Inherited environment values take precedence over `~/.tmux-coder/.env`, and both take precedence over `config.yaml`. The Daemon reads configuration once at startup, so stop and restart `tmux-coderd` after changing the file or environment; a later Client invocation auto-starts it when needed. The internal and dashboard listeners start together. An invalid or unavailable address prevents startup, and either HTTP server stopping causes the Daemon to close the other and exit.
+
+Configuration is strict. `dashboard_listen_address` must contain a concrete IP address or valid hostname and a numeric port from 1 to 65535. Wildcard addresses such as `0.0.0.0` and `[::]`, missing hosts, and malformed numeric addresses are rejected. Public URLs must be absolute `http` or `https` browser origins with a valid non-wildcard host and optional port. User information, queries, fragments, and non-root paths are rejected; a trailing slash is removed and default HTTP/HTTPS ports are normalized. Invalid YAML, unknown keys, webhook URLs, listen addresses, public origins, and ports prevent Daemon startup.
 
 # How to use
 
@@ -110,6 +126,42 @@ Useful TUI keys:
 - `q`: quit
 
 Pressing `n` in Overview or Agents opens an enable/disable confirmation. An armed notification is consumed by the selected agent's next `busy` to `waiting` (needs input) or `busy` to `idle` transition. Other transitions leave it armed. Confirming again while armed disables it.
+
+## Web Dashboard
+
+Open the mobile-first browser Client at `http://127.0.0.1:39356` by default. It polls the Daemon management API and presents Projects, their Session Topology, and active TC Agents. From the dashboard you can open an existing absolute Project path on the Daemon host; create or adopt Worktree Sessions; create Secondary Sessions; delete managed resources; and create, rename, destroy, or change the Discord notification for a TC Agent. It does not clone repositories, browse the host filesystem, expose tmux panes, or reimplement OpenCode chat, tools, permissions, or history.
+
+For an OpenCode TC Agent, the bundled pane-scoped plugin reports the OpenCode conversation currently displayed by that pane and reports again when it changes. The Daemon returns the canonical OpenCode web route, and the dashboard opens that exact conversation rather than an OpenCode home page. Compatible running agents become linkable as soon as they report; they do not need to be recreated. The dashboard shows **Conversation link unavailable** until both `opencode_public_url` is configured and the TC Agent has reported a current conversation. A non-OpenCode Agent Kind has no OpenCode link.
+
+> **Warning:** version 1 has no application login or authentication. Any network peer that can reach the dashboard can invoke its management operations. Use Tailnet ACLs and the Daemon host's firewall as the access boundary, and do not expose the dashboard or OpenCode origins to an untrusted network.
+
+For direct access through a Tailscale IP, bind the dashboard to that specific host address and publish both ports:
+
+```yaml
+dashboard_listen_address: 100.101.102.103:39356
+dashboard_public_url: http://100.101.102.103:39356
+opencode_public_url: http://100.101.102.103:39155
+```
+
+A direct MagicDNS deployment uses the Daemon host's concrete MagicDNS name in the same way:
+
+```yaml
+dashboard_listen_address: coder.example-tailnet.ts.net:39356
+dashboard_public_url: http://coder.example-tailnet.ts.net:39356
+opencode_public_url: http://coder.example-tailnet.ts.net:39155
+```
+
+For a reverse proxy running on the Daemon host, keep the dashboard on loopback and use dedicated dashboard and OpenCode root origins, preferably restricted to the tailnet:
+
+```yaml
+dashboard_listen_address: 127.0.0.1:39356
+dashboard_public_url: https://dashboard.coder.example
+opencode_public_url: https://opencode.coder.example
+```
+
+Proxy the complete `https://dashboard.coder.example` origin to `http://127.0.0.1:39356` and the complete `https://opencode.coder.example` origin to `http://127.0.0.1:39155`. Path-prefix deployments such as `https://coder.example/tmux-coder` or `/opencode` are not supported: both public URL settings accept only root origins, the dashboard uses root `/api` and asset paths, and OpenCode conversation routes are generated from the OpenCode origin root.
+
+The OpenCode URL used by TC Agents remains separate. Daemon-managed agents attach through the internal loopback URL returned by the shared server manager; `TMUX_CODER_OPENCODE_SERVER_URL` can instead select an externally owned server. Neither internal attachment path is replaced by `opencode_public_url`.
 
 Start an agent from inside a tmux-coder-managed session:
 
@@ -230,9 +282,12 @@ You can use any executable really, but it needs to have an extension or hooks se
 OpenCode agents share one headless server owned by the daemon. Each agent pane
 runs an attached TUI in its own working directory, so concurrent agents avoid
 duplicating the server process. Set `TMUX_CODER_OPENCODE_SERVER_URL` to use an
-already-running server instead. The managed server listens on `0.0.0.0` at
-`opencode_server_port`, so its embedded web UI is available through localhost,
-LAN, and Tailscale addresses allowed by the host firewall and tailnet policy.
+already-running server instead. The managed server still listens on `0.0.0.0` at
+`opencode_server_port`, even though Daemon-managed TC Agents receive its loopback
+attachment URL. Its embedded web UI is therefore available through localhost,
+LAN, and Tailscale addresses that the host firewall and Tailnet ACLs permit.
+tmux-coder does not configure either boundary; the operator is responsible for
+preventing unintended access.
 Model-selected agents use a temporary copy of the user's OpenCode TUI state for
 selection verification. That copy is discarded when the agent exits and is
 never merged back into the user's state.
