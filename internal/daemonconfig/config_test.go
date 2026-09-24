@@ -67,6 +67,83 @@ func TestLoadUsesHOMEConfigPath(t *testing.T) {
 	}
 }
 
+func TestDevelopmentBuildUsesBakedNetworkDefaultsInsteadOfGlobalConfig(t *testing.T) {
+	previousDevelopmentBuild := domain.DevelopmentBuild
+	previousOpenCodePort := domain.DefaultOpenCodeServerPort
+	previousDashboardPort := domain.DefaultDashboardPort
+	domain.DevelopmentBuild = "true"
+	domain.DefaultOpenCodeServerPort = "42001"
+	domain.DefaultDashboardPort = "42002"
+	t.Cleanup(func() {
+		domain.DevelopmentBuild = previousDevelopmentBuild
+		domain.DefaultOpenCodeServerPort = previousOpenCodePort
+		domain.DefaultDashboardPort = previousDashboardPort
+	})
+
+	home := t.TempDir()
+	dir := filepath.Join(home, ".tmux-coder")
+	if err := os.Mkdir(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte("opencode_server_port: 41001\ndashboard_listen_address: 127.0.0.1:41002\ndashboard_public_url: https://production-dashboard.example\nopencode_public_url: https://production-opencode.example\n")
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	t.Setenv(OpenCodeServerPortEnv, "")
+	t.Setenv(DashboardListenAddressEnv, "")
+	t.Setenv(DashboardPublicURLEnv, "")
+	t.Setenv(OpenCodePublicURLEnv, "")
+
+	config, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if config.OpenCodeServerPort != 42001 {
+		t.Errorf("OpenCodeServerPort = %d, want baked development port 42001", config.OpenCodeServerPort)
+	}
+	if config.DashboardListenAddress != "127.0.0.1:42002" {
+		t.Errorf("DashboardListenAddress = %q, want baked development address", config.DashboardListenAddress)
+	}
+	if config.DashboardPublicURL != "" || config.OpenCodePublicURL != "" {
+		t.Errorf("public URLs = %q, %q, want global production URLs ignored", config.DashboardPublicURL, config.OpenCodePublicURL)
+	}
+}
+
+func TestDevelopmentBuildStillAcceptsInheritedNetworkOverrides(t *testing.T) {
+	previousDevelopmentBuild := domain.DevelopmentBuild
+	previousOpenCodePort := domain.DefaultOpenCodeServerPort
+	previousDashboardPort := domain.DefaultDashboardPort
+	domain.DevelopmentBuild = "true"
+	domain.DefaultOpenCodeServerPort = "42001"
+	domain.DefaultDashboardPort = "42002"
+	t.Cleanup(func() {
+		domain.DevelopmentBuild = previousDevelopmentBuild
+		domain.DefaultOpenCodeServerPort = previousOpenCodePort
+		domain.DefaultDashboardPort = previousDashboardPort
+	})
+
+	t.Setenv("HOME", t.TempDir())
+	t.Setenv(OpenCodeServerPortEnv, "43001")
+	t.Setenv(DashboardListenAddressEnv, "127.0.0.1:43002")
+	t.Setenv(DashboardPublicURLEnv, "http://127.0.0.1:43002")
+	t.Setenv(OpenCodePublicURLEnv, "http://127.0.0.1:43001")
+
+	config, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if config.OpenCodeServerPort != 43001 {
+		t.Errorf("OpenCodeServerPort = %d, want inherited override 43001", config.OpenCodeServerPort)
+	}
+	if config.DashboardListenAddress != "127.0.0.1:43002" {
+		t.Errorf("DashboardListenAddress = %q, want inherited override", config.DashboardListenAddress)
+	}
+	if config.DashboardPublicURL != "http://127.0.0.1:43002" || config.OpenCodePublicURL != "http://127.0.0.1:43001" {
+		t.Errorf("public URLs = %q, %q, want inherited overrides", config.DashboardPublicURL, config.OpenCodePublicURL)
+	}
+}
+
 func TestParseAcceptsOpenCodeServerPort(t *testing.T) {
 	config, err := Parse([]byte("opencode_server_port: 41000\n"))
 	if err != nil {

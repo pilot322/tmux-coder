@@ -18,6 +18,7 @@ import (
 	"github.com/pilot322/tmux-coder/internal/adapter/webdashboard"
 	"github.com/pilot322/tmux-coder/internal/daemonaddr"
 	"github.com/pilot322/tmux-coder/internal/daemonconfig"
+	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/infra/desktopnotify"
 	"github.com/pilot322/tmux-coder/internal/infra/discordnotify"
 	gitinfra "github.com/pilot322/tmux-coder/internal/infra/git"
@@ -28,6 +29,7 @@ import (
 	processinfra "github.com/pilot322/tmux-coder/internal/infra/process"
 	"github.com/pilot322/tmux-coder/internal/infra/tmux"
 	"github.com/pilot322/tmux-coder/internal/obs"
+	"github.com/pilot322/tmux-coder/internal/tmuxserver"
 	"github.com/pilot322/tmux-coder/internal/usecase"
 )
 
@@ -169,10 +171,25 @@ func loadDaemonEnv() error {
 	if err != nil {
 		return err
 	}
-	return loadEnvFile(filepath.Join(home, ".tmux-coder", ".env"))
+	var ignoredKeys []string
+	if domain.IsDevelopmentBuild() {
+		ignoredKeys = []string{
+			daemonaddr.EnvName,
+			daemonconfig.OpenCodeServerPortEnv,
+			daemonconfig.DashboardListenAddressEnv,
+			daemonconfig.DashboardPublicURLEnv,
+			daemonconfig.OpenCodePublicURLEnv,
+			tmuxserver.EnvName,
+		}
+	}
+	return loadEnvFile(filepath.Join(home, ".tmux-coder", ".env"), ignoredKeys...)
 }
 
-func loadEnvFile(path string) error {
+func loadEnvFile(path string, ignoredKeys ...string) error {
+	ignored := make(map[string]struct{}, len(ignoredKeys))
+	for _, key := range ignoredKeys {
+		ignored[key] = struct{}{}
+	}
 	file, err := os.Open(path)
 	if err != nil {
 		return err
@@ -193,6 +210,9 @@ func loadEnvFile(path string) error {
 
 		key = strings.TrimSpace(key)
 		if key == "" {
+			continue
+		}
+		if _, skip := ignored[key]; skip {
 			continue
 		}
 		if _, exists := os.LookupEnv(key); exists {

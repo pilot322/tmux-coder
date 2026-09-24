@@ -8,6 +8,7 @@ worktree_name="$(basename "$root_dir")"
 path_hash="$(printf '%s' "$root_dir" | cksum | cut -d' ' -f1)"
 dev_port=$(( 64357 + (path_hash % 200) + 1 ))
 dev_opencode_port=$(( 39155 + (path_hash % 200) + 1 ))
+dev_dashboard_port=$(( 39356 + (path_hash % 200) + 1 ))
 dev_label="tmux-coder-${worktree_name}"
 
 cat > .env <<EOF
@@ -15,6 +16,7 @@ cat > .env <<EOF
 # Subsequent ./dev build commands in this worktree bake these values into bin/.
 TMUX_CODERD_PORT=${dev_port}
 TMUX_CODER_OPENCODE_SERVER_PORT=${dev_opencode_port}
+TMUX_CODER_DASHBOARD_LISTEN_ADDRESS=127.0.0.1:${dev_dashboard_port}
 TMUX_CODER_TMUX_SERVER=${dev_label}
 TMUX_CODER_BIN=${root_dir}/bin
 EOF

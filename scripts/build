@@ -19,8 +19,9 @@ fi
 # the worktree path so the client and daemon built here always agree, and so any
 # worktree is isolated the moment it is built — no config file required. `go
 # install` (scripts/install) does not pass these flags, so the shipped binary
-# keeps the "64357"/"39155"/"39356"/"tmux-coder" defaults. Runtime environment
-# variables still take precedence.
+# keeps the "64357"/"39155"/"39356"/"tmux-coder" defaults. Development builds
+# ignore daemon-wide file values for isolated resources; inherited runtime
+# environment variables still take precedence.
 worktree_name="$(basename "$root_dir")"
 path_hash="$(printf '%s' "$root_dir" | cksum | cut -d' ' -f1)"
 dev_port=$(( 64357 + (path_hash % 200) + 1 ))
@@ -31,6 +32,7 @@ dev_label="tmux-coder-${worktree_name}"
 ldflags="-X ${module}/internal/daemonaddr.DefaultPort=${dev_port}"
 ldflags+=" -X ${module}/internal/domain.DefaultOpenCodeServerPort=${dev_opencode_port}"
 ldflags+=" -X ${module}/internal/domain.DefaultDashboardPort=${dev_dashboard_port}"
+ldflags+=" -X ${module}/internal/domain.DevelopmentBuild=true"
 ldflags+=" -X ${module}/internal/tmuxserver.DefaultLabel=${dev_label}"
 
 echo "  bin/ dev build → daemon port ${dev_port}, OpenCode port ${dev_opencode_port}, dashboard port ${dev_dashboard_port}, tmux server ${dev_label}" >&2

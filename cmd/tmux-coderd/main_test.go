@@ -7,6 +7,9 @@ import (
 	"testing"
 
 	"github.com/pilot322/tmux-coder/internal/daemonaddr"
+	"github.com/pilot322/tmux-coder/internal/daemonconfig"
+	"github.com/pilot322/tmux-coder/internal/domain"
+	"github.com/pilot322/tmux-coder/internal/tmuxserver"
 )
 
 func TestNewDashboardServerConfiguresPublicHTTPDefenses(t *testing.T) {
@@ -124,6 +127,50 @@ func TestLoadDaemonEnvDoesNotOverrideInheritedEnv(t *testing.T) {
 
 	if got := daemonaddr.Port(os.Getenv); got != "8888" {
 		t.Fatalf("daemonaddr.Port(os.Getenv) = %q, want %q", got, "8888")
+	}
+}
+
+func TestDevelopmentBuildDoesNotLoadGlobalNetworkOverrides(t *testing.T) {
+	previousDevelopmentBuild := domain.DevelopmentBuild
+	domain.DevelopmentBuild = "true"
+	t.Cleanup(func() { domain.DevelopmentBuild = previousDevelopmentBuild })
+	unsetEnv(t, daemonaddr.EnvName)
+	unsetEnv(t, daemonconfig.OpenCodeServerPortEnv)
+	unsetEnv(t, daemonconfig.DashboardListenAddressEnv)
+	unsetEnv(t, daemonconfig.DashboardPublicURLEnv)
+	unsetEnv(t, daemonconfig.OpenCodePublicURLEnv)
+	unsetEnv(t, tmuxserver.EnvName)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	daemonConfigDir := filepath.Join(home, ".tmux-coder")
+	if err := os.MkdirAll(daemonConfigDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	data := []byte(daemonaddr.EnvName + "=41000\n" +
+		daemonconfig.OpenCodeServerPortEnv + "=41001\n" +
+		daemonconfig.DashboardListenAddressEnv + "=127.0.0.1:41002\n" +
+		daemonconfig.DashboardPublicURLEnv + "=https://production-dashboard.example\n" +
+		daemonconfig.OpenCodePublicURLEnv + "=https://production-opencode.example\n" +
+		tmuxserver.EnvName + "=global\n")
+	if err := os.WriteFile(filepath.Join(daemonConfigDir, ".env"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := loadDaemonEnv(); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, key := range []string{
+		daemonaddr.EnvName,
+		daemonconfig.OpenCodeServerPortEnv,
+		daemonconfig.DashboardListenAddressEnv,
+		daemonconfig.DashboardPublicURLEnv,
+		daemonconfig.OpenCodePublicURLEnv,
+		tmuxserver.EnvName,
+	} {
+		if value, exists := os.LookupEnv(key); exists {
+			t.Errorf("%s = %q, want unset so baked development default is retained", key, value)
+		}
 	}
 }
 

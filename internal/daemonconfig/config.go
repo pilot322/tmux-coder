@@ -51,6 +51,13 @@ func Load() (domain.DaemonConfig, error) {
 	if err != nil {
 		return domain.DaemonConfig{}, err
 	}
+	if domain.IsDevelopmentBuild() {
+		defaults := domain.DefaultDaemonConfig()
+		config.OpenCodeServerPort = defaults.OpenCodeServerPort
+		config.DashboardListenAddress = defaults.DashboardListenAddress
+		config.DashboardPublicURL = ""
+		config.OpenCodePublicURL = ""
+	}
 	return applyEnv(config, os.Getenv)
 }
 

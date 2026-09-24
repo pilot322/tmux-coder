@@ -12,6 +12,14 @@ var DefaultOpenCodeServerPort = "39155"
 // a per-worktree value using -ldflags -X.
 var DefaultDashboardPort = "39356"
 
+// DevelopmentBuild is set by scripts/build so global user configuration cannot
+// collapse separate worktrees onto the same runtime resources.
+var DevelopmentBuild = "false"
+
+func IsDevelopmentBuild() bool {
+	return DevelopmentBuild == "true"
+}
+
 // DaemonConfig holds daemon-wide settings that govern behavior across all
 // Projects. It is in memory for now, but is shaped so a file loader can supply
 // it later.

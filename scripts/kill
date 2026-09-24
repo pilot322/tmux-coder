@@ -86,30 +86,30 @@ env_from_file() {
 }
 
 # tmux_server_for_pid resolves the tmux server label a daemon is using, mirroring
-# the daemon's own precedence: an env var exported before launch wins, followed
-# by ~/.tmux-coder/.env. With neither, a dev build still has its label baked in
-# by scripts/build via -ldflags, so reconstruct it the same way scripts/build
-# does from the worktree path; the scripts/build guard keeps this from ever
-# firing on the installed (prod) daemon, which falls through to the shipped
-# default.
+# the daemon's own precedence. An inherited env var always wins. A dev build then
+# uses its baked per-worktree label and ignores ~/.tmux-coder/.env; an installed
+# daemon reads that file before falling through to the shipped default.
 tmux_server_for_pid() {
   local pid="$1"
   local exe="$2"
-  local value home root
+  local value home root dev_build=0
 
   value="$(env_from_proc "$pid" "$tmux_server_env")"
-  if [[ -z "$value" ]]; then
+  if [[ -n "$exe" ]]; then
+    root="$(dirname "$(dirname "$exe")")"
+    if [[ "$exe" == */bin/tmux-coderd && -f "$root/scripts/build" ]]; then
+      dev_build=1
+    fi
+  fi
+  if [[ -z "$value" && $dev_build -eq 0 ]]; then
     home="$(env_from_proc "$pid" "HOME")"
     home="${home:-${HOME:-}}"
     if [[ -n "$home" ]]; then
       value="$(env_from_file "$home/.tmux-coder/.env" "$tmux_server_env")"
     fi
   fi
-  if [[ -z "$value" && -n "$exe" ]]; then
-    root="$(dirname "$(dirname "$exe")")"
-    if [[ "$exe" == */bin/tmux-coderd && -f "$root/scripts/build" ]]; then
-      value="tmux-coder-$(basename "$root")"
-    fi
+  if [[ -z "$value" && $dev_build -eq 1 ]]; then
+    value="tmux-coder-$(basename "$root")"
   fi
   if [[ -z "$value" ]]; then
     value="$default_tmux_server"
