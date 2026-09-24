@@ -124,31 +124,6 @@ fi
 	}
 }
 
-func TestConfirmPickerSelectionSelectsFirstResultBeforeEnter(t *testing.T) {
-	g := fakeTmuxGateway(t)
-	argsPath := filepath.Join(t.TempDir(), "args")
-	t.Setenv("TMUX_CODER_FAKE_TMUX_MODE", "record")
-	t.Setenv("TMUX_CODER_FAKE_TMUX_ARGS", argsPath)
-
-	if err := g.ConfirmPickerSelection(context.Background(), "%4"); err != nil {
-		t.Fatal(err)
-	}
-	data, err := os.ReadFile(argsPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := strings.Split(strings.TrimSpace(string(data)), "\n")
-	want := []string{
-		"-L", "test",
-		"select-pane", "-e", "-t", "%4", ";",
-		"send-keys", "-t", "%4", "Home", "Enter", ";",
-		"select-pane", "-d", "-t", "%4",
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Fatalf("args = %#v, want %#v", got, want)
-	}
-}
-
 func fakeTmuxGateway(t *testing.T) *TmuxGateway {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "tmux")

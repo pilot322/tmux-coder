@@ -101,8 +101,8 @@ type stubOpenCodeServer struct {
 	url string
 }
 
-func (s *stubOpenCodeServer) Ensure(context.Context) (string, error) {
-	return s.url, nil
+func (s *stubOpenCodeServer) Ensure(context.Context) (usecase.OpenCodeConnection, error) {
+	return usecase.OpenCodeConnection{URL: s.url, Password: "test-password"}, nil
 }
 
 type stubPortAvailability struct {
@@ -397,13 +397,14 @@ func TestPostEnsureOpenCodeServer(t *testing.T) {
 		t.Fatalf("POST status = %d, want 200 (body: %s)", rec.Code, rec.Body)
 	}
 	var resp struct {
-		URL string `json:"url"`
+		URL      string `json:"url"`
+		Password string `json:"password"`
 	}
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if resp.URL != "http://127.0.0.1:4567" {
-		t.Fatalf("url = %q", resp.URL)
+	if resp.URL != "http://127.0.0.1:4567" || resp.Password != "test-password" {
+		t.Fatal("internal connection URL or credential missing")
 	}
 }
 

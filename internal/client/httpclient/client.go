@@ -265,18 +265,21 @@ func (c *Client) AcquirePort(ctx context.Context, in AcquirePortInput) (int, err
 	return resp.Port, nil
 }
 
-func (c *Client) EnsureOpenCodeServer(ctx context.Context) (string, error) {
+func (c *Client) EnsureOpenCodeServer(ctx context.Context) (OpenCodeConnection, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/resources/opencode-server", nil)
 	if err != nil {
-		return "", err
+		return OpenCodeConnection{}, err
 	}
-	var resp struct {
-		URL string `json:"url"`
-	}
+	var resp OpenCodeConnection
 	if err := c.doJSON(req, http.StatusOK, &resp); err != nil {
-		return "", err
+		return OpenCodeConnection{}, err
 	}
-	return resp.URL, nil
+	return resp, nil
+}
+
+type OpenCodeConnection struct {
+	URL      string `json:"url"`
+	Password string `json:"password"`
 }
 
 func (c *Client) ListAgents(ctx context.Context, in ListAgentsInput) ([]Agent, error) {
@@ -383,21 +386,6 @@ func (c *Client) SendAgentSetupFailed(ctx context.Context, id int, message strin
 		return err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/agents/%d/opencode-setup/ready", c.baseURL, id), bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	return c.doJSON(req, http.StatusNoContent, nil)
-}
-
-func (c *Client) SendAgentSetupState(ctx context.Context, id int, statePath string) error {
-	body, err := json.Marshal(struct {
-		StatePath string `json:"statePath"`
-	}{StatePath: statePath})
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, fmt.Sprintf("%s/agents/%d/opencode-setup/state", c.baseURL, id), bytes.NewReader(body))
 	if err != nil {
 		return err
 	}

@@ -333,36 +333,9 @@ func (ac *AgentController) OpenCodeSetupReady(w http.ResponseWriter, r *http.Req
 		return
 	}
 	err = ac.setup.Ready(r.Context(), id, usecase.OpenCodeSetupReady{
-		Model: req.Model, Variant: req.Variant, DisplayName: req.DisplayName, StatePath: req.StatePath,
-		Version: req.Version, HasVariants: req.HasVariants, Error: req.Error,
+		Model: req.Model, Variant: req.Variant, Version: req.Version, Error: req.Error,
 	})
 	if err != nil {
-		if errors.Is(err, usecase.ErrAgentSetupNotFound) {
-			writeError(w, http.StatusNotFound, err.Error())
-		} else {
-			writeError(w, http.StatusConflict, err.Error())
-		}
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (ac *AgentController) SetOpenCodeSetupState(w http.ResponseWriter, r *http.Request) {
-	if ac.setup == nil {
-		writeError(w, http.StatusNotFound, "agent startup setup is unavailable")
-		return
-	}
-	id, err := strconv.Atoi(r.PathValue("id"))
-	if err != nil {
-		writeError(w, http.StatusBadRequest, "id must be an integer")
-		return
-	}
-	var req openCodeSetupStateRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil || req.StatePath == "" {
-		writeError(w, http.StatusBadRequest, "statePath is required")
-		return
-	}
-	if err := ac.setup.SetStatePath(id, req.StatePath); err != nil {
 		if errors.Is(err, usecase.ErrAgentSetupNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
 		} else {
@@ -388,7 +361,7 @@ func (ac *AgentController) OpenCodeSetupOpened(w http.ResponseWriter, r *http.Re
 		writeError(w, http.StatusBadRequest, "invalid JSON body")
 		return
 	}
-	if err := ac.setup.Opened(id, req.Error); err != nil {
+	if err := ac.setup.Opened(id, usecase.OpenCodeSetupReady{Model: req.Model, Variant: req.Variant, Error: req.Error}); err != nil {
 		if errors.Is(err, usecase.ErrAgentSetupNotFound) {
 			writeError(w, http.StatusNotFound, err.Error())
 		} else {
@@ -446,12 +419,12 @@ func (rc *ResourceController) AcquirePort(w http.ResponseWriter, r *http.Request
 }
 
 func (rc *ResourceController) EnsureOpenCodeServer(w http.ResponseWriter, r *http.Request) {
-	url, err := rc.ensureOpenCodeServer.Execute(r.Context())
+	connection, err := rc.ensureOpenCodeServer.Execute(r.Context())
 	if err != nil {
 		writeUsecaseError(w, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, openCodeServerResponse{URL: url})
+	writeJSON(w, http.StatusOK, openCodeServerResponse{URL: connection.URL, Password: connection.Password})
 }
 
 func (ac *AgentController) List(w http.ResponseWriter, r *http.Request) {

@@ -6,7 +6,14 @@ import (
 )
 
 type OpenCodeServerGateway interface {
-	Ensure(ctx context.Context) (string, error)
+	Ensure(ctx context.Context) (OpenCodeConnection, error)
+}
+
+// OpenCodeConnection is returned only by the internal loopback resource API.
+// Password must never be included in dashboard agent DTOs or links.
+type OpenCodeConnection struct {
+	URL      string `json:"url"`
+	Password string `json:"password"`
 }
 
 type EnsureOpenCodeServer struct {
@@ -17,13 +24,13 @@ func NewEnsureOpenCodeServer(server OpenCodeServerGateway) *EnsureOpenCodeServer
 	return &EnsureOpenCodeServer{server: server}
 }
 
-func (uc *EnsureOpenCodeServer) Execute(ctx context.Context) (string, error) {
+func (uc *EnsureOpenCodeServer) Execute(ctx context.Context) (OpenCodeConnection, error) {
 	if uc == nil || uc.server == nil {
-		return "", fmt.Errorf("%w: OpenCode server is not configured", ErrGateway)
+		return OpenCodeConnection{}, fmt.Errorf("%w: OpenCode server is not configured", ErrGateway)
 	}
-	url, err := uc.server.Ensure(ctx)
+	connection, err := uc.server.Ensure(ctx)
 	if err != nil {
-		return "", fmt.Errorf("%w: %v", ErrGateway, err)
+		return OpenCodeConnection{}, fmt.Errorf("%w: %v", ErrGateway, err)
 	}
-	return url, nil
+	return connection, nil
 }

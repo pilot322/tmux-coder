@@ -132,20 +132,6 @@ func (g *TmuxGateway) SendEnter(ctx context.Context, paneID string) error {
 	return nil
 }
 
-// OpenCode resets a filtered picker's selection asynchronously. Selecting the
-// first result explicitly prevents Enter from racing that deferred reset.
-func (g *TmuxGateway) ConfirmPickerSelection(ctx context.Context, paneID string) error {
-	_, err := g.run(ctx,
-		"select-pane", "-e", "-t", paneID, ";",
-		"send-keys", "-t", paneID, "Home", "Enter", ";",
-		"select-pane", "-d", "-t", paneID,
-	)
-	if err != nil {
-		return fmt.Errorf("confirm picker selection: %w", err)
-	}
-	return nil
-}
-
 func (g *TmuxGateway) cmd(ctx context.Context, args ...string) *exec.Cmd {
 	g.log.Debug(ctx, "tmux exec", "args", args)
 	full := append([]string{"-L", g.serverLabel}, args...)

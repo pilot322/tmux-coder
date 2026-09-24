@@ -1,346 +1,226 @@
-// tmux-coder OpenCode TUI plugin.
-//
-// Activity reporting runs in each TUI process rather than in OpenCode's server.
-// This keeps TMUX_CODER_AGENT_ID pane-specific when several attached TUIs share
-// one server. The server broadcasts all session events, so this plugin reports
-// only the displayed session and its descendants.
-
+// CLI-only: one instance per pane, even when all panes share a v2 server.
+import { Plugin } from "@opencode/plugin/tui";
 import { appendFileSync } from "node:fs";
 
-const AGENT_ID = process.env.TMUX_CODER_AGENT_ID;
-const PANE_ID = process.env.TMUX_CODER_PANE_ID;
-const SETUP_REQUESTED = process.env.TMUX_CODER_AGENT_SETUP === "1";
-const YOLO = process.env.TMUX_CODER_AGENT_YOLO === "1";
-const REQUESTED_MODEL = process.env.TMUX_CODER_AGENT_MODEL ?? "";
-const REQUESTED_VARIANT = process.env.TMUX_CODER_AGENT_VARIANT ?? "";
-const DEBUG = process.env.TMUX_CODER_PLUGIN_DEBUG;
-const TESTED_OPENCODE_VERSION = "1.18.14";
-let lastReporterEpoch = 0;
+let lastEpoch = 0;
+const nextEpoch = () => (lastEpoch = Math.max(Date.now(), lastEpoch + 1));
+const baseURL = (raw) => !raw ? "http://127.0.0.1:64357" : raw.includes("://") ? raw : `http://${raw}`;
+const sessionID = (event) => event?.data?.sessionID ?? event?.data?.session?.id ?? event?.data?.info?.id;
 
-function nextReporterEpoch() {
-  lastReporterEpoch = Math.max(Date.now(), lastReporterEpoch + 1);
-  return lastReporterEpoch;
-}
-
-function debug(line) {
-  if (!DEBUG) return;
-  try {
-    appendFileSync(DEBUG, line + "\n");
-  } catch {}
-}
-
-function daemonBaseURL(raw) {
-  if (!raw) return "http://127.0.0.1:64357";
-  if (raw.includes("://")) return raw;
-  return "http://" + raw;
-}
-
-function eventSessionID(event) {
-  return (
-    event?.properties?.sessionID ??
-    event?.properties?.part?.sessionID ??
-    event?.properties?.info?.id
-  );
-}
-
-async function waitForState(api) {
-  const deadline = Date.now() + 25000;
-  while (!api.state?.ready) {
-    if (Date.now() >= deadline) throw new Error("OpenCode TUI catalog did not become ready");
-    await new Promise((resolve) => setTimeout(resolve, 25));
-  }
-}
-
-async function postSetupReady(url, body) {
-  const response = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
-  if (!response.ok) throw new Error(`tmux-coder setup handshake failed (${response.status})`);
-}
-
-async function reportSetupReady(api, setupURL) {
-  if (!SETUP_REQUESTED) return;
-  const version = api.app?.version ?? "unknown";
-  let validated = false;
-  try {
-    await waitForState(api);
-    if (version !== TESTED_OPENCODE_VERSION) {
-      api.ui?.toast?.({
-        variant: "warning",
-        message: `tmux-coder tested OpenCode ${TESTED_OPENCODE_VERSION}; attempting startup automation with ${version}`,
-        duration: 5000,
-      });
+export function TmuxCoderStatus(context) {
+  const agentID = process.env.TMUX_CODER_AGENT_ID;
+  if (!agentID) return () => {};
+  const paneID = process.env.TMUX_CODER_PANE_ID;
+  const yolo = process.env.TMUX_CODER_AGENT_YOLO === "1";
+  const base = `${baseURL(process.env.TMUX_CODERD_ADDR)}/agents/${agentID}`;
+  const debug = (line) => {
+    if (process.env.TMUX_CODER_PLUGIN_DEBUG) {
+      try { appendFileSync(process.env.TMUX_CODER_PLUGIN_DEBUG, line + "\n"); } catch {}
     }
-
-    const ready = { version };
-    if (REQUESTED_MODEL) {
-      const slash = REQUESTED_MODEL.indexOf("/");
-      const providerID = REQUESTED_MODEL.slice(0, slash);
-      const modelID = REQUESTED_MODEL.slice(slash + 1);
-      const provider = api.state.provider.find((item) => item.id === providerID);
-      const model = provider?.models?.[modelID];
-      if (!provider || !model || (providerID === "opencode" && modelID.includes("-nano"))) {
-        throw new Error(`requested model ${REQUESTED_MODEL} is unavailable`);
-      }
-
-      const displayName = model.name ?? modelID;
-	  const variants = Object.keys(model.variants ?? {});
-	  if (REQUESTED_VARIANT && !variants.includes(REQUESTED_VARIANT)) {
-		throw new Error(`requested variant ${REQUESTED_VARIANT} is unavailable for model ${REQUESTED_MODEL}`);
-	  }
-      let displayMatches = 0;
-      for (const candidateProvider of api.state.provider) {
-        for (const [candidateID, candidate] of Object.entries(candidateProvider.models ?? {})) {
-          if ((candidate.name ?? candidateID) === displayName) displayMatches++;
-        }
-      }
-      if (displayMatches !== 1) {
-        throw new Error(
-          `requested model ${REQUESTED_MODEL} maps to non-unique picker display name ${JSON.stringify(displayName)}`,
-        );
-      }
-
-      Object.assign(ready, {
-        model: REQUESTED_MODEL,
-		...(REQUESTED_VARIANT ? { variant: REQUESTED_VARIANT } : {}),
-        displayName,
-        statePath: process.env.TMUX_CODER_OPENCODE_STATE_PATH ?? "",
-		hasVariants: variants.length > 0,
-      });
-    }
-    await postSetupReady(setupURL, ready);
-    validated = true;
-    if (REQUESTED_MODEL) {
-      if (api.keymap?.dispatchCommand) api.keymap.dispatchCommand("model.list");
-      else if (api.command?.trigger) api.command.trigger("model.list");
-      else throw new Error("OpenCode TUI model picker API is unavailable");
-      await new Promise((resolve) => setTimeout(resolve, 0));
-    }
-    await postSetupReady(setupURL.replace(/\/ready$/, "/opened"), {});
-  } catch (error) {
-    await postSetupReady(validated ? setupURL.replace(/\/ready$/, "/opened") : setupURL, {
-      version,
-      error: error instanceof Error ? error.message : String(error),
-    });
-  }
-}
-
-export async function TmuxCoderStatus(api) {
-  if (!AGENT_ID) return;
-
-  const eventURL = `${daemonBaseURL(process.env.TMUX_CODERD_ADDR)}/agents/${AGENT_ID}/event`;
-  const sessionURL = `${daemonBaseURL(process.env.TMUX_CODERD_ADDR)}/agents/${AGENT_ID}/opencode-session`;
-  const setupURL = `${daemonBaseURL(process.env.TMUX_CODERD_ADDR)}/agents/${AGENT_ID}/opencode-setup/ready`;
+  };
+  const stops = [];
+  const parent = new Map();
+  const active = new Map();
+  const waits = new Map();
+  const statusRequests = new Set();
   let lastStatus = "";
-  const reporterEpoch = nextReporterEpoch();
-  let sessionSequence = 0;
-  let lastSessionID;
-  let pendingSessionID;
-  let sessionReportInFlight = false;
-  let sessionReportController;
-  let sessionReportTimeout;
-  let sessionRetryTimer;
-  let sessionRetryDelay = 250;
-  let sessionReporterDisposed = false;
-  const parentBySession = new Map();
-  const statusBySession = new Map();
+  let disposed = false;
+  let lastRoute;
+  let pending;
+  let inFlight = false;
+  let controller;
+  let timeout;
+  let retry;
+  let backoff = 250;
+  const setupAbort = new AbortController();
+  let sequence = 0;
+  const epoch = nextEpoch();
 
-  function currentSessionID() {
-    const route = api.route.current;
-    return route?.name === "session" ? route.params?.sessionID : undefined;
-  }
-
-  function sendPendingSession() {
-    if (
-      sessionReporterDisposed ||
-      sessionReportInFlight ||
-      sessionRetryTimer !== undefined ||
-      pendingSessionID === undefined
-    ) return;
-    const sessionId = pendingSessionID;
-    pendingSessionID = undefined;
-    sessionReportInFlight = true;
-    let failed = false;
-    const controller = new AbortController();
-    const timeout = setTimeout(() => controller.abort(), 1000);
-    sessionReportController = controller;
-    sessionReportTimeout = timeout;
-    fetch(sessionURL, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        sessionId,
-        tmuxPaneId: PANE_ID,
-        reporterEpoch,
-        sequence: ++sessionSequence,
-      }),
-      signal: controller.signal,
-    })
-      .then((response) => {
-        if (!response.ok) throw new Error(`tmux-coder identity report failed (${response.status})`);
-      })
-      .catch(() => {
-        failed = true;
-        if (!sessionReporterDisposed && pendingSessionID === undefined) pendingSessionID = sessionId;
-      })
-      .finally(() => {
-        clearTimeout(timeout);
-        sessionReportController = undefined;
-        sessionReportTimeout = undefined;
-        sessionReportInFlight = false;
-        if (sessionReporterDisposed) return;
-        if (failed) {
-          const retryDelay = sessionRetryDelay;
-          sessionRetryDelay = Math.min(sessionRetryDelay * 2, 1000);
-          sessionRetryTimer = setTimeout(() => {
-            sessionRetryTimer = undefined;
-            sendPendingSession();
-          }, retryDelay);
-        } else {
-          sessionRetryDelay = 250;
-          sendPendingSession();
-        }
-      });
-  }
-
-  function observeCurrentSession() {
-    if (sessionReporterDisposed) return;
-    const sessionId = currentSessionID() ?? null;
-    if (sessionId === lastSessionID) return;
-    lastSessionID = sessionId;
-    pendingSessionID = sessionId;
-    sendPendingSession();
-  }
-
-  observeCurrentSession();
-  const sessionPoll = setInterval(observeCurrentSession, 250);
-  api.lifecycle.onDispose(() => {
-    sessionReporterDisposed = true;
-    pendingSessionID = undefined;
-    clearInterval(sessionPoll);
-    if (sessionRetryTimer !== undefined) {
-      clearTimeout(sessionRetryTimer);
-      sessionRetryTimer = undefined;
-    }
-    if (sessionReportTimeout !== undefined) {
-      clearTimeout(sessionReportTimeout);
-      sessionReportTimeout = undefined;
-    }
-    sessionReportController?.abort();
-    sessionReportController = undefined;
-  });
-
-  function isRelated(sessionID) {
-    const root = currentSessionID();
-    const seen = new Set();
-    while (sessionID && !seen.has(sessionID)) {
-      if (sessionID === root) return true;
-      seen.add(sessionID);
-      sessionID = parentBySession.get(sessionID);
+  const current = () => {
+    const route = context.ui.router.current();
+    return route?.type === "session" ? route.sessionID : undefined;
+  };
+  const related = (id) => {
+    const root = current();
+    const visited = new Set();
+    while (id && !visited.has(id)) {
+      if (id === root) return true;
+      visited.add(id);
+      id = parent.get(id) ?? context.data.session.get(id)?.parentID;
     }
     return false;
+  };
+
+  function sendIdentity() {
+    if (disposed || inFlight || retry !== undefined || pending === undefined) return;
+    const id = pending;
+    pending = undefined;
+    inFlight = true;
+    controller = new AbortController();
+    timeout = setTimeout(() => controller.abort(), 1000);
+    let failed = false;
+    fetch(`${base}/opencode-session`, {
+      method: "PUT", headers: { "Content-Type": "application/json" }, signal: controller.signal,
+      body: JSON.stringify({ sessionId: id, tmuxPaneId: paneID, reporterEpoch: epoch, sequence: ++sequence }),
+    }).then((response) => { if (!response.ok) throw Error(`identity HTTP ${response.status}`); })
+      .catch(() => { failed = true; if (!disposed && pending === undefined) pending = id; })
+      .finally(() => {
+        clearTimeout(timeout);
+        controller = undefined;
+        timeout = undefined;
+        inFlight = false;
+        if (disposed) return;
+        if (failed) {
+          retry = setTimeout(() => { retry = undefined; sendIdentity(); }, backoff);
+          backoff = Math.min(backoff * 2, 1000);
+        } else { backoff = 250; sendIdentity(); }
+      });
   }
-
-  function report(status) {
-    debug(`report ${status} (last=${lastStatus})`);
-    if (status === lastStatus) return;
-    lastStatus = status;
-
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 1000);
-    fetch(eventURL, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ event: status }),
-      signal: controller.signal,
-    })
-      .catch(() => {})
-      .finally(() => clearTimeout(timer));
-  }
-
-  function reportAggregateStatus() {
-    let aggregate = "idle";
-    for (const [sessionID, status] of statusBySession) {
-      if (!isRelated(sessionID)) continue;
-      if (status === "waiting") return report("waiting");
-      if (status === "busy") aggregate = "busy";
+  function observe() {
+    if (disposed) return;
+    const id = current() ?? null;
+    if (id !== lastRoute) {
+      lastRoute = id;
+      pending = id;
+      sendIdentity();
+      aggregate();
     }
-    report(aggregate);
   }
-
+  function report(value) {
+    if (disposed || value === lastStatus) return;
+    lastStatus = value;
+    debug(`report ${value}`);
+    const abort = new AbortController();
+    const timer = setTimeout(() => abort.abort(), 1000);
+    const request = { abort, timer };
+    statusRequests.add(request);
+    fetch(`${base}/event`, { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ event: value }), signal: abort.signal }).catch(() => {}).finally(() => {
+      clearTimeout(timer);
+      statusRequests.delete(request);
+    });
+  }
+  function aggregate() {
+    let status = "idle";
+    for (const [id, requests] of waits) if (related(id) && requests.size) return report("waiting");
+    for (const [id, busy] of active) if (related(id) && busy) status = "busy";
+    report(status);
+  }
   function on(type, handler) {
-    api.event.on(type, (event) => {
-      debug(`event ${event?.type} session=${eventSessionID(event) ?? "none"}`);
-      if (!isRelated(eventSessionID(event))) return;
-      handler(event);
+    stops.push(context.data.on(type, (event) => {
+      debug(`event ${type} session=${sessionID(event) ?? "none"}`);
+      handler(event.data ?? {});
+    }));
+  }
+  on("session.created", (data) => {
+    if (data.sessionID && data.parentID) parent.set(data.sessionID, data.parentID);
+    aggregate();
+  });
+  on("session.deleted", (data) => {
+    parent.delete(data.sessionID);
+    active.delete(data.sessionID);
+    waits.delete(data.sessionID);
+    aggregate();
+  });
+  for (const type of ["session.execution.started", "session.execution.succeeded", "session.execution.failed", "session.execution.interrupted"]) {
+    on(type, (data) => {
+      if (!data.sessionID || !related(data.sessionID)) return;
+      active.set(data.sessionID, type === "session.execution.started");
+      aggregate();
     });
   }
-
-  function onSessionTopology(type) {
-    api.event.on(type, (event) => {
-      const info = event.properties?.info;
-      if (!info?.id) return;
-      if (type === "session.deleted") {
-        parentBySession.delete(info.id);
-        statusBySession.delete(info.id);
-      } else if (info.parentID) {
-        parentBySession.set(info.id, info.parentID);
-      } else {
-        parentBySession.delete(info.id);
+  const waitKey = (kind, data) => `${kind}:${data.id ?? data.requestID}`;
+  for (const [type, kind] of [["permission.asked", "permission"], ["form.created", "form"]]) {
+    on(type, (raw) => {
+      const data = kind === "form" ? raw.form : raw;
+      if (!data.sessionID || !related(data.sessionID)) return;
+      const id = data.id ?? data.requestID;
+      if (id === undefined) return;
+      if (kind === "permission" && yolo) {
+        void context.client.permission.reply({ sessionID: data.sessionID, requestID: id, decision: "once" })
+          .catch((error) => {
+            debug(`permission reply failed: ${error}`);
+            if (disposed) return;
+            if (!waits.has(data.sessionID)) waits.set(data.sessionID, new Set());
+            waits.get(data.sessionID).add(waitKey(kind, data));
+            aggregate();
+          });
+        return;
       }
+      if (!waits.has(data.sessionID)) waits.set(data.sessionID, new Set());
+      waits.get(data.sessionID).add(waitKey(kind, data));
+      aggregate();
+    });
+  }
+  for (const [type, kind] of [["permission.replied", "permission"], ["form.replied", "form"], ["form.cancelled", "form"]]) {
+    on(type, (data) => {
+      waits.get(data.sessionID)?.delete(waitKey(kind, data));
+      aggregate();
     });
   }
 
-  await reportSetupReady(api, setupURL);
+  observe();
+  const poll = setInterval(observe, 250);
   report("idle");
-
-  onSessionTopology("session.created");
-  onSessionTopology("session.updated");
-  onSessionTopology("session.deleted");
-
-  if (YOLO) {
-	api.event.on("permission.asked", (event) => {
-	  if (!isRelated(eventSessionID(event))) return;
-	  void api.client.permission.reply({ requestID: event.properties.id, reply: "once" });
-	});
+  if (process.env.TMUX_CODER_AGENT_SETUP === "1") {
+    void setupSession(context, base, setupAbort.signal).catch((error) => debug(`setup failed: ${error}`));
   }
+  return () => {
+    disposed = true;
+    clearInterval(poll);
+    clearTimeout(retry);
+    clearTimeout(timeout);
+    controller?.abort();
+    setupAbort.abort();
+    for (const request of statusRequests) { clearTimeout(request.timer); request.abort.abort(); }
+    statusRequests.clear();
+    for (const stop of stops) stop();
+  };
+}
 
-  on("session.status", (event) => {
-    const sessionID = event.properties.sessionID;
-    const status = event.properties.status.type;
-    if (status === "idle") {
-      statusBySession.set(sessionID, "idle");
-    } else if (statusBySession.get(sessionID) !== "waiting") {
-      statusBySession.set(sessionID, "busy");
+async function setupSession(context, base, signal) {
+  const model = process.env.TMUX_CODER_AGENT_MODEL ?? "";
+  const variant = process.env.TMUX_CODER_AGENT_VARIANT ?? "";
+  const post = async (path, body) => {
+    const response = await fetch(`${base}/opencode-setup/${path}`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal,
+    });
+    if (!response.ok) throw Error(`startup handshake ${path}: HTTP ${response.status}`);
+  };
+  let validated = false;
+  try {
+    const location = context.location ?? context.data.location.default();
+    let ref;
+    if (model) {
+       await context.data.location.model.sync(location);
+       const models = context.data.location.model.list(location) ?? [];
+       // V2 aliases have a distinct public id (e.g. luna-fast) and underlying modelID (luna).
+       const found = models.find((item) => `${item.providerID}/${item.id}` === model && item.enabled === true);
+      if (!found) throw Error(`requested model ${model} is unavailable`);
+      if (variant && !(found.variants ?? []).some((item) => item.id === variant)) {
+        throw Error(`requested variant ${variant} is unavailable for model ${model}`);
+      }
+       ref = { providerID: found.providerID, id: found.id, ...(variant ? { variant } : {}) };
     }
-    reportAggregateStatus();
-  });
-  on("session.idle", (event) => {
-    statusBySession.set(event.properties.sessionID, "idle");
-    reportAggregateStatus();
-  });
-
-  const waitingTypes = YOLO ? ["question.asked"] : ["permission.asked", "question.asked"];
-  for (const type of waitingTypes) {
-    on(type, (event) => {
-      statusBySession.set(event.properties.sessionID, "waiting");
-      reportAggregateStatus();
-    });
-  }
-  const repliedTypes = YOLO
-    ? ["question.replied", "question.rejected"]
-    : ["permission.replied", "question.replied", "question.rejected"];
-  for (const type of repliedTypes) {
-    on(type, (event) => {
-      statusBySession.set(event.properties.sessionID, "busy");
-      reportAggregateStatus();
-    });
+    await post("ready", { version: context.app.version, model, variant });
+    if (signal.aborted) return;
+    validated = true;
+    const created = await context.client.session.create({ location, ...(ref ? { model: ref } : {}) });
+    const id = created.id;
+    if (!id) throw Error("OpenCode did not create a startup session");
+    if (ref) await context.client.session.switchModel({ sessionID: id, model: ref });
+    context.ui.router.navigate({ type: "session", sessionID: id });
+    const selected = await context.client.session.get({ sessionID: id });
+    if (!selected || context.ui.router.current()?.sessionID !== id ||
+        (ref && (selected.model?.providerID !== ref.providerID || selected.model?.id !== ref.id ||
+          (selected.model?.variant ?? "") !== variant))) {
+      throw Error("OpenCode session model or displayed conversation did not match the request");
+    }
+    await post("opened", { model, variant });
+  } catch (error) {
+    if (signal.aborted) return;
+    try { await post(validated ? "opened" : "ready", { error: error instanceof Error ? error.message : String(error) }); } catch {}
   }
 }
 
-export default {
-  id: "tmux-coder-status",
-  tui: TmuxCoderStatus,
-};
+export default Plugin.define({ id: "tmux-coder-status", setup: TmuxCoderStatus });

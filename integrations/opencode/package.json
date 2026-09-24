@@ -2,6 +2,15 @@
   "name": "tmux-coder-opencode-plugin",
   "private": true,
   "type": "module",
+  "dependencies": {
+    "@opencode/plugin": "2.0.16"
+  },
+  "peerDependencies": {
+    "solid-js": ">=1.9.0",
+    "@opentui/core": ">=0.5.10",
+    "@opentui/solid": ">=0.5.10",
+    "@opencode/theme": "2.0.16"
+  },
   "exports": {
     "./tui": "./tui.js"
   }

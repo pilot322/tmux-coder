@@ -81,7 +81,8 @@ type acquirePortResponse struct {
 }
 
 type openCodeServerResponse struct {
-	URL string `json:"url"`
+	URL      string `json:"url"`
+	Password string `json:"password"`
 }
 
 type createAgentRequest struct {
@@ -141,19 +142,14 @@ type agentEventRequest struct {
 }
 
 type openCodeSetupReadyRequest struct {
-	Model       string `json:"model"`
-	Variant     string `json:"variant"`
-	DisplayName string `json:"displayName"`
-	StatePath   string `json:"statePath"`
-	Version     string `json:"version"`
-	HasVariants bool   `json:"hasVariants"`
-	Error       string `json:"error"`
-}
-
-type openCodeSetupStateRequest struct {
-	StatePath string `json:"statePath"`
+	Model   string `json:"model"`
+	Variant string `json:"variant"`
+	Version string `json:"version"`
+	Error   string `json:"error"`
 }
 
 type openCodeSetupOpenedRequest struct {
-	Error string `json:"error"`
+	Model   string `json:"model"`
+	Variant string `json:"variant"`
+	Error   string `json:"error"`
 }

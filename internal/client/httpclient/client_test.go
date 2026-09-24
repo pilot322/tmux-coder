@@ -230,7 +230,7 @@ func TestClientEnsuresOpenCodeServer(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"url":"http://127.0.0.1:4567"}`))
+		_, _ = w.Write([]byte(`{"url":"http://127.0.0.1:4567","password":"test-secret"}`))
 	}))
 	defer server.Close()
 
@@ -239,8 +239,8 @@ func TestClientEnsuresOpenCodeServer(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureOpenCodeServer: %v", err)
 	}
-	if url != "http://127.0.0.1:4567" {
-		t.Fatalf("url = %q", url)
+	if url.URL != "http://127.0.0.1:4567" || url.Password != "test-secret" {
+		t.Fatal("internal OpenCode connection URL or credential did not round-trip")
 	}
 }
 

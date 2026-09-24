@@ -2,7 +2,7 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR-0019](0019-opencode-v2-authenticated-pane-setup.md)
 
 ## Context
 

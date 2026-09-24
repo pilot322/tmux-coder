@@ -4,6 +4,10 @@
 
 Accepted
 
+The v1 launch, readiness, and plugin configuration details below are superseded
+by [ADR-0019](0019-opencode-v2-authenticated-pane-setup.md). The shared-server
+ownership decision remains in effect.
+
 ## Context
 
 Launching each OpenCode TC Agent as a standalone TUI also launches an embedded

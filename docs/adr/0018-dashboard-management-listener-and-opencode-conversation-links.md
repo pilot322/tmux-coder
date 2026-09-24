@@ -4,6 +4,9 @@
 
 Accepted
 
+The exact-link decision remains in effect. OpenCode v2 browser authentication
+and pairing are recorded in [ADR-0019](0019-opencode-v2-authenticated-pane-setup.md).
+
 ## Context
 
 The terminal **Client** uses a loopback Daemon API that also carries trusted

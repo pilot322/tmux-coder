@@ -300,6 +300,12 @@ func agentEnvVars(agent *domain.Agent, daemonAddr string, setup, yolo bool) []st
 	if agent.Variant() != "" {
 		env = append(env, "TMUX_CODER_AGENT_VARIANT="+agent.Variant())
 	}
+	if binary := os.Getenv("TMUX_CODER_OPENCODE_BINARY"); binary != "" && agent.Kind() == "opencode" {
+		env = append(env, "TMUX_CODER_OPENCODE_BINARY="+binary)
+	}
+	if server := os.Getenv("TMUX_CODER_OPENCODE_SERVER_URL"); server != "" && agent.Kind() == "opencode" {
+		env = append(env, "TMUX_CODER_OPENCODE_SERVER_URL="+server)
+	}
 	return env
 }
 

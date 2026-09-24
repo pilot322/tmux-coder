@@ -5,22 +5,20 @@ package agentwrapper
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 	"unsafe"
 
+	"github.com/pilot322/tmux-coder/internal/client/httpclient"
 	"github.com/pilot322/tmux-coder/internal/daemonaddr"
 )
 
@@ -29,10 +27,9 @@ import (
 type AgentEventClient interface {
 	SendAgentStarted(ctx context.Context, id int, pgid int) error
 	SendAgentEvent(ctx context.Context, id int, event string) error
-	EnsureOpenCodeServer(ctx context.Context) (string, error)
+	EnsureOpenCodeServer(ctx context.Context) (httpclient.OpenCodeConnection, error)
 	WaitAgentSetup(ctx context.Context, id int) error
 	SendAgentSetupFailed(ctx context.Context, id int, message string) error
-	SendAgentSetupState(ctx context.Context, id int, statePath string) error
 }
 
 // CommandRunner matches exec.CommandContext so tests can substitute process
@@ -84,50 +81,49 @@ func Run(cfg RunConfig) int {
 
 	api := cfg.NewClient(daemonAddr, nil)
 	setupRequested := configValue(cfg.Getenv, env, "TMUX_CODER_AGENT_SETUP") == "1"
-	model := configValue(cfg.Getenv, env, "TMUX_CODER_AGENT_MODEL")
-	if kind == "opencode" && model != "" {
-		var stateRoot string
-		env, stateRoot, err = prepareOpenCodeState(env, model)
-		if err != nil {
-			reportSetupFailure(api, agentID, fmt.Sprintf("prepare isolated OpenCode state: %v", err))
-			fmt.Fprintf(cfg.Stderr, "failed to prepare isolated OpenCode state: %v\n", err)
-			return 1
-		}
-		defer os.RemoveAll(stateRoot)
-		statePath := filepath.Join(stateRoot, "opencode")
-		env = WithEnv(env, "TMUX_CODER_OPENCODE_STATE_PATH="+statePath)
-		stateCtx, stateCancel := context.WithTimeout(context.Background(), 2*time.Second)
-		err = api.SendAgentSetupState(stateCtx, agentID, statePath)
-		stateCancel()
-		if err != nil {
-			reportSetupFailure(api, agentID, fmt.Sprintf("register isolated OpenCode state: %v", err))
-			fmt.Fprintf(cfg.Stderr, "failed to register isolated OpenCode state: %v\n", err)
-			return 1
-		}
-	}
-
 	commandArgs := []string{}
 	if kind == "opencode" {
-		serverURL := configValue(cfg.Getenv, env, "TMUX_CODER_OPENCODE_SERVER_URL")
-		if serverURL == "" {
-			serverCtx, serverCancel := context.WithTimeout(context.Background(), 15*time.Second)
-			serverURL, err = api.EnsureOpenCodeServer(serverCtx)
-			serverCancel()
-			if err != nil {
-				if setupRequested {
-					reportSetupFailure(api, agentID, fmt.Sprintf("start shared OpenCode server: %v", err))
-				}
-				fmt.Fprintf(cfg.Stderr, "failed to start shared OpenCode server: %v\n", err)
-				return 1
+		serverCtx, serverCancel := context.WithTimeout(context.Background(), 15*time.Second)
+		connection, serverErr := api.EnsureOpenCodeServer(serverCtx)
+		serverCancel()
+		if serverErr != nil || connection.URL == "" {
+			message := fmt.Sprintf("connect to OpenCode v2 server: %v", serverErr)
+			if serverErr == nil {
+				message = "OpenCode server returned an empty URL"
+			}
+			if setupRequested {
+				reportSetupFailure(api, agentID, message)
+			}
+			fmt.Fprintln(cfg.Stderr, message)
+			return 1
+		}
+		password := connection.Password
+		if configValue(cfg.Getenv, env, "TMUX_CODER_OPENCODE_SERVER_URL") != "" {
+			if supplied := configValue(cfg.Getenv, env, "OPENCODE_PASSWORD"); supplied != "" {
+				password = supplied
+			} else if supplied := configValue(cfg.Getenv, env, "OPENCODE_SERVER_PASSWORD"); supplied != "" {
+				password = supplied
 			}
 		}
-		commandArgs = append(commandArgs, "attach", serverURL)
-		if workingDir, err := os.Getwd(); err == nil {
-			commandArgs = append(commandArgs, "--dir", workingDir)
+		env = WithEnv(env, "OPENCODE_PASSWORD="+password)
+		workingDir, cwdErr := os.Getwd()
+		if cwdErr != nil {
+			if setupRequested {
+				reportSetupFailure(api, agentID, "resolve OpenCode pane working directory")
+			}
+			fmt.Fprintf(cfg.Stderr, "resolve OpenCode pane working directory: %v\n", cwdErr)
+			return 1
 		}
+		commandArgs = append(commandArgs, "--server", connection.URL, workingDir)
 	}
 
-	cmd := cfg.CommandContext(context.Background(), kind, commandArgs...)
+	binary := kind
+	if kind == "opencode" {
+		if selected := configValue(cfg.Getenv, env, "TMUX_CODER_OPENCODE_BINARY"); selected != "" {
+			binary = selected
+		}
+	}
+	cmd := cfg.CommandContext(context.Background(), binary, commandArgs...)
 	cmd.Stdin = cfg.Stdin
 	cmd.Stdout = cfg.Stdout
 	cmd.Stderr = cfg.Stderr
@@ -327,127 +323,4 @@ func reportSetupFailure(api AgentEventClient, agentID int, message string) {
 	defer cancel()
 	_ = api.SendAgentSetupFailed(ctx, agentID, message)
 	_ = api.SendAgentEvent(ctx, agentID, "exited")
-}
-
-func prepareOpenCodeState(env []string, model string) ([]string, string, error) {
-	root, err := os.MkdirTemp("", "tmux-coder-opencode-state-")
-	if err != nil {
-		return nil, "", err
-	}
-	if err := os.Chmod(root, 0o700); err != nil {
-		_ = os.RemoveAll(root)
-		return nil, "", err
-	}
-
-	sourceRoot := configValue(nil, env, "XDG_STATE_HOME")
-	if sourceRoot == "" {
-		home := configValue(nil, env, "HOME")
-		if home == "" {
-			home, err = os.UserHomeDir()
-			if err != nil {
-				_ = os.RemoveAll(root)
-				return nil, "", err
-			}
-		}
-		sourceRoot = filepath.Join(home, ".local", "state")
-	}
-	source := filepath.Join(sourceRoot, "opencode")
-	target := filepath.Join(root, "opencode")
-	if err := copyStateDirectory(source, target); err != nil {
-		_ = os.RemoveAll(root)
-		return nil, "", err
-	}
-	if err := seedOpenCodeModelState(filepath.Join(target, "model.json"), model); err != nil {
-		_ = os.RemoveAll(root)
-		return nil, "", err
-	}
-	return WithEnv(env, "XDG_STATE_HOME="+root), root, nil
-}
-
-func copyStateDirectory(source, target string) error {
-	if err := os.MkdirAll(target, 0o700); err != nil {
-		return err
-	}
-	if _, err := os.Stat(source); errors.Is(err, os.ErrNotExist) {
-		return nil
-	} else if err != nil {
-		return err
-	}
-	return filepath.WalkDir(source, func(path string, entry fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		rel, err := filepath.Rel(source, path)
-		if err != nil || rel == "." {
-			return err
-		}
-		destination := filepath.Join(target, rel)
-		info, err := entry.Info()
-		if err != nil {
-			return err
-		}
-		if entry.IsDir() {
-			return os.MkdirAll(destination, info.Mode().Perm())
-		}
-		if entry.Type()&os.ModeSymlink != 0 {
-			return fmt.Errorf("refuse symlink in OpenCode state: %s", rel)
-		}
-		if !entry.Type().IsRegular() {
-			return nil
-		}
-		in, err := os.Open(path)
-		if err != nil {
-			return err
-		}
-		defer in.Close()
-		out, err := os.OpenFile(destination, os.O_CREATE|os.O_EXCL|os.O_WRONLY, info.Mode().Perm())
-		if err != nil {
-			return err
-		}
-		_, copyErr := io.Copy(out, in)
-		closeErr := out.Close()
-		return errors.Join(copyErr, closeErr)
-	})
-}
-
-func seedOpenCodeModelState(path, canonical string) error {
-	providerID, modelID, ok := strings.Cut(canonical, "/")
-	if !ok || providerID == "" || modelID == "" {
-		return fmt.Errorf("invalid canonical model %q", canonical)
-	}
-	state := map[string]any{}
-	if data, err := os.ReadFile(path); err == nil {
-		if err := json.Unmarshal(data, &state); err != nil {
-			return fmt.Errorf("decode existing model state: %w", err)
-		}
-	} else if !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-
-	recent, _ := state["recent"].([]any)
-	filtered := make([]any, 0, len(recent))
-	for _, item := range recent {
-		entry, _ := item.(map[string]any)
-		if entry["providerID"] == providerID && entry["modelID"] == modelID {
-			continue
-		}
-		filtered = append(filtered, item)
-	}
-	state["recent"] = filtered
-	variants, _ := state["variant"].(map[string]any)
-	if variants == nil {
-		variants = make(map[string]any)
-	}
-	delete(variants, canonical)
-	state["variant"] = variants
-
-	data, err := json.MarshalIndent(state, "", "  ")
-	if err != nil {
-		return err
-	}
-	temporary := path + ".tmux-coder"
-	if err := os.WriteFile(temporary, append(data, '\n'), 0o600); err != nil {
-		return err
-	}
-	return os.Rename(temporary, path)
 }

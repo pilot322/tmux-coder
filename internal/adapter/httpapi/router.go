@@ -27,7 +27,6 @@ func NewRouter(pc *ProjectController, sc *SessionController, ac *AgentController
 	mux.HandleFunc("POST /agents/{id}/event", ac.Event)
 	mux.HandleFunc("PUT /agents/{id}/opencode-session", ac.ReportOpenCodeSession)
 	mux.HandleFunc("POST /agents/{id}/opencode-setup/ready", ac.OpenCodeSetupReady)
-	mux.HandleFunc("POST /agents/{id}/opencode-setup/state", ac.SetOpenCodeSetupState)
 	mux.HandleFunc("POST /agents/{id}/opencode-setup/opened", ac.OpenCodeSetupOpened)
 	mux.HandleFunc("GET /agents/{id}/opencode-setup", ac.WaitOpenCodeSetup)
 	mux.HandleFunc("DELETE /agents/{id}", ac.Delete)

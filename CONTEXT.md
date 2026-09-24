@@ -56,6 +56,10 @@ _Avoid_: Tool, assistant, process
 The executable family for a **TC Agent** (for example `opencode`, `claude`, or `codex`). The kind identifies what agent program tmux-coder launches; it is distinct from the agent's display name.
 _Avoid_: Agent type, command, display name
 
+**Model Profile**:
+A user-owned, named group of **Model Aliases**. A **Project** may select at most one Model Profile at a time but cannot define one.
+_Avoid_: Profile, alias group, Project profile
+
 **Agent Display Name**:
 A human-facing label for a **TC Agent**, used for presentation and tmux window labels. It is not the agent's identity; the **TC Agent** ID remains authoritative.
 _Avoid_: Agent ID, Agent Kind
@@ -73,7 +77,7 @@ The single canonical, agent-agnostic state of a **TC Agent** in the **Agent Regi
 _Avoid_: Agent state, activity, mode
 
 **Agent Startup Setup**:
-A transient, one-shot handshake used while creating an OpenCode **TC Agent** with a requested model, variant, and/or initial prompt. The OpenCode TUI plugin validates catalog readiness and opens the model and variant pickers; the **Daemon** temporarily disables pane input, drives literal picker/prompt input, and verifies model and variant selection against isolated OpenCode state. Agent Startup Setup has a fixed deadline and is separate from **Agent Status**. Prompt contents are discarded on every completion path.
+A transient, one-shot handshake used while creating an OpenCode **TC Agent** with a requested model, variant, and/or initial prompt. It ensures a conversation in the intended working directory is displayed with the requested model and variant before an initial prompt is submitted. It has a fixed deadline and is separate from **Agent Status**. Prompt contents are discarded on every completion path.
 _Avoid_: Initial status, launch status, Agent configuration
 
 **Agent Status Changed At**:

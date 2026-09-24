@@ -83,6 +83,8 @@ The network settings and their non-empty environment overrides are:
 
 Inherited environment values take precedence over `~/.tmux-coder/.env`, and both take precedence over `config.yaml`. The Daemon reads configuration once at startup, so stop and restart `tmux-coderd` after changing the file or environment; a later Client invocation auto-starts it when needed. The internal and dashboard listeners start together. An invalid or unavailable address prevents startup, and either HTTP server stopping causes the Daemon to close the other and exit.
 
+This precedence applies unchanged to installed binaries. Binaries built with `./dev build` are marked as development builds: they ignore daemon-wide file values for their baked daemon port, OpenCode port, dashboard listener, public URLs, and tmux server label so separate worktrees cannot collapse onto the production instance. Environment values inherited by an explicitly launched development binary remain final overrides.
+
 Configuration is strict. `dashboard_listen_address` must contain a concrete IP address or valid hostname and a numeric port from 1 to 65535. Wildcard addresses such as `0.0.0.0` and `[::]`, missing hosts, and malformed numeric addresses are rejected. Public URLs must be absolute `http` or `https` browser origins with a valid non-wildcard host and optional port. User information, queries, fragments, and non-root paths are rejected; a trailing slash is removed and default HTTP/HTTPS ports are normalized. Invalid YAML, unknown keys, webhook URLs, listen addresses, public origins, and ports prevent Daemon startup.
 
 # How to use
@@ -178,8 +180,9 @@ OpenCode creation accepts a canonical `provider/model` through `--model`, an
 OpenCode model variant through `--variant`, a non-empty initial `--prompt`, and
 `--yolo` to auto-approve permissions that are not explicitly denied.
 `--variant` requires `--model`; model and prompt can otherwise be used alone.
-Model and variant selection are verified before an initial prompt is submitted.
-Omitting `--variant` selects OpenCode's Default variant. Startup failure stops
+Model and variant selection on the displayed conversation are verified before
+an initial prompt is submitted.
+Omitting `--variant` uses OpenCode's default variant. Startup failure stops
 the new agent rather than falling back to another model or variant or dropping
 the prompt. These options are per creation and are not supported by other Agent
 Kinds.
@@ -283,19 +286,40 @@ You can use any executable really, but it needs to have an extension or hooks se
 OpenCode agents share one headless server owned by the daemon. Each agent pane
 runs an attached TUI in its own working directory, so concurrent agents avoid
 duplicating the server process. Set `TMUX_CODER_OPENCODE_SERVER_URL` to use an
-already-running server instead. The managed server still listens on `0.0.0.0` at
+already-running **v2** server instead. Install OpenCode v2 globally and confirm
+`opencode --version` reports v2 before starting the Daemon:
+
+```sh
+npm install -g @opencode/cli@2.0.16
+opencode --version
+```
+
+If another `opencode` shadows the global install on PATH, select the v2
+executable with `TMUX_CODER_OPENCODE_BINARY` on the Daemon. The Daemon passes
+that path to its agent panes.
+
+The managed server generates a password per Daemon unless `OPENCODE_PASSWORD`
+is set on the Daemon. For a browser, configure a known `OPENCODE_PASSWORD` on
+the Daemon and enter the OpenCode origin and password on its `/connect` page
+before following dashboard conversation links. The password is passed to pane
+clients through the internal loopback API; it is never placed in dashboard links.
+An external server must be reachable with the Daemon's `OPENCODE_PASSWORD`
+(or `OPENCODE_SERVER_PASSWORD`), and must return v2 `/api/info`.
+The managed server still listens on `0.0.0.0` at
 `opencode_server_port`, even though Daemon-managed TC Agents receive its loopback
 attachment URL. Its embedded web UI is therefore available through localhost,
 LAN, and Tailscale addresses that the host firewall and Tailnet ACLs permit.
 tmux-coder does not configure either boundary; the operator is responsible for
 preventing unintended access.
-Model-selected agents use a temporary copy of the user's OpenCode TUI state for
-selection verification. That copy is discarded when the agent exits and is
-never merged back into the user's state.
+Model-selected agents select a model and optional variant on their new v2
+conversation and verify the session's model before submitting the prompt;
+they do not rewrite durable OpenCode model preferences.
 
-`./dev install` installs and configures the bundled OpenCode TUI plugin so
+`./dev install` installs and configures the bundled OpenCode v2 CLI plugin so
 activity remains associated with the attached TUI's agent ID. For a manual
-installation, add the bundled plugin directory to `~/.config/opencode/tui.json`.
+installation, add the bundled plugin directory URL to
+`~/.config/opencode/cli.json` under `plugins`. Reinstalling removes only the
+old tmux-coder entry from `tui.json` and does not duplicate the CLI entry.
 Remove any older `tmux-coder.js` entry from `opencode.json`:
 
 ```json

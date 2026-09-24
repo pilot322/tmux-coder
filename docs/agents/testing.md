@@ -12,11 +12,27 @@ Run from the repo root. This is the default after any change — fast, hermetic,
 
 ## End-to-end testing
 
+OpenCode tests require v2 (`@opencode/cli`). Check `opencode --version` first;
+if PATH still selects another version, start the isolated Daemon with
+`TMUX_CODER_OPENCODE_BINARY=/path/to/v2/opencode`. Set a known
+`OPENCODE_PASSWORD` on that Daemon for browser pairing; the password is
+inherited by the managed server and returned only through the loopback resource
+endpoint to its panes. Use a sandboxed `XDG_CONFIG_HOME` and configure the CLI
+plugin in its `opencode/cli.json` `plugins` list. The old `tui.json` `plugin`
+entry is v1-only. For real v2 gateway verification, run
+`TMUX_CODER_TEST_OPENCODE_V2_BINARY="$(command -v opencode)" go test ./internal/infra/opencodeserver -run TestManagerRealV2 -count=1`.
+Run `npm install --prefix integrations/opencode` once, then
+`node --test integrations/opencode/tmux-coder.test.js scripts/configure-opencode-plugin.test.mjs`
+for pane-plugin and installer tests; remove the temporary
+`integrations/opencode/node_modules/` afterward. Do not run `./dev install`
+for these tests: it stops the production Daemon; exercise its config
+transformation with the standalone script and sandboxed config directory instead.
+
 Unit tests don't cover the daemon ↔ client ↔ tmux wiring. For anything touching session lifecycle, agent orchestration, the TUI, or tmux behaviour, **build the binaries and drive a real instance**. Don't reason about it from the source alone.
 
 ### Why this is safe to do
 
-Every dev build is isolated. `./dev build` bakes per-worktree daemon, OpenCode, and dashboard ports plus a tmux server label into the binary via `-ldflags`, all derived from the worktree path. So the instance you spin up here **cannot touch the installed (prod) tmux-coder or any other worktree's instance** — it gets its own daemon, OpenCode server, dashboard, and tmux server. The installed binary keeps the shipped `tmux-coder`, daemon port `64357`, OpenCode port `39155`, and dashboard port `39356` defaults; your dev build does not.
+Every dev build is isolated. `./dev build` bakes per-worktree daemon, OpenCode, and dashboard ports plus a tmux server label into the binary via `-ldflags`, all derived from the worktree path. The development Daemon ignores conflicting values from `~/.tmux-coder/config.yaml` and `~/.tmux-coder/.env` for those resources, so the instance you spin up here **cannot touch the installed (prod) tmux-coder or any other worktree's instance**. The installed binary keeps normal file precedence and the shipped `tmux-coder`, daemon port `64357`, OpenCode port `39155`, and dashboard port `39356` defaults; your dev build does not. An environment value inherited by an explicitly launched development binary is still an intentional runtime override.
 
 ### 1. Build
 
@@ -73,6 +89,9 @@ For exact-link testing, start the isolated Daemon with `TMUX_CODER_OPENCODE_PUBL
 - Before the pane reports an OpenCode Conversation Identity, the dashboard says `Conversation link unavailable` and does not offer a fallback OpenCode home link.
 - After the report, inspect the link and confirm it uses the configured OpenCode origin and the canonical `/server/<encoded-origin>/session/<session-id>` route for that pane's exact conversation.
 - Open the link and verify that OpenCode displays the same conversation as the TC Agent pane.
+- Pair the browser with the OpenCode v2 server through `/connect` first; an
+  unauthenticated browser cannot open the deep link. Never put the password in
+  the dashboard URL.
 - Switch the pane to another OpenCode conversation and confirm the polled dashboard link changes to that exact conversation rather than retaining the prior route.
 - Check a non-OpenCode Agent Kind and an OpenCode run without `TMUX_CODER_OPENCODE_PUBLIC_URL`; neither should expose an OpenCode link.
 
