@@ -4,6 +4,12 @@ on-create-timeout = "5m"
 
 [[menu-actions]]
 name = "implement-issue"
-description = "Review the current changes"
+description = "Implement a gh issue"
 script = ".tmux-coder/actions/implement-issue"
+argument="required"
+
+[[menu-actions]]
+name = "grill-issue"
+description = "Grill-with-docs for a gh issue"
+script = ".tmux-coder/actions/grill-issue"
 argument="required"

@@ -1,0 +1,4 @@
+#!/bin/sh
+exec tmux-coder new \
+  --session-id "$TMUX_CODER_SESSION_ID" \
+  --prompt "Invoke the grill-with-docs skill for this gh issue: $TMUX_CODER_ACTION_ARGUMENT ."
