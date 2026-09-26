@@ -2,9 +2,9 @@
 
 This guide is for **consumer projects** — any repository you open with tmux-coder
 and from which you create [Worktree Sessions](../CONTEXT.md). It explains how to
-wire up the **Worktree Hook** so that every worktree comes up as a fully
-independent, runnable copy of your project, with no shared mutable state between
-worktrees.
+wire up **Worktree Hooks** so that every worktree comes up as an independent,
+runnable copy of your project with no shared mutable state, and its external
+resources can be removed when the Session is deleted.
 
 The single most important idea: **your project's runnable infrastructure must be
 fully configurable from `.env` (or an equivalent file the hook can write).** The
@@ -26,8 +26,7 @@ When you create a worktree, tmux-coder:
 
 1. Creates the git worktree at a new path.
 2. Records the Worktree Session and starts its tmux session.
-3. **Runs your hook** in a dedicated `worktree-setup` window in that Session
-   (this guide's subject).
+3. **Runs your create hook** in a dedicated `worktree-setup` window in that Session.
 
 The Worktree Session is listed immediately, so you can attach to it or create a
 TC Agent while setup continues. A successful hook closes `worktree-setup`
@@ -35,7 +34,8 @@ automatically. If the hook exits non-zero or times out, tmux-coder raises a
 critical Desktop Notification and leaves the window open with its output. Press
 Enter there after inspecting the failure; tmux-coder then removes the Session,
 its TC Agents, the worktree, and a branch created for it. A failing hook therefore
-remains inspectable without leaving a half-configured Session behind.
+remains inspectable without leaving a half-configured Session behind. Deletion
+runs a separate destroy hook synchronously, before removing the checkout (Step 6).
 
 ---
 
@@ -53,11 +53,12 @@ Add a `[worktree]` section:
 [worktree]
 on-create-script  = ".tmux-coder/setup-worktree.sh"   # relative to project root
 on-create-timeout = "60s"                             # optional; default 2m
-on-destroy-script = ".tmux-coder/teardown-worktree.sh" # optional
-on-destroy-timeout = "60s"                            # optional; default 2m
+on-destroy-script  = ".tmux-coder/teardown-worktree.sh" # for external resources
+on-destroy-timeout = "60s"                             # optional; default 2m
 ```
 
-Rules enforced by tmux-coder (a violation fails worktree creation loudly):
+Rules enforced by tmux-coder (invalid create configuration blocks creation;
+invalid destroy configuration blocks deletion):
 
 - **`on-create-script`** — path to your hook, **relative to the project root**.
   Absolute paths are rejected. The path may not escape the project root (no `..`),
@@ -67,8 +68,9 @@ Rules enforced by tmux-coder (a violation fails worktree creation loudly):
   omitted it defaults to **2 minutes**. The hook is killed if it exceeds this;
   budget for a cold `npm install` / `go mod download` if those run here.
 - **`on-destroy-script`** follows the same relative-path, containment, and
-  executable rules as `on-create-script`. **`on-destroy-timeout`** is a positive
-  Go duration string with the same 2-minute default.
+  executable rules as `on-create-script`. Configure it when setup creates
+  external resources. **`on-destroy-timeout`** is a positive Go duration string
+  with the same 2-minute default.
 
 Unknown keys are a hard error, so a typo surfaces immediately rather than being
 silently ignored.
@@ -84,8 +86,8 @@ inherits the same setup behavior.
 
 ## Step 2 — Know what the hook receives
 
-The hook runs with its **working directory set to the new worktree's root**, and
-with these environment variables set by tmux-coder:
+The create hook runs with its **working directory set to the new worktree's root**,
+and with these environment variables set by tmux-coder:
 
 | Variable | Meaning |
 | --- | --- |
@@ -100,6 +102,7 @@ with these environment variables set by tmux-coder:
 `TMUX_CODER_SESSION_NAME` and `TMUX_CODER_BRANCH` are your best **stable,
 human-meaningful uniqueness keys** for naming databases, schemas, prefixes, etc.
 `TMUX_CODER_PROJECT_ID` is a stable numeric discriminator if you need one.
+The destroy hook's environment differs; see Step 6.
 
 ---
 
@@ -207,8 +210,8 @@ set -euo pipefail
 
 # We start in the new worktree's root (TMUX_CODER_WORKTREE_ROOT).
 
-# 1. Derive a safe, unique slug for this worktree from the branch name.
-slug="$(printf '%s' "${TMUX_CODER_BRANCH}" | tr -c 'a-zA-Z0-9' '_' | tr 'A-Z' 'a-z')"
+# 1. Derive the same safe resource identity on create and destroy.
+slug="${TMUX_CODER_PROJECT_ID}_$(printf '%s' "$TMUX_CODER_BRANCH" | sha256sum | cut -c1-12)"
 
 # 2. Lease ports from the daemon (free ports, remembered for this session).
 web_port="$(tmux-coder acquire-port web --start 3000 --end 3099)"
@@ -224,13 +227,13 @@ WEB_PORT=${web_port}
 API_PORT=${api_port}
 EOF
 
-# 4. Provision the isolated resources the .env now points at.
-createdb "myapp_${slug}" 2>/dev/null || true
+# 4. Install dependencies for this worktree (node_modules is per-worktree).
+npm ci
+
+# 5. Provision the isolated resources the .env now points at.
+createdb "myapp_${slug}"
 npm run db:migrate          # reads DATABASE_NAME from .env
 npm run db:seed             # same
-
-# 5. Install dependencies for this worktree (node_modules is per-worktree).
-npm ci
 ```
 
 Notes:
@@ -240,26 +243,40 @@ Notes:
   provisioned should not exist.
 - **Stay inside the timeout.** If `npm ci` / migrations are slow, raise
   `on-create-timeout` accordingly.
-- **Make it idempotent / forgiving.** `createdb … || true` tolerates a pre-existing
-  database so re-runs don't fail spuriously.
+- **Make provisioning retryable.** If a resource already exists, handle only that
+  case explicitly; do not mask a connection or permission error. A failed create
+  hook rolls back the worktree without running the destroy hook, so clean up any
+  partially provisioned external state on failure or via a reaper.
 - **Don't touch shared state by name.** Notice every external resource above is
-  derived from `${slug}` — that is the whole point.
+  derived from `${slug}` — that is the whole point. Include a project-specific
+  prefix if multiple projects use the same external service.
 
 ---
 
-## Step 6 — Clean up on delete (optional)
+## Step 6 — Configure teardown for external resources
 
 Anything **inside** the worktree is removed by Git; external databases, buckets,
-or indexes are not. An `on-destroy-script` can remove them while the checkout and
-its `.env` still exist. For example, `.tmux-coder/teardown-worktree.sh`:
+or indexes are not. If setup provisions external resources, configure
+`on-destroy-script` in Step 1 and check in an executable teardown script alongside
+the setup script. Use the same identities that setup generated, while the checkout
+and its `.env` still exist. For example, `.tmux-coder/teardown-worktree.sh` for
+the database in Step 5:
 
 ```sh
 #!/usr/bin/env bash
 set -euo pipefail
-# Use the same resource identity your setup hook wrote to .env.
-source .env
-dropdb --if-exists "$DATABASE_NAME"
+# Read the generated value as data, and verify it before deleting anything.
+db_name="$(sed -n 's/^DATABASE_NAME=//p' .env)"
+slug="${TMUX_CODER_PROJECT_ID}_$(printf '%s' "$TMUX_CODER_BRANCH" | sha256sum | cut -c1-12)"
+[[ "$db_name" == "myapp_${slug}" ]] || { echo 'unexpected database name' >&2; exit 1; }
+dropdb --if-exists "$db_name"
 ```
+
+Use your project's actual resource list: stop per-worktree containers and remove
+external databases, queues, buckets, or indexes created by setup. Validate each
+target before deleting it; never delete a shared service or an unrelated resource.
+Make teardown safe to retry if only some resources were removed on the first run.
+Keep it within `on-destroy-timeout`, and keep secrets out of stdout/stderr.
 
 The script's cwd is the worktree root. It receives the project root, worktree
 root, project id, session name, tmux session name, and branch listed in Step 2,
@@ -280,23 +297,28 @@ Hook stdout/stderr is retained under the daemon's `logs/.../daemon/hooks/`
 directory, with `worktree-on-destroy` in the log name and header. No destroy hook
 runs for Secondary Session deletion, reconciliation after external worktree
 removal, or rollback of a failed worktree creation. No configured destroy script
-preserves the previous deletion behavior. Consider a manual or periodic reaper
-for external resources when a checkout disappears outside tmux-coder.
+preserves the previous deletion behavior; use that only when setup leaves no
+external resources. Keep a manual or periodic reaper for failed creations and
+checkouts removed outside tmux-coder. Verify by creating two disposable Worktree
+Sessions, confirming distinct resource identities, then deleting one and checking
+that its resources are gone while the other's remain.
 
 ---
 
 ## Summary
 
-1. Declare `[worktree].on-create-script` in `.tmux-coder/.tmux-coder.toml`, and
-   keep the setup script under `./.tmux-coder`.
+1. Declare `[worktree].on-create-script` and, when provisioning external state,
+   `[worktree].on-destroy-script` in `.tmux-coder/.tmux-coder.toml`; keep both
+   scripts under `./.tmux-coder`.
 2. **Make every shared resource configurable from `.env`** — database name/schema,
    ports, cache prefixes, queue/topic names, compose project name — and ensure
    *all* tooling reads those same values.
-3. In the hook, derive a unique slug (from `TMUX_CODER_BRANCH`), lease ports with
+3. In the create hook, derive a unique resource identity, lease ports with
    `tmux-coder acquire-port`, write `.env`, and provision the isolated resources.
 4. Fail the create hook (exit non-zero) if provisioning can't complete — tmux-coder
    rolls the worktree back after acknowledgement.
-5. Optionally add a destroy hook for external resources, and make it safe to retry.
+5. Tear down only this worktree's external resources in the destroy hook, making
+   removal safe to retry; account separately for failed creations and external removal.
 
 The hook is small. The investment is in step 2: a project whose infrastructure is
 fully parameterizable gets per-worktree isolation almost for free.
