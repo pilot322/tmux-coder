@@ -2,12 +2,12 @@
 
 Worktree Session creation is driven by two orthogonal booleans on the create
 request — `createWorktree` (materialize the git worktree on disk and run
-**Worktree Hooks**) and `createBranch` (create a new branch with `git worktree
+the create **Worktree Hook**) and `createBranch` (create a new branch with `git worktree
 add -b` vs. check out an existing one) — replacing the single overloaded
 `create` flag. This yields three valid modes: **fresh** (`t,t`),
 **existing-branch / new-worktree** (`t,f`), and **adoption** (`f,f`) which wraps
 a Session around a worktree already on disk without re-creating it or running
-hooks. The fourth combination (`f,t` — "branch without a worktree") is rejected
+the create hook. The fourth combination (`f,t` — "branch without a worktree") is rejected
 as a validation error.
 
 When a fresh create conflicts with existing state, the **Daemon** returns `409`
@@ -34,9 +34,12 @@ prose or pre-probe Git.
 
 ## Consequences
 
-- Hooks run iff `createWorktree`. **Adoption never runs hooks**, and its rollback
+- Create hooks run iff `createWorktree`. **Adoption never runs a create hook**, and its rollback
   must **not** remove the worktree or delete the branch (tmux-coder did not create
   them).
+- A later explicit deletion of the adopted Worktree Session does run the configured
+  destroy hook before worktree removal, just as deletion of a newly created
+  Worktree Session does. Failed-creation rollback does not run a destroy hook.
 - Adoption validates against `git worktree list --porcelain` (the path is a
   worktree of *this* repo, checked out on the named branch) via a new
   `ListWorktrees` gateway method — authoritative in one call, unlike

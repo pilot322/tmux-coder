@@ -82,6 +82,7 @@ func (g *stubGit) AddWorktree(ctx context.Context, repoPath, worktreePath, branc
 	g.paths[worktreePath] = true
 	return nil
 }
+func (g *stubGit) CheckWorktreeRemoval(context.Context, string) error { return nil }
 func (g *stubGit) RemoveWorktree(ctx context.Context, worktreePath string, force bool) error {
 	delete(g.paths, worktreePath)
 	return nil

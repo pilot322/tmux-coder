@@ -378,6 +378,8 @@ Add this file to a project you open with tmux-coder:
 [worktree]
 on-create-script = ".tmux-coder/setup-worktree.sh"
 on-create-timeout = "2m"
+on-destroy-script = ".tmux-coder/teardown-worktree.sh" # optional
+on-destroy-timeout = "2m"                      # optional
 ```
 
 Create the script and make it executable:
@@ -388,7 +390,9 @@ $EDITOR .tmux-coder/setup-worktree.sh
 chmod +x .tmux-coder/setup-worktree.sh
 ```
 
-The hook runs in the new worktree root after `git worktree add` and before the session is recorded. If it fails or times out, tmux-coder rolls the worktree creation back.
+The create hook runs in the new worktree root after the Session is recorded, in its `worktree-setup` window. Setup continues asynchronously; a failure remains visible until acknowledged, then tmux-coder rolls back the worktree creation.
+
+The optional destroy hook runs synchronously in the worktree root before `git worktree remove`, including for adopted Worktree Sessions. It does not run for Secondary Sessions, external-removal reconciliation, or failed-creation rollback. Non-Force deletion stops on hook failure or timeout; Force still waits for the hook, but continues removing the worktree if it fails. Invalid config or a missing/non-executable script blocks even Force deletion. Without Force, a dirty worktree is rejected before the hook runs. Hook output is retained in daemon hook logs.
 
 The hook receives:
 
@@ -399,6 +403,8 @@ The hook receives:
 - `TMUX_CODER_TMUX_SESSION_NAME`
 - `TMUX_CODER_BRANCH`
 - `TMUX_CODER_HOOK_TOKEN`
+
+The destroy hook receives the same descriptive metadata plus `TMUX_CODER_SESSION_ID`, but **not** a hook token or new provisional port leases. Its script and timeout are read from the project's current Config File at deletion. See [the worktree hook guide](docs/worktree-hook-integration.md) for the full lifecycle.
 
 Use `tmux-coder acquire-port` inside the hook to reserve ports without collisions:
 

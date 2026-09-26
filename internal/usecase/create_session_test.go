@@ -339,7 +339,7 @@ func TestCreateSessionHookStartupFailureCascadesPublishedAgents(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(projectRoot, "hook.sh"), []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non-create-script = \"hook.sh\"\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non-create-script = \"hook.sh\"\non-destroy-script = \"hook.sh\"\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 
@@ -351,7 +351,8 @@ func TestCreateSessionHookStartupFailureCascadesPublishedAgents(t *testing.T) {
 	git := &fakeWorktreeGit{paths: make(map[string]bool), events: &events}
 	tmux := &eventTmuxGateway{events: &events, exists: make(map[string]bool)}
 	leases := memory.NewMemoryResourceLeaseRepository()
-	cleaner := usecase.NewDeleteSessionWithLeases(sessions, agents, tmux, git, lock, leases, obs.Nop())
+	destroy := &fakeDestroyRunner{events: &events}
+	cleaner := usecase.NewDeleteSessionWithHooks(projects, sessions, agents, tmux, git, lock, leases, destroy, obs.Nop())
 	hooks := &fakeWorktreeHookRunner{events: &events, startErr: errors.New("tmux new-window failed")}
 	project, err := projects.Create(ctx, domain.NewProject(0, projectRoot, "api"))
 	if err != nil {
@@ -377,6 +378,11 @@ func TestCreateSessionHookStartupFailureCascadesPublishedAgents(t *testing.T) {
 	allSessions, _ := sessions.GetAll(ctx)
 	if len(allSessions) != 0 {
 		t.Fatalf("sessions after startup rollback = %d, want 0", len(allSessions))
+	}
+	for _, event := range events {
+		if event == "hook:destroy" {
+			t.Fatal("failed create rollback ran destroy hook")
+		}
 	}
 }
 
@@ -1536,6 +1542,8 @@ type fakeWorktreeGit struct {
 	deletedDone     chan struct{}
 	currentBranch   string          // returned by CurrentBranch ("" models detached HEAD)
 	unresolvable    map[string]bool // refs ResolveCommit reports as not resolving
+	preflightErr    error
+	removeErr       error
 }
 
 func (g *fakeWorktreeGit) ValidateBranchName(ctx context.Context, branch string) error { return nil }
@@ -1567,10 +1575,19 @@ func (g *fakeWorktreeGit) AddWorktree(ctx context.Context, repoPath, worktreePat
 	return nil
 }
 
+func (g *fakeWorktreeGit) CheckWorktreeRemoval(ctx context.Context, worktreePath string) error {
+	*g.events = append(*g.events, "git:preflight")
+	return g.preflightErr
+}
+
 func (g *fakeWorktreeGit) RemoveWorktree(ctx context.Context, worktreePath string, force bool) error {
 	// Mirror exec.CommandContext: a cancelled context runs no git at all.
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	*g.events = append(*g.events, "git:remove")
+	if g.removeErr != nil {
+		return g.removeErr
 	}
 	g.removed = append(g.removed, worktreePath)
 	delete(g.paths, worktreePath)

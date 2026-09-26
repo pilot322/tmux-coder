@@ -49,6 +49,12 @@ type WorktreeHookRunner interface {
 	Start(ctx context.Context, req WorktreeHookRequest) (WorktreeHookExecution, error)
 }
 
+// WorktreeDestroyHookRunner executes a teardown in the delete request, without
+// creating a tmux window or a provisional hook lease.
+type WorktreeDestroyHookRunner interface {
+	RunDestroy(ctx context.Context, req WorktreeHookRequest) (WorktreeHookResult, error)
+}
+
 type HookLeaseOwner struct {
 	ProjectID       int
 	SessionName     string

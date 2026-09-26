@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/pilot322/tmux-coder/internal/obs"
@@ -17,6 +18,7 @@ import (
 )
 
 var _ usecase.WorktreeHookRunner = (*Runner)(nil)
+var _ usecase.WorktreeDestroyHookRunner = (*Runner)(nil)
 
 const hookLogRetentionAge = 14 * 24 * time.Hour
 
@@ -44,13 +46,13 @@ func (r *Runner) Start(ctx context.Context, req usecase.WorktreeHookRequest) (us
 	if timeout <= 0 {
 		timeout = 2 * time.Minute
 	}
-	logPath, logErr := newHookLogPath()
+	logPath, logErr := newHookLogPath("worktree-on-create")
 	if logErr != nil {
 		r.log.Warn(ctx, "worktree hook log unavailable", "err", logErr.Error())
 	}
 	if logPath != "" {
 		requestID, _ := obs.RequestIDFrom(ctx)
-		if err := writeHookLogHeader(logPath, req, timeout, requestID, time.Now()); err != nil {
+		if err := writeHookLogHeader(logPath, "worktree-on-create", req, timeout, requestID, time.Now()); err != nil {
 			r.log.Warn(ctx, "write worktree hook log failed", "hook_log", logPath, "err", err.Error())
 			logPath = ""
 		}
@@ -75,6 +77,62 @@ func (r *Runner) Start(ctx context.Context, req usecase.WorktreeHookRequest) (us
 		return nil, fmt.Errorf("start worktree setup window: %w: %s", err, strings.TrimSpace(string(output)))
 	}
 	return &execution{binary: r.binary, serverLabel: r.serverLabel, paneID: strings.TrimSpace(string(output)), statusPath: statusPath, ackPath: ackPath, logPath: logPath}, nil
+}
+
+// RunDestroy waits for the script before returning. GNU timeout forwards TERM
+// and bounds a hook that ignores it; cancellation kills its process group too.
+func (r *Runner) RunDestroy(ctx context.Context, req usecase.WorktreeHookRequest) (usecase.WorktreeHookResult, error) {
+	result := usecase.WorktreeHookResult{}
+	logPath, err := newHookLogPath("worktree-on-destroy")
+	if err != nil {
+		r.log.Warn(ctx, "worktree destroy hook log unavailable", "err", err.Error())
+	} else {
+		requestID, _ := obs.RequestIDFrom(ctx)
+		if err := writeHookLogHeader(logPath, "worktree-on-destroy", req, req.Timeout, requestID, time.Now()); err != nil {
+			r.log.Warn(ctx, "write worktree destroy hook log failed", "err", err.Error())
+		} else {
+			result.LogPath = logPath
+		}
+	}
+	seconds := strconv.FormatFloat(req.Timeout.Seconds(), 'f', 3, 64) + "s"
+	cmd := exec.CommandContext(ctx, "timeout", "--signal=TERM", "--kill-after=5s", seconds, req.ScriptPath)
+	cmd.Dir = req.WorkingDir
+	cmd.Env = make([]string, 0, len(os.Environ())+len(req.Env))
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		if key == "TMUX_CODER_HOOK_TOKEN" {
+			continue
+		}
+		if _, override := req.Env[key]; !override {
+			cmd.Env = append(cmd.Env, entry)
+		}
+	}
+	cmd.Env = append(cmd.Env, envMapToList(req.Env)...)
+	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
+	cmd.Cancel = func() error { return syscall.Kill(-cmd.Process.Pid, syscall.SIGKILL) }
+	cmd.WaitDelay = 5 * time.Second
+	output, runErr := cmd.CombinedOutput()
+	result.Output = string(output)
+	if result.LogPath != "" {
+		file, err := os.OpenFile(result.LogPath, os.O_APPEND|os.O_WRONLY, 0)
+		if err == nil {
+			_, err = file.Write(output)
+			_ = file.Close()
+		}
+		if err != nil {
+			r.log.Warn(ctx, "append worktree destroy hook log failed", "hook_log", result.LogPath, "err", err.Error())
+		}
+	}
+	if runErr != nil {
+		if ctx.Err() != nil {
+			return result, ctx.Err()
+		}
+		if exit, ok := runErr.(*exec.ExitError); ok && exit.ExitCode() == 124 {
+			return result, fmt.Errorf("destroy hook timed out after %s", req.Timeout)
+		}
+		return result, fmt.Errorf("destroy hook: %w", runErr)
+	}
+	return result, nil
 }
 
 func (e *execution) Wait(ctx context.Context) (usecase.WorktreeHookResult, error) {
@@ -174,7 +232,7 @@ func shellQuote(value string) string {
 	return "'" + strings.ReplaceAll(value, "'", `'\''`) + "'"
 }
 
-func newHookLogPath() (string, error) {
+func newHookLogPath(kind string) (string, error) {
 	dir, err := obs.LogDir(obs.RoleDaemon, os.Getenv)
 	if err != nil {
 		return "", err
@@ -184,7 +242,7 @@ func newHookLogPath() (string, error) {
 		return "", err
 	}
 	_ = sweepHookLogs(dir, hookLogRetentionAge, time.Now())
-	name := fmt.Sprintf("%s-%s-worktree-on-create.log", time.Now().UTC().Format("20060102T150405.000000000Z"), obs.NewRequestID())
+	name := fmt.Sprintf("%s-%s-%s.log", time.Now().UTC().Format("20060102T150405.000000000Z"), obs.NewRequestID(), kind)
 	return filepath.Join(dir, name), nil
 }
 
@@ -208,14 +266,14 @@ func sweepHookLogs(dir string, maxAge time.Duration, now time.Time) error {
 	return nil
 }
 
-func writeHookLogHeader(path string, req usecase.WorktreeHookRequest, timeout time.Duration, requestID string, now time.Time) error {
+func writeHookLogHeader(path, kind string, req usecase.WorktreeHookRequest, timeout time.Duration, requestID string, now time.Time) error {
 	var b strings.Builder
 	fprintf := func(format string, args ...any) { _, _ = fmt.Fprintf(&b, format, args...) }
 	fprintf("timestamp: %s\n", now.UTC().Format(time.RFC3339Nano))
 	if requestID != "" {
 		fprintf("request_id: %s\n", requestID)
 	}
-	fprintf("hook_kind: worktree-on-create\n")
+	fprintf("hook_kind: %s\n", kind)
 	fprintf("script_path: %s\n", req.ScriptPath)
 	fprintf("working_dir: %s\n", req.WorkingDir)
 	fprintf("timeout: %s\n", timeout)

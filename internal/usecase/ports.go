@@ -73,6 +73,9 @@ type GitWorktreeGateway interface {
 	WorktreePathExists(ctx context.Context, path string) (bool, error)
 	ListWorktrees(ctx context.Context, repoPath string) ([]WorktreeRef, error)
 	AddWorktree(ctx context.Context, repoPath, worktreePath, branch, baseBranch string, createBranch bool) error
+	// CheckWorktreeRemoval rejects a dirty checkout before a destroy hook can
+	// alter external resources. It is advisory; RemoveWorktree remains authoritative.
+	CheckWorktreeRemoval(ctx context.Context, worktreePath string) error
 	RemoveWorktree(ctx context.Context, worktreePath string, force bool) error
 	DeleteBranch(ctx context.Context, repoPath, branch string) error
 	CurrentBranch(ctx context.Context, repoPath string) (string, error)

@@ -600,7 +600,7 @@ func (uc *CreateSession) cleanupFailedWorktreeSetup(ctx context.Context, project
 	_ = uc.leases.ReleaseHookLeases(cleanupCtx, hookToken)
 	_ = uc.leases.EndHook(cleanupCtx, hookToken)
 	if uc.cleaner != nil {
-		if err := uc.cleaner.Execute(cleanupCtx, DeleteSessionInput{ID: session.ID(), Force: true}); err != nil && !errors.Is(err, ErrSessionNotFound) {
+		if err := uc.cleaner.Execute(cleanupCtx, DeleteSessionInput{ID: session.ID(), Force: true, rollback: true}); err != nil && !errors.Is(err, ErrSessionNotFound) {
 			uc.log.Error(cleanupCtx, "failed worktree setup cleanup failed", "session_id", session.ID(), "err", err.Error())
 		}
 	} else {

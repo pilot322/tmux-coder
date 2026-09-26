@@ -19,7 +19,7 @@ small.
 ## Background: what a Worktree Hook is
 
 A **Worktree Hook** is a Project-declared lifecycle script that tmux-coder runs
-when it creates a new Worktree Session. It belongs to tmux-coder's lifecycle, not
+when it creates or deletes a Worktree Session. It belongs to tmux-coder's lifecycle, not
 Git's hook system — it has nothing to do with `.git/hooks`.
 
 When you create a worktree, tmux-coder:
@@ -53,6 +53,8 @@ Add a `[worktree]` section:
 [worktree]
 on-create-script  = ".tmux-coder/setup-worktree.sh"   # relative to project root
 on-create-timeout = "60s"                             # optional; default 2m
+on-destroy-script = ".tmux-coder/teardown-worktree.sh" # optional
+on-destroy-timeout = "60s"                            # optional; default 2m
 ```
 
 Rules enforced by tmux-coder (a violation fails worktree creation loudly):
@@ -64,6 +66,9 @@ Rules enforced by tmux-coder (a violation fails worktree creation loudly):
 - **`on-create-timeout`** — a Go duration string (`"30s"`, `"2m"`, `"90s"`). If
   omitted it defaults to **2 minutes**. The hook is killed if it exceeds this;
   budget for a cold `npm install` / `go mod download` if those run here.
+- **`on-destroy-script`** follows the same relative-path, containment, and
+  executable rules as `on-create-script`. **`on-destroy-timeout`** is a positive
+  Go duration string with the same 2-minute default.
 
 Unknown keys are a hard error, so a typo surfaces immediately rather than being
 silently ignored.
@@ -244,17 +249,39 @@ Notes:
 
 ## Step 6 — Clean up on delete (optional)
 
-The Worktree Hook runs on *create*. Anything that lives **inside** the worktree
-(its `.env`, `node_modules`, build artifacts) is removed automatically when the
-worktree is deleted. But **external** resources you provisioned — a dev database
-named `myapp_<slug>`, an uploads bucket, a search index — are not tmux-coder's to
-know about, so they will linger.
+Anything **inside** the worktree is removed by Git; external databases, buckets,
+or indexes are not. An `on-destroy-script` can remove them while the checkout and
+its `.env` still exist. For example, `.tmux-coder/teardown-worktree.sh`:
 
-If you provision external state in the hook, plan its teardown:
+```sh
+#!/usr/bin/env bash
+set -euo pipefail
+# Use the same resource identity your setup hook wrote to .env.
+source .env
+dropdb --if-exists "$DATABASE_NAME"
+```
 
-- Make creation idempotent (as above) so a recreated worktree reuses cleanly.
-- Provide a manual reaper (e.g. a `make db:drop-worktree` target) or a periodic
-  job that drops databases/prefixes whose worktree no longer exists.
+The script's cwd is the worktree root. It receives the project root, worktree
+root, project id, session name, tmux session name, and branch listed in Step 2,
+plus `TMUX_CODER_SESSION_ID`. It receives **no** `TMUX_CODER_HOOK_TOKEN` or new
+provisional Port Leases. Existing session leases remain until removal succeeds.
+
+The destroy hook runs **synchronously before `git worktree remove`**, including
+for adopted Worktree Sessions. The current Config File in the Project root is
+read at deletion, not a copy from creation. Invalid config or a missing or
+non-executable configured script blocks deletion, even with Force. Without Force,
+tmux-coder first rejects an already-dirty checkout without running the hook; Git
+can still reject removal afterward if the hook dirties the checkout. On a hook
+failure or timeout, ordinary deletion retains the Session and worktree for retry.
+Force still runs and waits for the hook, but continues removal on execution
+failure. Make teardown idempotent so a retry is safe.
+
+Hook stdout/stderr is retained under the daemon's `logs/.../daemon/hooks/`
+directory, with `worktree-on-destroy` in the log name and header. No destroy hook
+runs for Secondary Session deletion, reconciliation after external worktree
+removal, or rollback of a failed worktree creation. No configured destroy script
+preserves the previous deletion behavior. Consider a manual or periodic reaper
+for external resources when a checkout disappears outside tmux-coder.
 
 ---
 
@@ -267,8 +294,9 @@ If you provision external state in the hook, plan its teardown:
    *all* tooling reads those same values.
 3. In the hook, derive a unique slug (from `TMUX_CODER_BRANCH`), lease ports with
    `tmux-coder acquire-port`, write `.env`, and provision the isolated resources.
-4. Fail the hook (exit non-zero) if provisioning can't complete — tmux-coder rolls
-   the worktree back cleanly.
+4. Fail the create hook (exit non-zero) if provisioning can't complete — tmux-coder
+   rolls the worktree back after acknowledgement.
+5. Optionally add a destroy hook for external resources, and make it safe to retry.
 
 The hook is small. The investment is in step 2: a project whose infrastructure is
 fully parameterizable gets per-worktree isolation almost for free.

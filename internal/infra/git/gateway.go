@@ -124,6 +124,17 @@ func (g *Gateway) AddWorktree(ctx context.Context, repoPath, worktreePath, branc
 	return g.run(ctx, args...)
 }
 
+func (g *Gateway) CheckWorktreeRemoval(ctx context.Context, worktreePath string) error {
+	out, err := exec.CommandContext(ctx, g.binary, "-C", worktreePath, "status", "--porcelain", "-z", "--untracked-files=all").CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("check worktree status: %w: %s", err, out)
+	}
+	if len(out) != 0 {
+		return fmt.Errorf("%w: worktree has modified or untracked files; use force to delete", usecase.ErrConflict)
+	}
+	return nil
+}
+
 func (g *Gateway) RemoveWorktree(ctx context.Context, worktreePath string, force bool) error {
 	if repoPath, ok := repoPathFromWorktreeGitFile(worktreePath); ok {
 		if err := g.removeWorktreeFrom(ctx, repoPath, worktreePath, force); err == nil {

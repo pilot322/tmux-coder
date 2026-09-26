@@ -2,9 +2,11 @@ package main
 
 import (
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/pilot322/tmux-coder/internal/daemonaddr"
 	"github.com/pilot322/tmux-coder/internal/daemonconfig"
@@ -32,6 +34,34 @@ func TestNewDashboardServerConfiguresPublicHTTPDefenses(t *testing.T) {
 	}
 	if server.MaxHeaderBytes <= 0 {
 		t.Error("MaxHeaderBytes must be configured")
+	}
+}
+
+type deadlineRecorder struct {
+	*httptest.ResponseRecorder
+	deadlines []time.Time
+}
+
+func (w *deadlineRecorder) SetWriteDeadline(deadline time.Time) error {
+	w.deadlines = append(w.deadlines, deadline)
+	return nil
+}
+
+func TestDashboardDeleteDisablesWriteDeadlineOnlyForSessions(t *testing.T) {
+	server := newDashboardServer("127.0.0.1:0", http.NotFoundHandler())
+	for _, tc := range []struct {
+		method, path string
+		wantCleared  bool
+	}{
+		{"DELETE", "/api/sessions/42?force=true", true},
+		{"DELETE", "/api/projects/42", false},
+		{"GET", "/api/sessions/42", false},
+	} {
+		w := &deadlineRecorder{ResponseRecorder: httptest.NewRecorder()}
+		server.Handler.ServeHTTP(w, httptest.NewRequest(tc.method, tc.path, nil))
+		if got := len(w.deadlines) == 1 && w.deadlines[0].IsZero(); got != tc.wantCleared {
+			t.Errorf("%s %s clears write deadline = %t, want %t", tc.method, tc.path, got, tc.wantCleared)
+		}
 	}
 }
 

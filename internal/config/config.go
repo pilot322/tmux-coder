@@ -18,8 +18,8 @@ import (
 	toml "github.com/pelletier/go-toml/v2"
 )
 
-// DefaultWorktreeHookTimeout bounds the on-create worktree hook when the Config
-// File does not specify one.
+// DefaultWorktreeHookTimeout bounds either worktree hook when the Config File
+// does not specify a timeout.
 const DefaultWorktreeHookTimeout = 2 * time.Minute
 
 const (
@@ -43,10 +43,12 @@ type File struct {
 	MenuActions []MenuAction
 }
 
-// Worktree holds the [worktree] section: the on-create hook and its timeout.
+// Worktree holds the [worktree] lifecycle hooks and their timeouts.
 type Worktree struct {
-	OnCreateScript  string
-	OnCreateTimeout time.Duration
+	OnCreateScript   string
+	OnCreateTimeout  time.Duration
+	OnDestroyScript  string
+	OnDestroyTimeout time.Duration
 }
 
 // Secondary is one declared Secondary Session. ID and Parent are config-local
@@ -81,8 +83,10 @@ type rawActionFile struct {
 }
 
 type rawWorktree struct {
-	OnCreateScript  string `toml:"on-create-script"`
-	OnCreateTimeout string `toml:"on-create-timeout"`
+	OnCreateScript   string `toml:"on-create-script"`
+	OnCreateTimeout  string `toml:"on-create-timeout"`
+	OnDestroyScript  string `toml:"on-destroy-script"`
+	OnDestroyTimeout string `toml:"on-destroy-timeout"`
 }
 
 type rawSecondary struct {
@@ -118,7 +122,7 @@ func Load(projectRoot string) (File, error) {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return File{Worktree: Worktree{OnCreateTimeout: DefaultWorktreeHookTimeout}}, nil
+			return File{Worktree: Worktree{OnCreateTimeout: DefaultWorktreeHookTimeout, OnDestroyTimeout: DefaultWorktreeHookTimeout}}, nil
 		}
 		return File{}, fmt.Errorf("read config file: %w", err)
 	}
@@ -156,13 +160,13 @@ func Parse(data []byte) (File, error) {
 		return File{}, fmt.Errorf("%w: %v", ErrValidation, err)
 	}
 
-	timeout := DefaultWorktreeHookTimeout
-	if raw.Worktree.OnCreateTimeout != "" {
-		d, err := time.ParseDuration(raw.Worktree.OnCreateTimeout)
-		if err != nil || d <= 0 {
-			return File{}, fmt.Errorf("%w: invalid on-create-timeout %q", ErrValidation, raw.Worktree.OnCreateTimeout)
-		}
-		timeout = d
+	timeout, err := parseHookTimeout(raw.Worktree.OnCreateTimeout, "on-create-timeout")
+	if err != nil {
+		return File{}, err
+	}
+	destroyTimeout, err := parseHookTimeout(raw.Worktree.OnDestroyTimeout, "on-destroy-timeout")
+	if err != nil {
+		return File{}, err
 	}
 
 	secondaries := make([]Secondary, len(raw.Secondaries))
@@ -191,12 +195,25 @@ func Parse(data []byte) (File, error) {
 
 	return File{
 		Worktree: Worktree{
-			OnCreateScript:  raw.Worktree.OnCreateScript,
-			OnCreateTimeout: timeout,
+			OnCreateScript:   raw.Worktree.OnCreateScript,
+			OnCreateTimeout:  timeout,
+			OnDestroyScript:  raw.Worktree.OnDestroyScript,
+			OnDestroyTimeout: destroyTimeout,
 		},
 		Secondaries: ordered,
 		MenuActions: actions,
 	}, nil
+}
+
+func parseHookTimeout(value, key string) (time.Duration, error) {
+	if value == "" {
+		return DefaultWorktreeHookTimeout, nil
+	}
+	d, err := time.ParseDuration(value)
+	if err != nil || d <= 0 {
+		return 0, fmt.Errorf("%w: invalid %s %q", ErrValidation, key, value)
+	}
+	return d, nil
 }
 
 // ParseActionFile strictly decodes and validates Action File bytes.

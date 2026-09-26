@@ -3,8 +3,11 @@ package usecase_test
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/infra/memory"
@@ -57,6 +60,143 @@ func TestDeleteWorktreeSwitchesAttachedClientsToMainBeforeKill(t *testing.T) {
 	}
 	if switchIdx == -1 || killIdx == -1 || switchIdx > killIdx {
 		t.Fatalf("want client switch before kill; events = %v", events)
+	}
+}
+
+type fakeDestroyRunner struct {
+	events *[]string
+	req    usecase.WorktreeHookRequest
+	err    error
+}
+
+func (r *fakeDestroyRunner) RunDestroy(_ context.Context, req usecase.WorktreeHookRequest) (usecase.WorktreeHookResult, error) {
+	*r.events = append(*r.events, "hook:destroy")
+	r.req = req
+	return usecase.WorktreeHookResult{LogPath: "/tmp/destroy.log"}, r.err
+}
+
+func TestDeleteWorktreeDestroyHookOrderingAndFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		config        string
+		force         bool
+		preflightErr  error
+		removeErr     error
+		hookErr       error
+		wantErr       error
+		wantEvents    []string
+		wantRemaining bool
+	}{
+		{name: "ordinary", config: "[worktree]\non-destroy-script = \"destroy.sh\"\non-destroy-timeout = \"3s\"\n", wantEvents: []string{"git:preflight", "hook:destroy", "git:remove"}},
+		{name: "dirty", config: "[worktree]\non-destroy-script = \"destroy.sh\"\n", preflightErr: usecase.ErrConflict, wantErr: usecase.ErrConflict, wantEvents: []string{"git:preflight"}, wantRemaining: true},
+		{name: "hook failure", config: "[worktree]\non-destroy-script = \"destroy.sh\"\n", hookErr: errors.New("exit 1"), wantErr: usecase.ErrGateway, wantEvents: []string{"git:preflight", "hook:destroy"}, wantRemaining: true},
+		{name: "force waits despite failure", config: "[worktree]\non-destroy-script = \"destroy.sh\"\n", force: true, hookErr: errors.New("timed out"), wantEvents: []string{"hook:destroy", "git:remove"}},
+		{name: "git fails after hook", config: "[worktree]\non-destroy-script = \"destroy.sh\"\n", removeErr: usecase.ErrConflict, wantErr: usecase.ErrConflict, wantEvents: []string{"git:preflight", "hook:destroy", "git:remove"}, wantRemaining: true},
+		{name: "no hook", config: "", wantEvents: []string{"git:remove"}},
+		{name: "invalid config even with force", config: "[worktree]\non-destroy-timeout = \"bad\"\n", force: true, wantErr: usecase.ErrValidation, wantRemaining: true},
+		{name: "missing script even with force", config: "[worktree]\non-destroy-script = \"missing.sh\"\n", force: true, wantErr: usecase.ErrValidation, wantRemaining: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			root := t.TempDir()
+			projectRoot := filepath.Join(root, "api")
+			if err := os.MkdirAll(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(projectRoot, "destroy.sh"), []byte("#!/bin/sh\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte(tc.config), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			projects := memory.NewMemoryProjectRepository()
+			sessions := memory.NewMemorySessionRepository()
+			lock := &spyLock{}
+			project, err := projects.Create(ctx, domain.NewProject(0, projectRoot, "api"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(root, "api.feature")
+			session, err := sessions.Create(ctx, domain.NewWorktreeSession(0, -1, project.ID(), "api.feature", "feature", path))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var events []string
+			git := &fakeWorktreeGit{paths: map[string]bool{path: true}, events: &events, preflightErr: tc.preflightErr, removeErr: tc.removeErr}
+			hook := &fakeDestroyRunner{events: &events, err: tc.hookErr}
+			tmux := &eventTmuxGateway{events: &events, exists: map[string]bool{session.TmuxName(): true}}
+			uc := usecase.NewDeleteSessionWithHooks(projects, sessions, memory.NewMemoryAgentRepository(), tmux, git, lock, nil, hook, obs.Nop())
+			err = uc.Execute(ctx, usecase.DeleteSessionInput{ID: session.ID(), Force: tc.force})
+			if !errors.Is(err, tc.wantErr) || (tc.wantErr == nil && err != nil) {
+				t.Fatalf("Execute = %v, want %v", err, tc.wantErr)
+			}
+			var filtered []string
+			for _, event := range events {
+				if event == "git:preflight" || event == "hook:destroy" || event == "git:remove" {
+					filtered = append(filtered, event)
+				}
+			}
+			if !reflect.DeepEqual(filtered, tc.wantEvents) {
+				t.Errorf("events = %v, want %v", filtered, tc.wantEvents)
+			}
+			if (getSession(t, lock, sessions, session.ID()) != nil) != tc.wantRemaining {
+				t.Error("session retention differs from expectation")
+			}
+			if len(filtered) > 0 && hook.req.ScriptPath != "" {
+				if hook.req.WorkingDir != path || hook.req.Env["TMUX_CODER_SESSION_ID"] == "" || hook.req.Env["TMUX_CODER_BRANCH"] != "feature" || hook.req.Env["TMUX_CODER_PROJECT_ROOT"] != projectRoot || hook.req.Env["TMUX_CODER_HOOK_TOKEN"] != "" {
+					t.Errorf("hook request = %+v", hook.req)
+				}
+				if tc.name == "ordinary" && hook.req.Timeout != 3*time.Second {
+					t.Errorf("timeout = %v", hook.req.Timeout)
+				}
+			}
+		})
+	}
+}
+
+func TestDestroyHookDoesNotRunForSecondaryOrMissingWorktree(t *testing.T) {
+	ctx := context.Background()
+	root := t.TempDir()
+	projectRoot := filepath.Join(root, "api")
+	if err := os.MkdirAll(filepath.Join(projectRoot, ".tmux-coder"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// Intentionally invalid: neither secondary deletion nor reconciliation
+	// should even load this Config File.
+	if err := os.WriteFile(filepath.Join(projectRoot, ".tmux-coder", ".tmux-coder.toml"), []byte("[worktree]\non-destroy-timeout = \"invalid\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	projects := memory.NewMemoryProjectRepository()
+	sessions := memory.NewMemorySessionRepository()
+	project, err := projects.Create(ctx, domain.NewProject(0, projectRoot, "api"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	main, err := sessions.Create(ctx, domain.NewSession(0, -1, project.ID(), "api", domain.MainSession))
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondary, err := sessions.Create(ctx, domain.NewSecondarySession(0, main.ID(), project.ID(), "logs", "", ""))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var events []string
+	git := &fakeWorktreeGit{paths: map[string]bool{}, events: &events}
+	tmux := &eventTmuxGateway{events: &events, exists: map[string]bool{secondary.TmuxName(): true}}
+	hook := &fakeDestroyRunner{events: &events}
+	uc := usecase.NewDeleteSessionWithHooks(projects, sessions, memory.NewMemoryAgentRepository(), tmux, git, &spyLock{}, nil, hook, obs.Nop())
+	if err := uc.Execute(ctx, usecase.DeleteSessionInput{ID: secondary.ID()}); err != nil {
+		t.Fatalf("secondary deletion: %v", err)
+	}
+	missing, err := sessions.Create(ctx, domain.NewWorktreeSession(0, -1, project.ID(), "api.gone", "gone", filepath.Join(root, "gone")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := uc.Execute(ctx, usecase.DeleteSessionInput{ID: missing.ID()}); !errors.Is(err, usecase.ErrSessionNotFound) {
+		t.Fatalf("reconciled deletion = %v, want ErrSessionNotFound", err)
+	}
+	if hook.req.ScriptPath != "" {
+		t.Fatalf("unexpected destroy hook: %+v", hook.req)
 	}
 }
 

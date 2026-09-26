@@ -85,6 +85,31 @@ func TestRemoveWorktreeUsesOwningRepoFromGitFile(t *testing.T) {
 	}
 }
 
+func TestCheckWorktreeRemovalDetectsDirtyCheckout(t *testing.T) {
+	repo := t.TempDir()
+	runGit(t, repo, "init")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("hello\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "-c", "user.email=test@example.com", "-c", "user.name=Test", "commit", "-m", "initial")
+	worktree := filepath.Join(t.TempDir(), "repo.feature")
+	runGit(t, repo, "worktree", "add", "-b", "feature", worktree)
+	g := NewGateway(obs.Nop())
+	if err := g.CheckWorktreeRemoval(context.Background(), worktree); err != nil {
+		t.Fatalf("clean preflight: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(worktree, "new.txt"), []byte("untracked"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := g.CheckWorktreeRemoval(context.Background(), worktree); !errors.Is(err, usecase.ErrConflict) {
+		t.Fatalf("dirty preflight = %v, want ErrConflict", err)
+	}
+	if err := g.RemoveWorktree(context.Background(), worktree, false); !errors.Is(err, usecase.ErrConflict) {
+		t.Fatalf("git removal = %v, want ErrConflict", err)
+	}
+}
+
 func TestRemoveWorktreeForceRemovesOrphanedDirectory(t *testing.T) {
 	repo := t.TempDir()
 	runGit(t, repo, "init")

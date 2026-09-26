@@ -101,11 +101,11 @@ The process by which the **Daemon** heals drift between its in-memory record of 
 _Avoid_: Sync, refresh, resync
 
 **Worktree Hook**:
-A **Project**-declared lifecycle script that customizes setup around a **Worktree Session**. It belongs to tmux-coder's lifecycle, not Git's hook system. On creation it runs asynchronously in that Session's `worktree-setup` tmux window; failure remains visible until acknowledged and then tears down the failed Session and worktree.
+A **Project**-declared lifecycle script for a **Worktree Session**: a create hook sets up a new worktree, while a destroy hook cleans up before its checkout is removed. It belongs to tmux-coder's lifecycle, not Git's hook system.
 _Avoid_: Git hook, shell command
 
 **Worktree Adoption**:
-Taking a git worktree that already exists on disk under management as a **Worktree Session**, without re-materializing it — tmux-coder neither creates the worktree nor runs its **Worktree Hooks**, only wrapping the existing checkout in a Session. Contrast with creating a Worktree Session, which materializes a new worktree and runs its hooks.
+Taking a git worktree that already exists on disk under management as a **Worktree Session**, without re-materializing it — tmux-coder does not run a create **Worktree Hook**, only wrapping the existing checkout in a Session. Deleting that Worktree Session runs its destroy Worktree Hook, if configured. Contrast with creating a Worktree Session, which materializes a new worktree and runs its create hook.
 _Avoid_: Import, attach, link, reuse
 
 **Resource Lease**:

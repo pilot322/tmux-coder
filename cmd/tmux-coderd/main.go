@@ -72,7 +72,7 @@ func main() {
 	list := usecase.NewGetProjects(state.Projects(), state.Sessions(), state, logger)
 	del := usecase.NewDeleteProject(state.Projects(), state.Sessions(), state.Agents(), gateway, state, logger)
 	listSessions := usecase.NewGetSessions(state.Projects(), state.Sessions(), git, state, logger)
-	deleteSession := usecase.NewDeleteSessionWithLeases(state.Sessions(), state.Agents(), gateway, git, state, state.Leases(), logger)
+	deleteSession := usecase.NewDeleteSessionWithHooks(state.Projects(), state.Sessions(), state.Agents(), gateway, git, state, state.Leases(), hooks, logger)
 	createSession := usecase.NewCreateSessionWithSetupLifecycle(state.Projects(), state.Sessions(), gateway, git, state, hooks, state.Leases(), deleteSession, notifier, logger)
 	createAgent := usecase.NewCreateAgentWithOpenCodeSetup(state.Agents(), state.Projects(), state.Sessions(), gateway, processGw, state, logger, openCodeSetup)
 	listAgents := usecase.NewGetAgents(state.Agents(), state.Projects(), state.Sessions(), gateway, state, logger)
@@ -156,8 +156,15 @@ func main() {
 
 func newDashboardServer(address string, handler http.Handler) *http.Server {
 	return &http.Server{
-		Addr:              address,
-		Handler:           handler,
+		Addr: address,
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Keep the public deadline on other requests. A configured destroy
+			// hook may legitimately exceed it on session deletion.
+			if r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/api/sessions/") {
+				_ = http.NewResponseController(w).SetWriteDeadline(time.Time{})
+			}
+			handler.ServeHTTP(w, r)
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       30 * time.Second,
 		WriteTimeout:      2 * time.Minute,

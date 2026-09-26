@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"sync"
 
+	"github.com/pilot322/tmux-coder/internal/config"
 	"github.com/pilot322/tmux-coder/internal/domain"
 	"github.com/pilot322/tmux-coder/internal/obs"
 )
@@ -13,15 +14,19 @@ import (
 type DeleteSessionInput struct {
 	ID    int
 	Force bool
+	// rollback skips the destroy hook when cleaning up a failed creation.
+	rollback bool
 }
 
 type DeleteSession struct {
 	sessions  ISessionRepository
+	projects  IProjectRepository
 	agents    IAgentRepository
 	tmux      SessionGateway
 	git       GitWorktreeGateway
 	lock      StateLock
 	leases    ResourceLeaseRepository
+	hooks     WorktreeDestroyHookRunner
 	log       obs.Logger
 	lifecycle [32]sync.Mutex
 }
@@ -35,6 +40,13 @@ func NewDeleteSessionWithLeases(s ISessionRepository, a IAgentRepository, tmux S
 		leases = noopResourceLeaseRepository{}
 	}
 	return &DeleteSession{sessions: s, agents: a, tmux: tmux, git: git, lock: l, leases: leases, log: log.With("component", "delete-session")}
+}
+
+func NewDeleteSessionWithHooks(p IProjectRepository, s ISessionRepository, a IAgentRepository, tmux SessionGateway, git GitWorktreeGateway, l StateLock, leases ResourceLeaseRepository, hooks WorktreeDestroyHookRunner, log obs.Logger) *DeleteSession {
+	uc := NewDeleteSessionWithLeases(s, a, tmux, git, l, leases, log)
+	uc.projects = p
+	uc.hooks = hooks
+	return uc
 }
 
 func (uc *DeleteSession) Execute(ctx context.Context, in DeleteSessionInput) error {
@@ -77,7 +89,7 @@ func (uc *DeleteSession) execute(ctx context.Context, in DeleteSessionInput) err
 	case domain.SecondarySession:
 		return uc.deleteSecondary(ctx, session)
 	case domain.WorktreeSession:
-		return uc.deleteWorktree(ctx, session, in.Force)
+		return uc.deleteWorktree(ctx, session, in)
 	default:
 		return fmt.Errorf("%w: unsupported session type", ErrValidation)
 	}
@@ -87,7 +99,7 @@ func (uc *DeleteSession) execute(ctx context.Context, in DeleteSessionInput) err
 // children cascade — their subdirectories vanished with the worktree — while its
 // Worktree children are independent checkouts that survive and are reparented to
 // this session's parent (ADR-0010).
-func (uc *DeleteSession) deleteWorktree(ctx context.Context, session *domain.Session, force bool) error {
+func (uc *DeleteSession) deleteWorktree(ctx context.Context, session *domain.Session, in DeleteSessionInput) error {
 	var allSessions []*domain.Session
 	if err := uc.lock.WithRead(func() error {
 		s, err := uc.sessions.GetAll(ctx)
@@ -102,7 +114,12 @@ func (uc *DeleteSession) deleteWorktree(ctx context.Context, session *domain.Ses
 		return fmt.Errorf("%w: %v", ErrValidation, err)
 	}
 
-	if err := uc.git.RemoveWorktree(ctx, session.WorktreePath(), force); err != nil {
+	if !in.rollback {
+		if err := uc.runDestroyHook(ctx, session, in.Force); err != nil {
+			return err
+		}
+	}
+	if err := uc.git.RemoveWorktree(ctx, session.WorktreePath(), in.Force); err != nil {
 		if errors.Is(err, ErrConflict) {
 			return err
 		}
@@ -137,6 +154,53 @@ func (uc *DeleteSession) deleteWorktree(ctx context.Context, session *domain.Ses
 		}
 		return nil
 	})
+}
+
+func (uc *DeleteSession) runDestroyHook(ctx context.Context, session *domain.Session, force bool) error {
+	if uc.projects == nil {
+		return nil
+	}
+	var project *domain.Project
+	if err := uc.lock.WithRead(func() error {
+		p, err := uc.projects.GetByID(ctx, session.ProjectID())
+		project = p
+		return err
+	}); err != nil {
+		return err
+	}
+	cfg, err := config.Load(project.FullPath())
+	if err != nil {
+		return translateConfigErr(err)
+	}
+	script, err := resolveWorktreeHookScript(project.FullPath(), cfg.Worktree.OnDestroyScript)
+	if err != nil {
+		return err
+	}
+	if script == "" {
+		return nil
+	}
+	if !force {
+		if err := uc.git.CheckWorktreeRemoval(ctx, session.WorktreePath()); err != nil {
+			if errors.Is(err, ErrConflict) {
+				return err
+			}
+			return fmt.Errorf("%w: preflight worktree removal: %v", ErrGateway, err)
+		}
+	}
+	if uc.hooks == nil {
+		return fmt.Errorf("%w: destroy hook runner is not configured", ErrGateway)
+	}
+	env := worktreeHookEnv(project.FullPath(), session.WorktreePath(), project.ID(), session.Name(), session.TmuxName(), session.Branch(), "")
+	delete(env, "TMUX_CODER_HOOK_TOKEN")
+	env["TMUX_CODER_SESSION_ID"] = fmt.Sprint(session.ID())
+	result, err := uc.hooks.RunDestroy(ctx, WorktreeHookRequest{ScriptPath: script, WorkingDir: session.WorktreePath(), Timeout: cfg.Worktree.OnDestroyTimeout, Env: env})
+	if err != nil {
+		uc.log.Warn(ctx, "worktree destroy hook failed", "session_id", session.ID(), "hook_log", result.LogPath, "err", err.Error())
+		if !force {
+			return fmt.Errorf("%w: worktree destroy hook failed: %v (log: %s)", ErrGateway, err, result.LogPath)
+		}
+	}
+	return nil
 }
 
 func (uc *DeleteSession) deleteSecondary(ctx context.Context, session *domain.Session) error {

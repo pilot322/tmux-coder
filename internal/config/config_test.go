@@ -13,6 +13,8 @@ func TestParseDecodesWorktreeAndSecondaries(t *testing.T) {
 [worktree]
 on-create-script = "setup.sh"
 on-create-timeout = "30s"
+on-destroy-script = "teardown.sh"
+on-destroy-timeout = "45s"
 
 [[secondary-sessions]]
 subdir = "backend"
@@ -33,6 +35,9 @@ on-delete = "inherit"
 	}
 	if file.Worktree.OnCreateTimeout != 30*time.Second {
 		t.Errorf("OnCreateTimeout = %v, want 30s", file.Worktree.OnCreateTimeout)
+	}
+	if file.Worktree.OnDestroyScript != "teardown.sh" || file.Worktree.OnDestroyTimeout != 45*time.Second {
+		t.Errorf("destroy config = %+v", file.Worktree)
 	}
 	if len(file.Secondaries) != 2 {
 		t.Fatalf("len(Secondaries) = %d, want 2", len(file.Secondaries))
@@ -131,6 +136,10 @@ func TestParseRejectsStaticErrors(t *testing.T) {
 		{
 			name: "invalid timeout",
 			toml: "[worktree]\non-create-timeout = \"soon\"\n",
+		},
+		{
+			name: "invalid destroy timeout",
+			toml: "[worktree]\non-destroy-timeout = \"0s\"\n",
 		},
 		{
 			name: "unknown action key",
